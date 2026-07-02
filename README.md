@@ -5,8 +5,12 @@ of dependency-free vanilla JS (autosave, vendor auto-detect, tracker chips).
 
 ## What it does
 
-- **Login gate** — email only for now; swap the `/login` route for MS AD later
-  (everything downstream only uses `session["email"]`, so the auth swap is local).
+- **Login gate** — checks submitted email against an `allowed_emails` table in the
+  database. The table starts empty; use `add_user.py` (see below) to authorize the
+  first user before anyone can log in. Any logged-in user can add more addresses on
+  the **Users** tab. An IP that submits five consecutive unrecognized emails is blocked
+  automatically; the Users tab lets any logged-in user unblock it. Once MS AD auth is
+  wired in, this table can gate AD-authenticated users instead.
 - **New order tab** — rows of description / link / vendor / project / use /
   trackers. Every keystroke is autosaved (400 ms debounce) to the server, so
   drafts survive logout/login. ＋ adds rows; 🗑 removes one; **Submit order**
@@ -109,6 +113,15 @@ checkout (`/var/www/`), so the key never lands in the repo. Then hit
 Because `app.py` computes the SQLite path from its own location, the database
 lands in `/home/YOUR_PYTHONANYWHERE_USERNAME/orderapp/orders.db` with no config. Add `orders.db` to
 `.gitignore` (already done) so pulls never clobber production data.
+
+**5. Authorize the first user.** The `allowed_emails` table starts empty, so nobody
+can log in until at least one address is added. From the PythonAnywhere bash console:
+
+    cd ~/orderapp
+    python3 add_user.py your@email.com
+
+Run it as many times as needed. Once logged in, additional users can be added from
+the **Users** tab without touching the console.
 
 **Every subsequent deploy:**
 

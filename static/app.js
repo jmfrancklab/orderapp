@@ -47,6 +47,194 @@
     timers[key] = setTimeout(function () { saveField(input); }, 400);
   }
 
+  /* --- vendor match popup -------------------------------------------- */
+
+  var _vendorPopup = null;
+  var _vendorOverlay = null;
+  var _popupRow = null;
+  var _popupExtracted = null;
+  var _popupCandidates = [];
+
+  function showVendorPopup(row, data) {
+    _popupRow = row;
+    _popupExtracted = data.extracted || null;
+    _popupCandidates = data.fuzzy_candidates || [];
+    closeVendorPopup();
+
+    var overlay = document.createElement('div');
+    overlay.className = 'vendor-overlay';
+    overlay.onclick = closeVendorPopup;
+    document.body.appendChild(overlay);
+    _vendorOverlay = overlay;
+
+    var pop = document.createElement('div');
+    pop.className = 'vendor-popup';
+    _vendorPopup = pop;
+
+    var head = document.createElement('div');
+    head.className = 'vendor-popup-head';
+    var title = document.createElement('strong');
+    title.textContent = 'Vendor not found — confirm match';
+    var xBtn = document.createElement('button');
+    xBtn.type = 'button'; xBtn.className = 'vendor-popup-x';
+    xBtn.textContent = '×'; xBtn.onclick = closeVendorPopup;
+    head.appendChild(title); head.appendChild(xBtn);
+    pop.appendChild(head);
+
+    if (_popupExtracted) {
+      var extSec = document.createElement('div');
+      extSec.className = 'vendor-popup-section';
+      var extLbl = document.createElement('div');
+      extLbl.className = 'vendor-popup-label';
+      extLbl.textContent = 'Extracted from quote';
+      extSec.appendChild(extLbl);
+      var ext = _popupExtracted;
+      var lines = [
+        ext.name,
+        ext.street,
+        [ext.city, ext.state, ext.zip].filter(Boolean).join(', ') || null,
+        ext.phone ? 'Phone: ' + ext.phone : null,
+        ext.website ? 'Web: ' + ext.website : null,
+      ];
+      lines.filter(Boolean).forEach(function (line) {
+        var p = document.createElement('div');
+        p.className = 'vendor-popup-info'; p.textContent = line;
+        extSec.appendChild(p);
+      });
+      pop.appendChild(extSec);
+    }
+
+    if (_popupCandidates.length > 0) {
+      var candSec = document.createElement('div');
+      candSec.className = 'vendor-popup-section';
+      var candLbl = document.createElement('div');
+      candLbl.className = 'vendor-popup-label';
+      candLbl.textContent = 'Close matches in database';
+      candSec.appendChild(candLbl);
+      _popupCandidates.forEach(function (v, i) {
+        var lbl = document.createElement('label');
+        lbl.className = 'vendor-popup-candidate';
+        var radio = document.createElement('input');
+        radio.type = 'radio'; radio.name = 'vp-cand';
+        radio.value = String(v.id);
+        if (i === 0) radio.checked = true;
+        lbl.appendChild(radio);
+        lbl.appendChild(document.createTextNode(
+          ' ' + v.name + ' — ' + Math.round(v.score * 100) + '% match'));
+        candSec.appendChild(lbl);
+      });
+      pop.appendChild(candSec);
+    }
+
+    var actions = document.createElement('div');
+    actions.className = 'vendor-popup-actions';
+
+    if (_popupCandidates.length > 0) {
+      actions.appendChild(makePopupBtn('Use database info', 'submit-btn',
+        function () { vendorPopupAction('use_db'); }));
+      actions.appendChild(makePopupBtn('Update vendor info in database', 'mini',
+        function () { vendorPopupAction('update_db'); }));
+    }
+
+    if (_popupExtracted && _popupExtracted.name) {
+      var noMatchLabel = _popupCandidates.length > 0
+        ? 'Not a match — create new' : 'Create new vendor';
+      actions.appendChild(makePopupBtn(noMatchLabel, 'mini',
+        function () { vendorPopupAction('create_new'); }));
+    } else if (_popupCandidates.length > 0) {
+      actions.appendChild(makePopupBtn('Not a match', 'mini', closeVendorPopup));
+    }
+
+    actions.appendChild(makePopupBtn('Cancel', 'mini', closeVendorPopup));
+    pop.appendChild(actions);
+    document.body.appendChild(pop);
+  }
+
+  function makePopupBtn(label, cls, onClick) {
+    var btn = document.createElement('button');
+    btn.type = 'button'; btn.className = cls;
+    btn.textContent = label; btn.onclick = onClick;
+    return btn;
+  }
+
+  function closeVendorPopup() {
+    if (_vendorPopup) { _vendorPopup.remove(); _vendorPopup = null; }
+    if (_vendorOverlay) { _vendorOverlay.remove(); _vendorOverlay = null; }
+    _popupRow = null;
+  }
+
+  function selectedCandidateId() {
+    if (!_vendorPopup) return null;
+    var radio = _vendorPopup.querySelector('input[name="vp-cand"]:checked');
+    return radio ? parseInt(radio.value, 10) : null;
+  }
+
+  function findCandidate(id) {
+    for (var i = 0; i < _popupCandidates.length; i++) {
+      if (_popupCandidates[i].id === id) return _popupCandidates[i];
+    }
+    return null;
+  }
+
+  function vendorPopupAction(action) {
+    var row = _popupRow;
+    var ext = _popupExtracted;
+    var vid = selectedCandidateId();
+    var candidate = vid ? findCandidate(vid) : null;
+
+    if ((action === 'use_db' || action === 'update_db') && candidate) {
+      if (action === 'update_db') {
+        var patch = {};
+        if (ext && ext.phone) patch.phone = ext.phone;
+        if (ext && ext.website) patch.website = ext.website;
+        if (Object.keys(patch).length > 0) {
+          post('/api/vendors/' + candidate.id + '/patch', 'PATCH', patch, null);
+        }
+      }
+      assignVendorToRow(row, candidate);
+      closeVendorPopup();
+    } else if (action === 'create_new' && ext && ext.name) {
+      var body = { name: ext.name };
+      if (ext.phone) body.phone = ext.phone;
+      if (ext.website) body.website = ext.website;
+      post('/api/vendors', 'POST', body, function (data) {
+        if (data && data.id) {
+          addVendorOption(data);
+          assignVendorToRow(row, data);
+        }
+      });
+      closeVendorPopup();
+    }
+  }
+
+  function assignVendorToRow(row, vendor) {
+    if (!row) return;
+    var select = row.querySelector('.vendor-select');
+    if (select) {
+      if (!select.querySelector('option[value="' + vendor.id + '"]')) {
+        var opt = document.createElement('option');
+        opt.value = vendor.id; opt.textContent = vendor.name;
+        if (vendor.incomplete) opt.dataset.incomplete = '1';
+        select.appendChild(opt);
+      }
+      select.value = vendor.id;
+      updateFlag(select);
+    }
+    post('/api/orders/' + row.dataset.id, 'POST', { vendor_id: vendor.id }, null);
+    rowNote(row, 'vendor from quote: ' + vendor.name);
+  }
+
+  function addVendorOption(vendor) {
+    document.querySelectorAll('.vendor-select').forEach(function (sel) {
+      if (!sel.querySelector('option[value="' + vendor.id + '"]')) {
+        var opt = document.createElement('option');
+        opt.value = vendor.id; opt.textContent = vendor.name;
+        if (vendor.incomplete) opt.dataset.incomplete = '1';
+        sel.appendChild(opt);
+      }
+    });
+  }
+
   /* --- vendor helpers ------------------------------------------------ */
 
   function updateFlag(select) {
@@ -91,6 +279,9 @@
            if (data.matched) {
              if (select) { select.value = data.vendor_id; updateFlag(select); }
              rowNote(row, "vendor from quote: " + data.vendor_name);
+           } else if (data.fuzzy_candidates !== undefined || data.extracted) {
+             rowNote(row, "");
+             showVendorPopup(row, data);
            } else {
              rowNote(row, data.message || "couldn't read the quote", true);
            }

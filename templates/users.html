@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Users{% endblock %}
+{% block content %}
+
+<p class="explain">Any logged-in user can authorize new email addresses or unblock IPs
+here. An IP is blocked automatically after {{ threshold }} consecutive login attempts
+with an email that isn't on the allowlist. All changes are recorded in
+<code>order_history</code>.</p>
+
+<h2 class="ref-section">Allowed users</h2>
+
+<form id="uadd" method="post" action="{{ url_for('users') }}"></form>
+
+<div class="table-wrap">
+<table class="ref-table">
+  <thead><tr>
+    <th>Email</th><th>Added by</th><th>Added at</th><th></th>
+  </tr></thead>
+  <tbody>
+    {% for e in emails %}
+    <tr>
+      <td class="ro">{{ e.email }}</td>
+      <td class="ro">{{ e.added_by }}</td>
+      <td class="ro">{{ e.added_at }}</td>
+      <td>
+        <form method="post" action="{{ url_for('remove_user', uid=e.id) }}"
+              onsubmit="return confirm('Remove {{ e.email }} from the allowlist?')">
+          <button type="submit" class="mini">Remove</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+    <tr class="new-row">
+      <td colspan="3">
+        <input form="uadd" name="email" type="email"
+               placeholder="new@email.com" required>
+      </td>
+      <td><button form="uadd" type="submit" class="mini">Add</button></td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<h2 class="ref-section">Blocked IPs</h2>
+
+{% if blocked %}
+<div class="table-wrap">
+<table class="ref-table">
+  <thead><tr>
+    <th>IP address</th><th>Blocked at</th><th>Attempts</th><th></th>
+  </tr></thead>
+  <tbody>
+    {% for b in blocked %}
+    <tr>
+      <td class="ro">{{ b.ip }}</td>
+      <td class="ro">{{ b.blocked_at }}</td>
+      <td class="ro center">{{ b.attempts }}</td>
+      <td>
+        <form method="post" action="{{ url_for('unblock_ip', bid=b.id) }}">
+          <button type="submit" class="mini">Unblock</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="empty">No blocked IPs.</p>
+{% endif %}
+
+{% endblock %}

@@ -24,6 +24,9 @@ app.secret_key = os.environ.get("ORDERAPP_SECRET", "dev-secret-change-me")
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
+_ip_attempts = {}        # ip -> count of failed logins with disallowed emails
+_IP_BLOCK_THRESHOLD = 5  # attempts before the IP is blocked
+
 # ------------------------------------------------------------------ db
 
 def get_db():
@@ -74,14 +77,33 @@ def init_db():
     );
     CREATE TABLE IF NOT EXISTS order_history (
         id INTEGER PRIMARY KEY,
-        order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+        order_id INTEGER,
         changed_by TEXT NOT NULL,
         changed_at TEXT NOT NULL,
         field TEXT NOT NULL,
         old_value TEXT,
-        new_value TEXT
+        new_value TEXT,
+        table_name TEXT NOT NULL DEFAULT 'orders'
+    );
+    CREATE TABLE IF NOT EXISTS allowed_emails (
+        id INTEGER PRIMARY KEY,
+        email TEXT NOT NULL UNIQUE,
+        added_by TEXT NOT NULL DEFAULT 'system',
+        added_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS blocked_ips (
+        id INTEGER PRIMARY KEY,
+        ip TEXT NOT NULL UNIQUE,
+        blocked_at TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        note TEXT NOT NULL DEFAULT ''
     );
     """)
+    # Migration for existing databases: add table_name column if missing
+    try:
+        db.execute("ALTER TABLE order_history ADD COLUMN table_name TEXT NOT NULL DEFAULT 'orders'")
+    except Exception:
+        pass
     db.commit()
     db.close()
 
@@ -94,14 +116,15 @@ def now_iso():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def log_change(db, order_id, field, old, new):
-    """Record one field change in order_history (no GUI for this yet)."""
+def log_change(db, record_id, field, old, new, table_name='orders', by=None):
+    """Record one field change in order_history."""
     db.execute(
         "INSERT INTO order_history (order_id, changed_by, changed_at, field,"
-        " old_value, new_value) VALUES (?,?,?,?,?,?)",
-        (order_id, current_user(), now_iso(), field,
+        " old_value, new_value, table_name) VALUES (?,?,?,?,?,?,?)",
+        (record_id or 0, by or current_user() or 'system', now_iso(), field,
          None if old is None else str(old),
-         None if new is None else str(new)))
+         None if new is None else str(new),
+         table_name))
 
 
 def vendor_incomplete(v):
@@ -167,17 +190,48 @@ def order_visible_to(db, order_id, email):
            WHERE o.id = ? AND (o.user_email = ? OR t.email IS NOT NULL)""",
         (email, order_id, email)).fetchone()
 
-# ------------------------------------------------------------------ auth (stub)
+def get_client_ip():
+    return request.headers.get("X-Forwarded-For", request.remote_addr).split(",")[0].strip()
+
+
+# ------------------------------------------------------------------ auth
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
     error = None
     if request.method == "POST":
+        ip = get_client_ip()
+        db = get_db()
+        if db.execute("SELECT 1 FROM blocked_ips WHERE ip = ?", (ip,)).fetchone():
+            return render_template("login.html",
+                error="This IP address has been blocked after repeated failed attempts. "
+                      "Contact an existing user to unblock it from the Users tab.")
         email = request.form.get("email", "").strip().lower()
-        if EMAIL_RE.match(email):
+        if not EMAIL_RE.match(email):
+            error = "Enter a valid email address."
+        elif db.execute("SELECT 1 FROM allowed_emails WHERE email = ?", (email,)).fetchone():
             session["email"] = email
             return redirect(url_for("orders"))
-        error = "Enter a valid email address."
+        else:
+            count = _ip_attempts.get(ip, 0) + 1
+            _ip_attempts[ip] = count
+            if count >= _IP_BLOCK_THRESHOLD:
+                db.execute(
+                    "INSERT OR IGNORE INTO blocked_ips (ip, blocked_at, attempts) VALUES (?,?,?)",
+                    (ip, now_iso(), count))
+                db.execute("UPDATE blocked_ips SET attempts=?, blocked_at=? WHERE ip=?",
+                           (count, now_iso(), ip))
+                db.execute(
+                    "INSERT INTO order_history (order_id, changed_by, changed_at, field,"
+                    " old_value, new_value, table_name) VALUES (0,'system',?,?,?,?,'blocked_ips')",
+                    (now_iso(), "ip", None, ip))
+                db.commit()
+                error = ("This IP has been blocked after too many failed attempts. "
+                         "Contact an existing user to unblock it from the Users tab.")
+            else:
+                remaining = _IP_BLOCK_THRESHOLD - count
+                error = (f"That email is not authorized. "
+                         f"({remaining} attempt{'s' if remaining != 1 else ''} remaining before this IP is blocked.)")
     return render_template("login.html", error=error)
 
 
@@ -293,6 +347,91 @@ def update_vendor(vid):
     return redirect(url_for("vendors"))
 
 
+@app.route("/users", methods=["GET", "POST"])
+@login_required
+def users():
+    db = get_db()
+    if request.method == "POST":
+        email = request.form.get("email", "").strip().lower()
+        if EMAIL_RE.match(email):
+            cur = db.execute(
+                "INSERT OR IGNORE INTO allowed_emails (email, added_by, added_at) VALUES (?,?,?)",
+                (email, current_user(), now_iso()))
+            if cur.rowcount:
+                log_change(db, 0, "email", None, email, table_name="allowed_emails")
+            db.commit()
+        return redirect(url_for("users"))
+    emails = db.execute("SELECT * FROM allowed_emails ORDER BY added_at DESC").fetchall()
+    blocked = db.execute("SELECT * FROM blocked_ips ORDER BY blocked_at DESC").fetchall()
+    return render_template("users.html", tab="users", emails=emails, blocked=blocked,
+                           threshold=_IP_BLOCK_THRESHOLD)
+
+
+@app.route("/users/<int:uid>/remove", methods=["POST"])
+@login_required
+def remove_user(uid):
+    db = get_db()
+    row = db.execute("SELECT email FROM allowed_emails WHERE id = ?", (uid,)).fetchone()
+    if row:
+        log_change(db, 0, "email", row["email"], None, table_name="allowed_emails")
+        db.execute("DELETE FROM allowed_emails WHERE id = ?", (uid,))
+        db.commit()
+    return redirect(url_for("users"))
+
+
+@app.route("/blocked-ips/<int:bid>/unblock", methods=["POST"])
+@login_required
+def unblock_ip(bid):
+    db = get_db()
+    row = db.execute("SELECT ip FROM blocked_ips WHERE id = ?", (bid,)).fetchone()
+    if row:
+        ip = row["ip"]
+        log_change(db, 0, "ip", ip, None, table_name="blocked_ips")
+        db.execute("DELETE FROM blocked_ips WHERE id = ?", (bid,))
+        db.commit()
+        _ip_attempts.pop(ip, None)
+    return redirect(url_for("users"))
+
+
+@app.route("/api/vendors", methods=["POST"])
+@login_required
+def api_create_vendor():
+    """Create a vendor via JSON (from quote auto-detection). Returns {id, name, incomplete}."""
+    data = request.get_json(silent=True) or {}
+    name = data.get("name", "").strip()
+    if not name:
+        return jsonify(error="name required"), 400
+    db = get_db()
+    cur = db.execute(
+        "INSERT OR IGNORE INTO vendors (name, website, phone, tax_exempt_filed) VALUES (?,?,?,0)",
+        (name, data.get("website", "").strip(), data.get("phone", "").strip()))
+    db.commit()
+    if cur.lastrowid:
+        vid = cur.lastrowid
+    else:
+        row = db.execute("SELECT id FROM vendors WHERE name = ?", (name,)).fetchone()
+        vid = row["id"] if row else None
+    v = db.execute("SELECT * FROM vendors WHERE id = ?", (vid,)).fetchone()
+    vd = dict(v, incomplete=vendor_incomplete(v), domain=domain_of(v["website"]))
+    return jsonify(id=vd["id"], name=vd["name"], incomplete=vd["incomplete"])
+
+
+@app.route("/api/vendors/<int:vid>/patch", methods=["PATCH"])
+@login_required
+def api_patch_vendor(vid):
+    """Update phone/website on a vendor from quote-extracted info."""
+    db = get_db()
+    v = db.execute("SELECT * FROM vendors WHERE id = ?", (vid,)).fetchone()
+    if v is None:
+        return jsonify(error="not found"), 404
+    data = request.get_json(silent=True) or {}
+    phone = data.get("phone", v["phone"])
+    website = data.get("website", v["website"])
+    db.execute("UPDATE vendors SET phone=?, website=? WHERE id=?", (phone, website, vid))
+    db.commit()
+    return jsonify(ok=True)
+
+
 @app.route("/projects", methods=["GET", "POST"])
 @login_required
 def projects():
@@ -374,8 +513,20 @@ def api_quote_vendor(oid):
     except quotes.QuoteError as e:
         return jsonify(matched=False, provider=provider, message=str(e))
 
-    vendor, hints = quotes.match_vendor(text, fetch_vendors(db))
+    all_vendors = fetch_vendors(db)
+    vendor, hints = quotes.match_vendor(text, all_vendors)
     if vendor is None:
+        extracted = quotes.extract_vendor_info(text)
+        fuzzy = []
+        if extracted and extracted.get("name"):
+            fuzzy = quotes.fuzzy_match_vendors(extracted["name"], all_vendors)
+        if fuzzy or (extracted and (extracted.get("name") or extracted.get("street"))):
+            safe_fuzzy = [
+                {k: v[k] for k in ("id", "name", "domain", "incomplete", "score")}
+                for v in fuzzy
+            ]
+            return jsonify(matched=False, provider=provider,
+                           fuzzy_candidates=safe_fuzzy, extracted=extracted)
         msg = "Quote read, but no known vendor matched."
         if hints:
             msg += " Domains seen in the quote: " + ", ".join(hints) + \
