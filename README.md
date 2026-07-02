@@ -69,13 +69,24 @@ push to GitHub, pull on PythonAnywhere. One-time setup:
 on the web app's config page set:
 
 - **Source code:** `/home/YOUR_PYTHONANYWHERE_USERNAME/orderapp`
+- **Working directory:** `/home/YOUR_PYTHONANYWHERE_USERNAME/orderapp`
+  (must be the directory containing `app.py`, or the module can't be found)
 - **Virtualenv:** `/home/YOUR_PYTHONANYWHERE_USERNAME/.virtualenvs/orderapp`
 - **WSGI configuration file** (click to edit; replace contents with):
 
       import os, sys
-      sys.path.insert(0, "/home/YOUR_PYTHONANYWHERE_USERNAME/orderapp")
+      APP_DIR = "/home/YOUR_PYTHONANYWHERE_USERNAME/orderapp"
+      sys.path.insert(0, APP_DIR)
+      os.chdir(APP_DIR)
       os.environ["ORDERAPP_SECRET"] = "PASTE-YOUR-GENERATED-KEY-HERE"
       from app import app as application
+
+  Both `sys.path.insert` and the Working-directory setting (the `os.chdir` is
+  the belt-and-suspenders equivalent) must point at the directory that holds
+  `app.py`. Watch for the nested-clone trap: `git clone .../orderapp.git`
+  inside a directory already called `orderapp` puts the code at
+  `~/orderapp/orderapp` — the path here must match wherever `app.py`
+  actually is (`ls ~/orderapp` to check).
 
 **4. Generate the secret key.** Flask uses `secret_key` to cryptographically
 sign the session cookie (the thing that says "I am john@..."); anyone who knows
