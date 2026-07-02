@@ -25,16 +25,18 @@ def main():
         print("Not a valid email address.", file=sys.stderr)
         sys.exit(1)
 
-    if not os.path.exists(DB_PATH):
-        print(f"Database not found at {DB_PATH}.\n"
-              "Start the app once first so init_db() creates it, then re-run this script.",
-              file=sys.stderr)
-        sys.exit(1)
-
     db = sqlite3.connect(DB_PATH)
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS allowed_emails (
+            id INTEGER PRIMARY KEY,
+            email TEXT NOT NULL UNIQUE,
+            added_by TEXT NOT NULL DEFAULT 'system',
+            added_at TEXT NOT NULL
+        )
+    """)
     cur = db.execute(
         "INSERT OR IGNORE INTO allowed_emails (email, added_by, added_at) VALUES (?, ?, ?)",
-        (email, "setup-script", datetime.datetime.utcnow().isoformat()))
+        (email, "setup-script", datetime.datetime.now(datetime.timezone.utc).isoformat()))
     db.commit()
     db.close()
 
