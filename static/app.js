@@ -54,11 +54,14 @@
   var _popupRow = null;
   var _popupExtracted = null;
   var _popupCandidates = [];
+  var _popupHintDomains = [];
 
   function showVendorPopup(row, data) {
     _popupRow = row;
     _popupExtracted = data.extracted || null;
     _popupCandidates = data.fuzzy_candidates || [];
+    _popupHintDomains = data.hint_domains || [];
+    var hintDomains = _popupHintDomains;
     closeVendorPopup();
 
     var overlay = document.createElement('div');
@@ -81,22 +84,30 @@
     head.appendChild(title); head.appendChild(xBtn);
     pop.appendChild(head);
 
-    if (_popupExtracted) {
+    // Build the "from quote" section from extracted address + domain hints
+    var ext = _popupExtracted;
+    var infoLines = [];
+    if (ext) {
+      if (ext.name)   infoLines.push(ext.name);
+      if (ext.street) infoLines.push(ext.street);
+      var csz = [ext.city, ext.state, ext.zip].filter(Boolean).join(', ');
+      if (csz)        infoLines.push(csz);
+      if (ext.phone)  infoLines.push('Phone: ' + ext.phone);
+      if (ext.website) infoLines.push('Web: ' + ext.website);
+    }
+    // Append any domain hints not already shown
+    hintDomains.forEach(function (d) {
+      var already = ext && ext.website === d;
+      if (!already) infoLines.push('Domain seen: ' + d);
+    });
+    if (infoLines.length > 0) {
       var extSec = document.createElement('div');
       extSec.className = 'vendor-popup-section';
       var extLbl = document.createElement('div');
       extLbl.className = 'vendor-popup-label';
-      extLbl.textContent = 'Extracted from quote';
+      extLbl.textContent = 'From the quote';
       extSec.appendChild(extLbl);
-      var ext = _popupExtracted;
-      var lines = [
-        ext.name,
-        ext.street,
-        [ext.city, ext.state, ext.zip].filter(Boolean).join(', ') || null,
-        ext.phone ? 'Phone: ' + ext.phone : null,
-        ext.website ? 'Web: ' + ext.website : null,
-      ];
-      lines.filter(Boolean).forEach(function (line) {
+      infoLines.forEach(function (line) {
         var p = document.createElement('div');
         p.className = 'vendor-popup-info'; p.textContent = line;
         extSec.appendChild(p);
@@ -136,7 +147,9 @@
         function () { vendorPopupAction('update_db'); }));
     }
 
-    if (_popupExtracted && _popupExtracted.name) {
+    // "Create new" is available whenever we have a name or at least a domain hint
+    var canCreate = (_popupExtracted && _popupExtracted.name) || _popupHintDomains.length > 0;
+    if (canCreate) {
       var noMatchLabel = _popupCandidates.length > 0
         ? 'Not a match — create new' : 'Create new vendor';
       actions.appendChild(makePopupBtn(noMatchLabel, 'mini',
@@ -193,10 +206,14 @@
       }
       assignVendorToRow(row, candidate);
       closeVendorPopup();
-    } else if (action === 'create_new' && ext && ext.name) {
-      var body = { name: ext.name };
-      if (ext.phone) body.phone = ext.phone;
-      if (ext.website) body.website = ext.website;
+    } else if (action === 'create_new') {
+      // Use extracted name, or fall back to first domain hint as the vendor name
+      var newName = (ext && ext.name) || (_popupHintDomains.length > 0 ? _popupHintDomains[0] : null);
+      if (!newName) return;
+      var body = { name: newName };
+      if (ext && ext.phone) body.phone = ext.phone;
+      var website = (ext && ext.website) || (_popupHintDomains.length > 0 ? _popupHintDomains[0] : null);
+      if (website) body.website = website;
       post('/api/vendors', 'POST', body, function (data) {
         if (data && data.id) {
           addVendorOption(data);

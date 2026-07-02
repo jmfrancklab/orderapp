@@ -18,9 +18,17 @@ import quotes
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
+# Increment this (major.minor.patch) whenever you deploy a meaningful change.
+__version__ = "0.9.2"
+
 app = Flask(__name__)
 # CHANGE THIS before deploying (any long random string):
 app.secret_key = os.environ.get("ORDERAPP_SECRET", "dev-secret-change-me")
+
+
+@app.context_processor
+def inject_version():
+    return {"app_version": __version__}
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -520,18 +528,19 @@ def api_quote_vendor(oid):
         fuzzy = []
         if extracted and extracted.get("name"):
             fuzzy = quotes.fuzzy_match_vendors(extracted["name"], all_vendors)
-        if fuzzy or (extracted and (extracted.get("name") or extracted.get("street"))):
+        # Show popup whenever we have anything useful: fuzzy DB matches,
+        # an address block from the PDF, or domain hints from the text.
+        if fuzzy or extracted or hints:
             safe_fuzzy = [
                 {k: v[k] for k in ("id", "name", "domain", "incomplete", "score")}
                 for v in fuzzy
             ]
             return jsonify(matched=False, provider=provider,
-                           fuzzy_candidates=safe_fuzzy, extracted=extracted)
-        msg = "Quote read, but no known vendor matched."
-        if hints:
-            msg += " Domains seen in the quote: " + ", ".join(hints) + \
-                   ". Add the vendor on the Vendors tab, then re-enter the link."
-        return jsonify(matched=False, provider=provider, message=msg)
+                           fuzzy_candidates=safe_fuzzy,
+                           extracted=extracted,
+                           hint_domains=hints)
+        return jsonify(matched=False, provider=provider,
+                       message="Quote read, but no vendor information found in the PDF.")
 
     if order["vendor_id"] != vendor["id"]:
         log_change(db, oid, "vendor_id", order["vendor_id"], vendor["id"])
