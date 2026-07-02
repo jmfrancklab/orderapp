@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Submitted{% endblock %}
+{% block content %}
+
+<p class="explain">Every submitted order you placed or are tracking. Everything
+stays editable — and edits are autosaved and logged — except the submission date
+and who submitted it. A Dropbox or SharePoint quote link pasted here is read for
+the vendor just like on the order sheet.</p>
+
+<div class="sheet submitted-sheet">
+  <div class="sheet-head">
+    <span>Submitted</span><span>By</span><span>Description</span><span>Link</span>
+    <span>Vendor</span><span>Project</span><span>Use</span><span>Trackers</span>
+  </div>
+
+  {% for r in rows %}
+  <div class="order-row submitted-row" data-id="{{ r.id }}">
+    <span class="ro">{{ (r.submitted_at or '')[:10] }}</span>
+    <span class="ro">{{ r.user_email }}</span>
+    <input data-field="description" value="{{ r.description }}">
+    <span class="link-cell">
+      <input data-field="link" value="{{ r.link }}" inputmode="url">
+      {% if r.link %}<a class="link-out" href="{{ r.link }}" target="_blank" rel="noopener">open ↗</a>{% endif %}
+      <span class="row-note" aria-live="polite"></span>
+    </span>
+    <span class="vendor-cell">
+      <select data-field="vendor_id" class="vendor-select">
+        <option value=""></option>
+        {% for v in vendors %}
+        <option value="{{ v.id }}" data-domain="{{ v.domain }}"
+                data-incomplete="{{ 1 if v.incomplete else 0 }}"
+                {{ 'selected' if r.vendor_id == v.id }}>{{ v.name }}</option>
+        {% endfor %}
+      </select>
+      <span class="flag" title="Vendor record incomplete — see Vendors tab">?</span>
+    </span>
+    <select data-field="project_id">
+      <option value=""></option>
+      {% for p in projects %}
+      <option value="{{ p.id }}" {{ 'selected' if r.project_id == p.id }}>{{ p.name }}</option>
+      {% endfor %}
+    </select>
+    <input data-field="use_note" value="{{ r.use_note }}">
+    <span class="tracker-cell">
+      <input class="tracker-input" type="email" placeholder="email + Enter">
+      <span class="chips">
+        {% for t in trackers[r.id] %}
+        <span class="chip">{{ t }}<button type="button" class="chip-x" data-email="{{ t }}">×</button></span>
+        {% endfor %}
+      </span>
+    </span>
+  </div>
+  {% endfor %}
+
+  {% if not rows %}
+  <p class="empty">Nothing submitted yet.</p>
+  {% endif %}
+</div>
+
+{% endblock %}

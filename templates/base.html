@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Orders{% endblock %} · ACERT ordering</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header class="topbar">
+  <span class="wordmark">ACERT<span class="wordmark-sub">ordering</span></span>
+  <nav class="tabs">
+    <a href="{{ url_for('orders') }}"    class="{{ 'active' if tab=='orders' }}">New order</a>
+    <a href="{{ url_for('submitted') }}" class="{{ 'active' if tab=='submitted' }}">Submitted</a>
+    <a href="{{ url_for('vendors') }}"   class="{{ 'active' if tab=='vendors' }}">Vendors</a>
+    <a href="{{ url_for('projects') }}"  class="{{ 'active' if tab=='projects' }}">Projects</a>
+  </nav>
+  <span class="who">
+    {{ session['email'] }} · <a href="{{ url_for('logout') }}">sign out</a>
+    <span id="save-state" class="save-state" aria-live="polite"></span>
+  </span>
+</header>
+<main>
+{% block content %}{% endblock %}
+</main>
+<script src="{{ url_for('static', filename='app.js') }}" defer></script>
+</body>
+</html>

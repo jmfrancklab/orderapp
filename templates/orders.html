@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}New order{% endblock %}
+{% block content %}
+
+<p class="explain">Fill one row per item. The <strong>link</strong> is either the
+purchase page (the <strong>vendor</strong> is then determined automatically from
+the URL) <em>or</em>, if you have a quote instead, a Dropbox or SharePoint/OneDrive
+link to the quote PDF — the quote is then read and the vendor pulled from it.
+A red <span class="flag-demo">?</span> next to a vendor means its record is
+missing information (website, phone, or tax-exemption filing) — fix it on the
+<a href="{{ url_for('vendors') }}">Vendors</a> tab. Everything you type is saved
+immediately and will still be here next time you sign in.</p>
+
+{% macro vendor_select(sel_id) %}
+  <select data-field="vendor_id" class="vendor-select">
+    <option value=""></option>
+    {% for v in vendors %}
+    <option value="{{ v.id }}" data-domain="{{ v.domain }}"
+            data-incomplete="{{ 1 if v.incomplete else 0 }}"
+            {{ 'selected' if sel_id == v.id }}>{{ v.name }}</option>
+    {% endfor %}
+  </select>
+  <span class="flag" title="Vendor record incomplete — see Vendors tab">?</span>
+{% endmacro %}
+
+<div class="sheet">
+  <div class="sheet-head">
+    <span>Description</span>
+    <span>Link <em class="head-hint">purchase URL, or Dropbox / SharePoint link to a quote PDF</em></span>
+    <span>Vendor <em class="head-hint">auto-filled from the link or quote</em></span>
+    <span>Project</span><span>Use</span><span>Trackers</span><span></span>
+  </div>
+
+  {% for d in drafts %}
+  <div class="order-row" data-id="{{ d.id }}">
+    <input data-field="description" value="{{ d.description }}" placeholder="What is it?">
+    <span class="link-cell">
+      <input data-field="link" value="{{ d.link }}" placeholder="https://…" inputmode="url">
+      <span class="row-note" aria-live="polite"></span>
+    </span>
+    <span class="vendor-cell">{{ vendor_select(d.vendor_id) }}</span>
+    <select data-field="project_id">
+      <option value=""></option>
+      {% for p in projects %}
+      <option value="{{ p.id }}" {{ 'selected' if d.project_id == p.id }}>{{ p.name }}</option>
+      {% endfor %}
+    </select>
+    <input data-field="use_note" value="{{ d.use_note }}" placeholder="What's it for?">
+    <span class="tracker-cell">
+      <input class="tracker-input" type="email" placeholder="email + Enter">
+      <span class="chips">
+        {% for t in trackers[d.id] %}
+        <span class="chip">{{ t }}<button type="button" class="chip-x" data-email="{{ t }}">×</button></span>
+        {% endfor %}
+      </span>
+    </span>
+    <form method="post" action="{{ url_for('delete_row', oid=d.id) }}"
+          class="row-del">
+      <button type="submit" title="Remove this row">🗑</button>
+    </form>
+  </div>
+  {% endfor %}
+
+  {% if not drafts %}
+  <p class="empty">No items yet — add a row to start an order.</p>
+  {% endif %}
+</div>
+
+<div class="sheet-actions">
+  <form method="post" action="{{ url_for('new_row') }}">
+    <button type="submit" class="add-btn" title="Add a row">＋</button>
+  </form>
+  {% if drafts %}
+  <form method="post" action="{{ url_for('submit_orders') }}"
+        onsubmit="return confirm('Submit all rows? They will move to the Submitted tab.');">
+    <button type="submit" class="submit-btn">Submit order</button>
+  </form>
+  {% endif %}
+</div>
+
+{% endblock %}

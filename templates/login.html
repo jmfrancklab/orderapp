@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in · ACERT ordering</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="login-body">
+<form method="post" class="login-card">
+  <span class="wordmark">ACERT<span class="wordmark-sub">ordering</span></span>
+  <p class="hint">Enter your email to open your order sheet. Anything you type is
+  saved as you go and will be here when you come back.</p>
+  <label for="email">Email</label>
+  <input id="email" name="email" type="email" required autofocus
+         placeholder="you@acert.org">
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  <button type="submit">Continue</button>
+</form>
+</body>
+</html>

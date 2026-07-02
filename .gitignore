@@ -1,0 +1,5 @@
+orders.db
+venv/
+__pycache__/
+*.pyc
+nohup.out

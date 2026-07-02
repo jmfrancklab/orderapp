@@ -1,0 +1,203 @@
+/* ACERT ordering — "lab sheet" look: cool paper, ruled rows, ink accents.
+   Palette: --paper #F7F8F6, --ink #1B2430, --rule #C9D2CF, --accent #0E6E6B
+   (spectrometer-teal), --alert #C0392B. Data set in a compact grotesk;
+   identifiers in monospace where precision matters. */
+
+:root {
+  --paper: #f7f8f6;
+  --ink: #1b2430;
+  --rule: #c9d2cf;
+  --accent: #0e6e6b;
+  --accent-soft: #e3efee;
+  --alert: #c0392b;
+  --mono: "SF Mono", "Cascadia Code", Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 15px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+
+/* ------------------------------------------------- top bar / tabs */
+.topbar {
+  display: flex; align-items: baseline; gap: 2rem; flex-wrap: wrap;
+  padding: .7rem 1.2rem;
+  border-bottom: 2px solid var(--ink);
+  background: #fff;
+}
+.wordmark { font-weight: 700; letter-spacing: .12em; font-size: 1.05rem; }
+.wordmark-sub {
+  font-weight: 400; letter-spacing: .3em; font-size: .7rem;
+  color: var(--accent); margin-left: .5em; text-transform: uppercase;
+}
+.tabs { display: flex; gap: .25rem; }
+.tabs a {
+  padding: .35rem .9rem; text-decoration: none; color: var(--ink);
+  border: 1px solid transparent; border-bottom: none; font-size: .9rem;
+}
+.tabs a.active {
+  border-color: var(--ink);
+  background: var(--paper);
+  position: relative; top: 2px;   /* fuses tab into the sheet below */
+  font-weight: 600;
+}
+.tabs a:hover:not(.active) { color: var(--accent); }
+.who { margin-left: auto; font-size: .8rem; color: #5a6572; }
+.who a { color: var(--accent); }
+.save-state { margin-left: .8em; font-family: var(--mono); font-size: .72rem; }
+
+main { padding: 1.2rem 1.2rem 3rem; max-width: 1500px; margin: 0 auto; }
+
+.explain {
+  font-size: .82rem; color: #4b5563; max-width: 70em;
+  margin: 0 0 1rem; border-left: 3px solid var(--accent); padding-left: .7em;
+}
+.explain a { color: var(--accent); }
+
+/* ------------------------------------------------- order sheet */
+.sheet { border-top: 1px solid var(--rule); }
+.sheet-head, .order-row {
+  display: grid;
+  grid-template-columns: 1.4fr 1.4fr 1.1fr 1fr 1.2fr 1.3fr 2.2rem;
+  gap: .6rem; align-items: start;
+  padding: .45rem .2rem;
+  border-bottom: 1px solid var(--rule);
+}
+.submitted-sheet .sheet-head, .submitted-row {
+  grid-template-columns: 5.5rem 1fr 1.4fr 1.4fr 1.1fr 1fr 1.1fr 1.2fr;
+}
+.sheet-head {
+  font-size: .72rem; text-transform: uppercase; letter-spacing: .08em;
+  color: #5a6572; border-bottom: 2px solid var(--ink);
+}
+.head-hint {
+  display: block; text-transform: none; letter-spacing: 0;
+  font-style: normal; font-size: .68rem; color: #8a94a0; font-weight: 400;
+}
+.link-cell { display: block; }
+.link-out { font-size: .7rem; color: var(--accent); font-family: var(--mono); }
+.row-note {
+  display: block; font-size: .7rem; color: var(--accent);
+  font-family: var(--mono); margin-top: .2rem; overflow-wrap: anywhere;
+}
+.row-note.err { color: var(--alert); }
+.order-row:nth-child(even) { background: #fdfdfc; }
+
+input, select {
+  width: 100%; padding: .4rem .5rem;
+  border: 1px solid var(--rule); border-radius: 2px;
+  background: #fff; color: var(--ink); font: inherit; font-size: .88rem;
+}
+input:focus, select:focus {
+  outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent);
+}
+input[data-field="link"] { font-family: var(--mono); font-size: .8rem; }
+
+.ro { font-size: .85rem; padding-top: .45rem; overflow-wrap: anywhere; }
+.link-ro a { color: var(--accent); font-family: var(--mono); font-size: .78rem; }
+.chips-ro { font-family: var(--mono); font-size: .76rem; }
+
+/* vendor cell with red ? flag */
+.vendor-cell { display: flex; align-items: center; gap: .35rem; }
+.flag {
+  visibility: hidden;
+  font-weight: 700; color: var(--alert); font-size: 1.05rem;
+  line-height: 1; cursor: help; flex: none;
+}
+.flag.on { visibility: visible; }
+.flag-demo { color: var(--alert); font-weight: 700; }
+
+/* trackers */
+.tracker-cell { display: block; }
+.chips { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .35rem; }
+.chip {
+  display: inline-flex; align-items: center; gap: .3em;
+  background: var(--accent-soft); color: var(--accent);
+  border: 1px solid var(--accent);
+  font-family: var(--mono); font-size: .72rem;
+  padding: .12rem .45rem; border-radius: 999px;
+}
+.chip-x {
+  border: none; background: none; color: inherit; cursor: pointer;
+  font-size: .9rem; padding: 0; line-height: 1;
+}
+.chip-x:hover { color: var(--alert); }
+
+.row-del button {
+  border: none; background: none; cursor: pointer; font-size: .95rem;
+  opacity: .35; padding: .4rem 0;
+}
+.row-del button:hover { opacity: 1; }
+
+.empty { color: #7b8794; font-style: italic; padding: 1rem .2rem; }
+
+/* + and submit */
+.sheet-actions {
+  display: flex; align-items: center; gap: 1rem; margin-top: .9rem;
+}
+.add-btn {
+  width: 2.4rem; height: 2.4rem; border-radius: 50%;
+  border: 2px solid var(--ink); background: #fff;
+  font-size: 1.3rem; line-height: 1; cursor: pointer;
+}
+.add-btn:hover { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.submit-btn, button[type="submit"].submit-btn {
+  padding: .55rem 1.4rem; border: none; border-radius: 2px;
+  background: var(--accent); color: #fff; font: inherit; font-weight: 600;
+  cursor: pointer;
+}
+.submit-btn:hover { background: #0a5a58; }
+
+/* ------------------------------------------------- reference tables */
+.table-wrap { overflow-x: auto; }
+.ref-table { border-collapse: collapse; width: 100%; max-width: 68rem; }
+.ref-table th {
+  text-align: left; font-size: .72rem; text-transform: uppercase;
+  letter-spacing: .08em; color: #5a6572;
+  border-bottom: 2px solid var(--ink); padding: .4rem .4rem;
+}
+.ref-table td { padding: .3rem .4rem; border-bottom: 1px solid var(--rule); }
+.ref-table td.center { text-align: center; }
+.ref-table .new-row td { background: var(--accent-soft); }
+.mini {
+  padding: .3rem .8rem; border: 1px solid var(--ink); background: #fff;
+  border-radius: 2px; font: inherit; font-size: .8rem; cursor: pointer;
+}
+.mini:hover { background: var(--ink); color: #fff; }
+
+/* ------------------------------------------------- login */
+.login-body {
+  display: grid; place-items: center; min-height: 100vh; margin: 0;
+  background:
+    repeating-linear-gradient(0deg, transparent 0 27px, #e6eae7 27px 28px),
+    var(--paper);
+  color: var(--ink);
+  font: 15px/1.45 "Segoe UI", system-ui, sans-serif;
+}
+.login-card {
+  background: #fff; border: 2px solid var(--ink); padding: 2rem 2.2rem;
+  width: min(24rem, 92vw); display: flex; flex-direction: column; gap: .7rem;
+  box-shadow: 6px 6px 0 var(--accent-soft);
+}
+.login-card label { font-size: .75rem; text-transform: uppercase; letter-spacing: .08em; }
+.login-card .hint { font-size: .82rem; color: #4b5563; margin: .3rem 0 .5rem; }
+.login-card button {
+  margin-top: .4rem; padding: .6rem; border: none; background: var(--accent);
+  color: #fff; font: inherit; font-weight: 600; cursor: pointer; border-radius: 2px;
+}
+.error { color: var(--alert); font-size: .82rem; margin: 0; }
+
+/* ------------------------------------------------- small screens */
+@media (max-width: 900px) {
+  .sheet-head { display: none; }
+  .order-row { grid-template-columns: 1fr 1fr; }
+  .submitted-row { grid-template-columns: 1fr 1fr; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .chip { transition: background .12s; }
+}

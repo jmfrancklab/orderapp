@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Vendors{% endblock %}
+{% block content %}
+
+<p class="explain">Vendors here feed the vendor dropdown on the order sheet. The
+website is also what lets the order sheet auto-detect the vendor from a pasted
+link. A vendor with a missing website, phone, or unfiled tax exemption shows a red
+<span class="flag-demo">?</span> on the order sheet.</p>
+
+{% for v in vendors %}
+<form id="v{{ v.id }}" method="post" action="{{ url_for('update_vendor', vid=v.id) }}"></form>
+{% endfor %}
+<form id="vnew" method="post" action="{{ url_for('vendors') }}"></form>
+
+<div class="table-wrap">
+<table class="ref-table">
+  <thead><tr><th>Vendor</th><th>Website</th><th>Phone</th>
+    <th>Tax exemption filed</th><th></th><th></th></tr></thead>
+  <tbody>
+    {% for v in vendors %}
+    <tr>
+      <td><input form="v{{ v.id }}" name="name" value="{{ v.name }}" required></td>
+      <td><input form="v{{ v.id }}" name="website" value="{{ v.website }}" placeholder="digikey.com"></td>
+      <td><input form="v{{ v.id }}" name="phone" value="{{ v.phone }}" placeholder="(800) …"></td>
+      <td class="center"><input form="v{{ v.id }}" type="checkbox" name="tax_exempt_filed"
+            {{ 'checked' if v.tax_exempt_filed }}></td>
+      <td>{% if v.incomplete %}<span class="flag on" title="Missing info">?</span>{% endif %}</td>
+      <td><button form="v{{ v.id }}" type="submit" class="mini">Save</button></td>
+    </tr>
+    {% endfor %}
+    <tr class="new-row">
+      <td><input form="vnew" name="name" placeholder="New vendor" required></td>
+      <td><input form="vnew" name="website" placeholder="website"></td>
+      <td><input form="vnew" name="phone" placeholder="phone"></td>
+      <td class="center"><input form="vnew" type="checkbox" name="tax_exempt_filed"></td>
+      <td></td>
+      <td><button form="vnew" type="submit" class="mini">Add</button></td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+{% endblock %}
