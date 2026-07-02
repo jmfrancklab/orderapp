@@ -56,31 +56,47 @@ push to GitHub, pull on PythonAnywhere. One-time setup:
 **1. Put the code on GitHub** (from this directory):
 
     git init && git add -A && git commit -m "order interface"
-    git remote add origin git@github.com:YOURUSER/orderapp.git
+    git remote add origin git@github.com:jmfrancklab/orderapp.git
     git push -u origin main
 
 **2. On PythonAnywhere** (Consoles → Bash):
 
-    git clone https://github.com/YOURUSER/orderapp.git
+    git clone https://github.com/jmfrancklab/orderapp.git
     mkvirtualenv --python=python3.12 orderapp
     pip install -r orderapp/requirements.txt
 
 **3. Web tab** → Add a new web app → **Manual configuration** → Python 3.12. Then
 on the web app's config page set:
 
-- **Source code:** `/home/YOURUSER/orderapp`
-- **Virtualenv:** `/home/YOURUSER/.virtualenvs/orderapp`
+- **Source code:** `/home/YOUR_PYTHONANYWHERE_USERNAME/orderapp`
+- **Virtualenv:** `/home/YOUR_PYTHONANYWHERE_USERNAME/.virtualenvs/orderapp`
 - **WSGI configuration file** (click to edit; replace contents with):
 
-      import sys
-      sys.path.insert(0, "/home/YOURUSER/orderapp")
+      import os, sys
+      sys.path.insert(0, "/home/YOUR_PYTHONANYWHERE_USERNAME/orderapp")
+      os.environ["ORDERAPP_SECRET"] = "PASTE-YOUR-GENERATED-KEY-HERE"
       from app import app as application
 
-**4.** Set a real secret key (Web tab → Environment variables, or a `.env`):
-`ORDERAPP_SECRET=<long random string>`. Then hit **Reload**.
+**4. Generate the secret key.** Flask uses `secret_key` to cryptographically
+sign the session cookie (the thing that says "I am john@..."); anyone who knows
+it can forge a cookie and impersonate any user, hence "long random string":
+32+ bytes from a good random source. Generate one on your local machine:
+
+      python3 -c "import secrets; print(secrets.token_urlsafe(48))"
+
+(`secrets` is the stdlib module for exactly this — it draws from the OS
+CSPRNG. The numpy/base64 equivalent would be
+`base64.urlsafe_b64encode(np.random.default_rng().bytes(48)).decode()`, but
+numpy's generator isn't a *cryptographic* RNG, so prefer `secrets`.)
+
+Paste the output into the `os.environ["ORDERAPP_SECRET"] = ...` line in the
+WSGI file above — there's no environment-variables UI on PythonAnywhere; the
+WSGI file *is* where env vars for a web app live. It sits outside the git
+checkout (`/var/www/`), so the key never lands in the repo. Then hit
+**Reload**.
 
 Because `app.py` computes the SQLite path from its own location, the database
-lands in `/home/YOURUSER/orderapp/orders.db` with no config. Add `orders.db` to
+lands in `/home/YOUR_PYTHONANYWHERE_USERNAME/orderapp/orders.db` with no config. Add `orders.db` to
 `.gitignore` (already done) so pulls never clobber production data.
 
 **Every subsequent deploy:**
@@ -89,7 +105,7 @@ lands in `/home/YOURUSER/orderapp/orders.db` with no config. Add `orders.db` to
     git push
     # on PythonAnywhere (bash console)
     cd ~/orderapp && git pull
-    touch /var/www/YOURUSER_pythonanywhere_com_wsgi.py   # reloads the app
+    touch /var/www/YOUR_PYTHONANYWHERE_USERNAME_pythonanywhere_com_wsgi.py   # reloads the app
 
 That `touch` is equivalent to the Reload button, so a deploy is two commands.
 (If you later want true one-command deploys, a GitHub Action can call the
