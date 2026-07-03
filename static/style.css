@@ -170,6 +170,18 @@ input[data-field="link"] { font-family: var(--mono); font-size: .8rem; }
 }
 .mini:hover { background: var(--ink); color: #fff; }
 
+/* ------------------------------------------------- microsoft sign-in button */
+.ms-btn {
+  display: flex; align-items: center; justify-content: center; gap: .65rem;
+  margin-top: .4rem; padding: .6rem 1rem;
+  background: #2f2f2f; color: #fff;
+  font: inherit; font-weight: 600; font-size: .95rem;
+  text-decoration: none; border-radius: 2px;
+  border: none; cursor: pointer;
+  transition: background .15s;
+}
+.ms-btn:hover { background: #0078d4; }
+
 /* ------------------------------------------------- login */
 .login-body {
   display: grid; place-items: center; min-height: 100vh; margin: 0;

@@ -7,11 +7,13 @@ identically under PythonAnywhere's WSGI).
 import os
 import re
 import sqlite3
+import tomllib
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from flask import (Flask, g, jsonify, redirect, render_template, request,
                    session, url_for)
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 import quotes
 
@@ -19,16 +21,109 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.9.4"
+__version__ = "0.9.5"
+
+# ── Config ────────────────────────────────────────────────────────────────────
+def _load_config():
+    path = os.path.join(BASE_DIR, "config.toml")
+    if os.path.exists(path):
+        with open(path, "rb") as f:
+            return tomllib.load(f)
+    return {}
+
+_CONFIG = _load_config()
 
 app = Flask(__name__)
+# Fix HTTPS scheme detection behind PythonAnywhere's reverse proxy.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 # CHANGE THIS before deploying (any long random string):
 app.secret_key = os.environ.get("ORDERAPP_SECRET", "dev-secret-change-me")
 
 
 @app.context_processor
-def inject_version():
-    return {"app_version": __version__}
+def inject_globals():
+    return {"app_version": __version__,
+            "ms_auth": _CONFIG.get("auth_provider") == "microsoft"}
+
+
+# ── Microsoft Entra ID (Azure AD) auth ───────────────────────────────────────
+def _build_msal_app():
+    import msal  # only imported when MS auth is active
+    return msal.ConfidentialClientApplication(
+        client_id=os.environ["ORDERAPP_CLIENT_ID"],
+        client_credential=os.environ["ORDERAPP_CLIENT_SECRET"],
+        authority=(
+            "https://login.microsoftonline.com/"
+            + os.environ["ORDERAPP_TENANT_ID"]
+        ),
+    )
+
+
+@app.route("/auth/microsoft")
+def ms_login():
+    try:
+        msal_app = _build_msal_app()
+    except KeyError as e:
+        return (f"Microsoft auth is not configured: missing env var {e}. "
+                "See README §Microsoft auth."), 500
+    flow = msal_app.initiate_auth_code_flow(
+        scopes=["openid", "profile", "email"],
+        redirect_uri=url_for("ms_callback", _external=True),
+    )
+    session["ms_flow"] = flow
+    return redirect(flow["auth_uri"])
+
+
+@app.route("/auth/callback")
+def ms_callback():
+    flow = session.pop("ms_flow", {})
+    try:
+        msal_app = _build_msal_app()
+    except KeyError as e:
+        return render_template("login.html",
+                               error=f"Server misconfiguration: missing env var {e}.")
+    try:
+        result = msal_app.acquire_token_by_auth_code_flow(flow, request.args)
+    except ValueError as e:
+        return render_template("login.html", error=f"Authentication failed: {e}")
+
+    if "error" in result:
+        return render_template("login.html",
+                               error=result.get("error_description") or result["error"])
+
+    claims = result.get("id_token_claims", {})
+    email = (claims.get("preferred_username") or claims.get("email") or "").strip().lower()
+    if not email or "@" not in email:
+        return render_template("login.html",
+                               error="Could not retrieve your email address from Microsoft.")
+
+    db = get_db()
+    ms_cfg = _CONFIG.get("microsoft", {})
+    domain = email.split("@")[1]
+    allowed_domains = [d.lower() for d in ms_cfg.get("allowed_domains", [])]
+    is_domain_ok = domain in allowed_domains
+    is_email_ok = bool(
+        db.execute("SELECT 1 FROM allowed_emails WHERE email = ?", (email,)).fetchone()
+    )
+
+    if not (is_domain_ok or is_email_ok):
+        return render_template(
+            "login.html",
+            error=f"{email} is not authorized. Ask an existing user to add you on the Users tab.")
+
+    # Auto-add domain-authorized users so they appear in the Users tab
+    if is_domain_ok and not is_email_ok:
+        db.execute(
+            "INSERT OR IGNORE INTO allowed_emails (email, added_by, added_at) VALUES (?,?,?)",
+            (email, "microsoft-auth", now_iso()))
+        db.execute(
+            "INSERT INTO order_history (order_id, changed_by, changed_at, field,"
+            " old_value, new_value, table_name) VALUES (0,'microsoft-auth',?,?,?,?,'allowed_emails')",
+            (now_iso(), "email", None, email))
+        db.commit()
+
+    session["email"] = email
+    return redirect(url_for("orders"))
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -211,6 +306,13 @@ def get_client_ip():
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
+    if _CONFIG.get("auth_provider") == "microsoft":
+        # In Microsoft mode the GET shows the MS button; POST shouldn't occur
+        # (the button is a link, not a form submit) but redirect safely if it does.
+        if request.method == "POST":
+            return redirect(url_for("ms_login"))
+        return render_template("login.html")
+
     error = None
     if request.method == "POST":
         ip = get_client_ip()

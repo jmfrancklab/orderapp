@@ -1,0 +1,16 @@
+# ACERT ordering — application configuration
+# Commit this file; it contains no secrets.
+# Secrets (client IDs, passwords) go in environment variables — see README.
+
+# ── Authentication ────────────────────────────────────────────────────────────
+# "local"     — email-allowlist only (the default; no external dependencies).
+# "microsoft" — Microsoft Entra ID (Azure AD) sign-in.  Requires the three
+#               ORDERAPP_TENANT_ID / ORDERAPP_CLIENT_ID / ORDERAPP_CLIENT_SECRET
+#               environment variables to be set (see README §Microsoft auth).
+auth_provider = "local"
+
+[microsoft]
+# Email domains whose Microsoft accounts are admitted automatically without
+# needing a row in the Users → allowed_emails table.
+# Example:  allowed_domains = ["acertcenter.org"]
+allowed_domains = []

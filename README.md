@@ -135,12 +135,107 @@ That `touch` is equivalent to the Reload button, so a deploy is two commands.
 (If you later want true one-command deploys, a GitHub Action can call the
 PythonAnywhere API to pull + reload — happy to set that up when you need it.)
 
+## Microsoft Entra ID (Azure AD) authentication
+
+The default `auth_provider = "local"` in `config.toml` uses the email
+allowlist.  To switch to real Microsoft sign-in, do the following two things:
+register the app with Microsoft, then set three environment variables and flip
+the config knob.
+
+### A. Register the app in Microsoft Entra ID
+
+1. Go to **[entra.microsoft.com](https://entra.microsoft.com)** and sign in
+   with an account that has the **Application Developer** role (or higher).
+
+2. Navigate to **Identity → Applications → App registrations → New registration**.
+
+3. Fill in the form:
+   - **Name**: something recognisable, e.g. `ACERT ordering`
+   - **Supported account types**: choose
+     *"Accounts in this organizational directory only (single tenant)"*
+   - **Redirect URI**: leave blank for now — you will add it next.
+   - Click **Register**.
+
+4. On the app's overview page, copy and keep:
+   - **Application (client) ID** — a GUID; this is `ORDERAPP_CLIENT_ID`.
+   - **Directory (tenant) ID** — another GUID; this is `ORDERAPP_TENANT_ID`.
+
+5. Add the redirect URI.  In the left panel click **Authentication →
+   Add a platform → Web**.  Set the Redirect URI to:
+
+       https://YOUR_PYTHONANYWHERE_USERNAME.pythonanywhere.com/auth/callback
+
+   (For local development also add `http://localhost:5000/auth/callback`.)
+   Leave both token checkboxes unchecked — the authorization-code flow does not
+   need the implicit grant.  Click **Configure**.
+
+6. Create a client secret.  In the left panel click
+   **Certificates & secrets → Client secrets → New client secret**.
+   - Add a description (e.g. `orderapp-prod`) and choose an expiry (24 months
+     maximum; Microsoft recommends ≤ 12 months — set a calendar reminder to
+     rotate it before it expires).
+   - Click **Add**, then **immediately copy the Value column** — it is never
+     shown again.  This is `ORDERAPP_CLIENT_SECRET`.
+
+7. Check API permissions.  **API permissions** should already list
+   `Microsoft Graph → User.Read (delegated)`.  That is the only permission
+   needed.  No admin-consent grant is required for `User.Read` in a
+   single-tenant app.
+
+### B. Configure the app
+
+1. Edit `config.toml` (committed to the repo — no secrets here):
+
+    ```toml
+    auth_provider = "microsoft"
+
+    [microsoft]
+    # Domains admitted automatically without needing a row in allowed_emails.
+    allowed_domains = ["acertcenter.org"]
+    ```
+
+2. Add the three secrets to the WSGI file on PythonAnywhere
+   (`/var/www/…_wsgi.py`) alongside `ORDERAPP_SECRET`:
+
+    ```python
+    os.environ["ORDERAPP_TENANT_ID"]     = "paste-directory-tenant-id-here"
+    os.environ["ORDERAPP_CLIENT_ID"]     = "paste-application-client-id-here"
+    os.environ["ORDERAPP_CLIENT_SECRET"] = "paste-client-secret-value-here"
+    ```
+
+3. Reload the app (Reload button or `touch …wsgi.py`).
+
+### How it works at runtime
+
+- The login page shows a **Sign in with Microsoft** button instead of the
+  email form.
+- Clicking it sends the user to Microsoft's login page (your tenant only —
+  no other organisation can use the URL because the authority is locked to
+  your tenant ID).
+- After authentication Microsoft redirects to `/auth/callback` with an
+  authorization code.  The app exchanges the code for tokens using MSAL and
+  reads `preferred_username` from the ID token — for Microsoft 365 org
+  accounts this is reliably the user's email address.
+- If the user's email domain is in `allowed_domains`, they are admitted and
+  automatically added to the `allowed_emails` table for visibility on the
+  Users tab.  If their domain is not listed, they must already be in
+  `allowed_emails` (added manually on the Users tab or via `add_user.py`).
+- IP blocking still applies to any direct POST to `/login` but is irrelevant
+  in practice when Microsoft mode is active.
+
+### Client secret rotation
+
+Client secrets expire.  When yours approaches its expiry date:
+
+1. Create a new secret in Entra ID (keep the old one alive during the swap).
+2. Update `ORDERAPP_CLIENT_SECRET` in the WSGI file.
+3. Reload the app.
+4. Delete the old secret in Entra ID.
+
 ## Notes / next steps
 
 - **Concurrency:** SQLite + a few lab users is fine. If you ever see
   "database is locked", add `PRAGMA journal_mode=WAL` in `get_db()`.
-- **AD auth:** replace `/login` with an MSAL (Azure AD) OAuth flow; store the
-  authenticated email in `session["email"]` and nothing else changes.
 - **Scanned quotes:** text extraction uses pypdf; image-only (scanned) quotes
   report "no extractable text". If those show up in practice, add OCR
   (pytesseract) behind the same `quotes.extract_text` call.
