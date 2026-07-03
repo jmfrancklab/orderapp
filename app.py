@@ -19,7 +19,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.9.3"
+__version__ = "0.9.4"
 
 app = Flask(__name__)
 # CHANGE THIS before deploying (any long random string):
@@ -574,6 +574,12 @@ def api_add_tracker(oid):
                      (oid, email))
     if cur.rowcount:
         log_change(db, oid, "tracker", None, email)
+    # Trackers automatically get login access
+    acur = db.execute(
+        "INSERT OR IGNORE INTO allowed_emails (email, added_by, added_at) VALUES (?,?,?)",
+        (email, current_user(), now_iso()))
+    if acur.rowcount:
+        log_change(db, 0, "email", None, email, table_name="allowed_emails")
     db.commit()
     return jsonify(ok=True, email=email)
 

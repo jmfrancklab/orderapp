@@ -164,7 +164,7 @@ _STREET_RE = re.compile(
     re.I)
 
 _CITY_STATE_ZIP_RE = re.compile(
-    r"([A-Za-z][A-Za-z .]{1,28})\s*,\s*([A-Za-z]{2})\.?\s+(\d{5}(?:-\d{4})?)"
+    r"([A-Za-z][A-Za-z .]{1,28})[\s,]+([A-Za-z]{2})\.?\s+(\d{5}(?:-\d{4})?)"
 )
 
 _PHONE_RE = re.compile(r"(\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4})")
