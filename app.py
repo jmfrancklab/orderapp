@@ -278,7 +278,12 @@ def orders():
 @login_required
 def new_row():
     db = get_db()
-    db.execute("INSERT INTO orders (user_email) VALUES (?)", (current_user(),))
+    email = current_user()
+    last = db.execute(
+        "SELECT project_id FROM orders WHERE user_email = ? AND status = 'draft'"
+        " ORDER BY id DESC LIMIT 1", (email,)).fetchone()
+    project_id = last["project_id"] if last else None
+    db.execute("INSERT INTO orders (user_email, project_id) VALUES (?,?)", (email, project_id))
     db.commit()
     return redirect(url_for("orders"))
 
