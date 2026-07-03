@@ -1,4 +1,10 @@
-"""Tests for quote PDF text extraction and vendor info parsing."""
+"""Tests for quote PDF text extraction and vendor info parsing.
+
+Known-good values for the Red Barn quote fixture are pinned here.
+Phone tests check digits only — the regex accepts several punctuation styles
+((607) 772-1888, 607-772-1888, 607.772.1888, etc.) and the phone may appear
+anywhere on the page, not necessarily adjacent to the address block.
+"""
 import os
 import sys
 
@@ -18,69 +24,65 @@ def redbarn_text():
     return quotes.extract_text(pdf_bytes)
 
 
-def test_extract_text_is_nonempty(redbarn_text):
-    assert len(redbarn_text.strip()) > 100
+@pytest.fixture(scope="module")
+def redbarn_info(redbarn_text):
+    return quotes.extract_vendor_info(redbarn_text)
 
 
-def test_extract_vendor_name(redbarn_text):
-    info = quotes.extract_vendor_info(redbarn_text)
-    assert info is not None
-    assert info["name"] == "Red Barn Technology Group, Inc"
+# ── Red Barn fixture: exact known-good values ─────────────────────────────────
+
+def test_extract_finds_block(redbarn_info):
+    assert redbarn_info is not None
+
+def test_extract_vendor_name(redbarn_info):
+    assert redbarn_info["name"] == "Red Barn Technology Group, Inc"
+
+def test_extract_street(redbarn_info):
+    assert redbarn_info["street"] == "37 Pine St"
+
+def test_extract_city_state_zip(redbarn_info):
+    assert redbarn_info["city"]  == "Binghamton"
+    assert redbarn_info["state"] == "NY"
+    assert redbarn_info["zip"]   == "13901"
+
+def test_extract_address_formatted(redbarn_info):
+    # Full single-line form stored in the vendor address field.
+    assert redbarn_info["address"] == "37 Pine St, Binghamton, NY 13901"
+
+def test_extract_phone(redbarn_info):
+    # Format varies by regex style; pin to digits only.
+    assert redbarn_info["phone"] is not None
+    digits = "".join(c for c in redbarn_info["phone"] if c.isdigit())
+    assert digits == "6077721888"
+
+def test_extract_website(redbarn_info):
+    assert redbarn_info["website"] == "thinkredbarn.com"
 
 
-def test_extract_street(redbarn_text):
-    info = quotes.extract_vendor_info(redbarn_text)
-    assert info["street"] == "37 Pine St"
+# ── Regex behaviour: comma vs no-comma city/state separator ──────────────────
 
-
-def test_extract_city_state_zip(redbarn_text):
-    info = quotes.extract_vendor_info(redbarn_text)
-    assert info["city"] == "Binghamton"
-    assert info["state"] == "NY"
-    assert info["zip"] == "13901"
-
-
-def test_extract_address_formatted(redbarn_text):
-    info = quotes.extract_vendor_info(redbarn_text)
-    assert "37 Pine St" in info["address"]
-    assert "Binghamton, NY 13901" in info["address"]
-
-
-def test_extract_phone(redbarn_text):
-    info = quotes.extract_vendor_info(redbarn_text)
-    assert info["phone"] is not None
-    assert "607" in info["phone"]
-    assert "772" in info["phone"]
-
-
-def test_extract_website(redbarn_text):
-    info = quotes.extract_vendor_info(redbarn_text)
-    assert info["website"] == "thinkredbarn.com"
-
-
-def test_city_state_zip_regex_no_comma():
-    """City/state/zip must match even without a comma separator."""
+def test_city_state_zip_no_comma():
+    """Matches "City ST ZIP" (no comma) — the Red Barn PDF format."""
     text = "Red Barn Technology Group, Inc\n37 Pine St\nBinghamton NY 13901\n"
     info = quotes.extract_vendor_info(text)
     assert info is not None
-    assert info["city"] == "Binghamton"
+    assert info["city"]  == "Binghamton"
     assert info["state"] == "NY"
+    assert info["zip"]   == "13901"
 
-
-def test_city_state_zip_regex_with_comma():
-    """City/state/zip must also match the comma-separated format."""
+def test_city_state_zip_with_comma():
+    """Matches the traditional "City, ST ZIP" format."""
     text = "Acme Corp\n100 Industrial Blvd\nSpringfield, IL 62701\n"
     info = quotes.extract_vendor_info(text)
     assert info is not None
-    assert info["city"] == "Springfield"
+    assert info["city"]  == "Springfield"
     assert info["state"] == "IL"
-    assert info["zip"] == "62701"
-
+    assert info["zip"]   == "62701"
 
 def test_single_line_address():
-    """Street and city/state/zip on one line should still extract a name."""
+    """Street and city/state/zip on one line still yields state and zip."""
     text = "Widget Co\n456 Commerce Dr, Austin, TX 78701\n"
     info = quotes.extract_vendor_info(text)
     assert info is not None
     assert info["state"] == "TX"
-    assert info["zip"] == "78701"
+    assert info["zip"]   == "78701"
