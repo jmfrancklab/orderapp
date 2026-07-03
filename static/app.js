@@ -88,11 +88,9 @@
     var ext = _popupExtracted;
     var infoLines = [];
     if (ext) {
-      if (ext.name)   infoLines.push(ext.name);
-      if (ext.street) infoLines.push(ext.street);
-      var csz = [ext.city, ext.state, ext.zip].filter(Boolean).join(', ');
-      if (csz)        infoLines.push(csz);
-      if (ext.phone)  infoLines.push('Phone: ' + ext.phone);
+      if (ext.name)    infoLines.push(ext.name);
+      if (ext.address) infoLines.push(ext.address);
+      if (ext.phone)   infoLines.push('Phone: ' + ext.phone);
       if (ext.website) infoLines.push('Web: ' + ext.website);
     }
     // Append any domain hints not already shown
@@ -198,7 +196,8 @@
     if ((action === 'use_db' || action === 'update_db') && candidate) {
       if (action === 'update_db') {
         var patch = {};
-        if (ext && ext.phone) patch.phone = ext.phone;
+        if (ext && ext.address) patch.address = ext.address;
+        if (ext && ext.phone)   patch.phone   = ext.phone;
         if (ext && ext.website) patch.website = ext.website;
         if (Object.keys(patch).length > 0) {
           post('/api/vendors/' + candidate.id + '/patch', 'PATCH', patch, null);
@@ -211,7 +210,8 @@
       var newName = (ext && ext.name) || (_popupHintDomains.length > 0 ? _popupHintDomains[0] : null);
       if (!newName) return;
       var body = { name: newName };
-      if (ext && ext.phone) body.phone = ext.phone;
+      if (ext && ext.address) body.address = ext.address;
+      if (ext && ext.phone)   body.phone   = ext.phone;
       var website = (ext && ext.website) || (_popupHintDomains.length > 0 ? _popupHintDomains[0] : null);
       if (website) body.website = website;
       post('/api/vendors', 'POST', body, function (data) {
@@ -226,15 +226,16 @@
 
   function assignVendorToRow(row, vendor) {
     if (!row) return;
+    var vid = String(vendor.id);
     var select = row.querySelector('.vendor-select');
     if (select) {
-      if (!select.querySelector('option[value="' + vendor.id + '"]')) {
+      if (!select.querySelector('option[value="' + vid + '"]')) {
         var opt = document.createElement('option');
-        opt.value = vendor.id; opt.textContent = vendor.name;
+        opt.value = vid; opt.textContent = vendor.name;
         if (vendor.incomplete) opt.dataset.incomplete = '1';
         select.appendChild(opt);
       }
-      select.value = vendor.id;
+      select.value = vid;
       updateFlag(select);
     }
     post('/api/orders/' + row.dataset.id, 'POST', { vendor_id: vendor.id }, null);
@@ -242,10 +243,11 @@
   }
 
   function addVendorOption(vendor) {
+    var vid = String(vendor.id);
     document.querySelectorAll('.vendor-select').forEach(function (sel) {
-      if (!sel.querySelector('option[value="' + vendor.id + '"]')) {
+      if (!sel.querySelector('option[value="' + vid + '"]')) {
         var opt = document.createElement('option');
-        opt.value = vendor.id; opt.textContent = vendor.name;
+        opt.value = vid; opt.textContent = vendor.name;
         if (vendor.incomplete) opt.dataset.incomplete = '1';
         sel.appendChild(opt);
       }

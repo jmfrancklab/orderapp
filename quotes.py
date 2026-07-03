@@ -164,7 +164,7 @@ _STREET_RE = re.compile(
     re.I)
 
 _CITY_STATE_ZIP_RE = re.compile(
-    r"([A-Za-z][A-Za-z .]{1,28}),\s*([A-Z]{2})\s+(\d{5}(?:-\d{4})?)"
+    r"([A-Za-z][A-Za-z .]{1,28})\s*,\s*([A-Za-z]{2})\.?\s+(\d{5}(?:-\d{4})?)"
 )
 
 _PHONE_RE = re.compile(r"(\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4})")
@@ -180,8 +180,9 @@ def extract_vendor_info(text):
     """Extract vendor name, address, phone, and website from PDF quote text.
 
     Searches for US address blocks (City, ST ZIP) and looks at nearby lines
-    for a street address and company name. Returns a dict with string fields,
-    or None if no address block is found.
+    for a street address and company name. Handles both multi-line letterheads
+    and single-line formats ("123 Main St, City, ST 12345"). Returns a dict
+    with string fields, or None if no address block is found.
     """
     all_lines = text.split('\n')
 
@@ -197,31 +198,50 @@ def extract_vendor_info(text):
     if csz_line_idx is None:
         return None
 
-    m_csz = _CITY_STATE_ZIP_RE.search(all_lines[csz_line_idx])
-    city = m_csz.group(1).strip()
-    state = m_csz.group(2)
+    csz_line = all_lines[csz_line_idx].strip()
+    m_csz = _CITY_STATE_ZIP_RE.search(csz_line)
+    city    = m_csz.group(1).strip()
+    state   = m_csz.group(2).upper()   # normalise to uppercase
     zipcode = m_csz.group(3)
 
-    # Search backward from city/state/zip line for street, then company name
-    street = name = None
-    for j in range(csz_line_idx - 1, max(csz_line_idx - 6, -1), -1):
-        line = all_lines[j].strip()
-        if not line:
-            continue
-        if _STREET_RE.search(line):
-            street = line
-            for k in range(j - 1, max(j - 5, -1), -1):
-                candidate = all_lines[k].strip()
-                if candidate and not _DATE_RE.search(candidate) and len(candidate) > 2:
-                    name = candidate
-                    break
+    # Determine street: either on the same line before the city/state/zip match,
+    # or on the line(s) immediately above.
+    street = None
+    name_search_from = csz_line_idx  # we'll look for name above this index
+
+    prefix = csz_line[:m_csz.start()].strip().rstrip(',').strip()
+    if prefix and _STREET_RE.search(prefix):
+        # Single-line case: "123 Main St, Portland, OR 97201"
+        street = prefix
+        name_search_from = csz_line_idx
+    else:
+        for j in range(csz_line_idx - 1, max(csz_line_idx - 6, -1), -1):
+            line = all_lines[j].strip()
+            if not line:
+                continue
+            if _STREET_RE.search(line):
+                street = line
+                name_search_from = j
+                break
+
+    # Company name: first non-blank, non-date line above the street (or city line)
+    name = None
+    for k in range(name_search_from - 1, max(name_search_from - 5, -1), -1):
+        candidate = all_lines[k].strip()
+        if candidate and not _DATE_RE.search(candidate) and len(candidate) > 2:
+            name = candidate
             break
 
+    # Build a single formatted address string for storage
+    addr_parts = []
+    if street:
+        addr_parts.append(street)
+    addr_parts.append(f"{city}, {state} {zipcode}")
+    address = "\n".join(addr_parts)
+
     # Phone from lines near the address block
-    nearby_start = max(0, csz_line_idx - 5)
-    nearby_end = min(len(all_lines), csz_line_idx + 8)
-    nearby_text = '\n'.join(all_lines[nearby_start:nearby_end])
-    pm = _PHONE_RE.search(nearby_text)
+    nearby = '\n'.join(all_lines[max(0, csz_line_idx - 5):csz_line_idx + 8])
+    pm = _PHONE_RE.search(nearby)
     phone = pm.group(1) if pm else None
 
     # Nearest non-generic domain to the address block
@@ -234,8 +254,8 @@ def extract_vendor_info(text):
             website = d
             break
 
-    return {"name": name, "street": street, "city": city,
-            "state": state, "zip": zipcode, "phone": phone, "website": website}
+    return {"name": name, "street": street, "city": city, "state": state,
+            "zip": zipcode, "address": address, "phone": phone, "website": website}
 
 
 def fuzzy_match_vendors(name, vendors, n=3, cutoff=0.45):

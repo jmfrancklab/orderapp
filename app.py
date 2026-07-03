@@ -19,7 +19,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.9.2"
+__version__ = "0.9.3"
 
 app = Flask(__name__)
 # CHANGE THIS before deploying (any long random string):
@@ -58,6 +58,7 @@ def init_db():
     CREATE TABLE IF NOT EXISTS vendors (
         id INTEGER PRIMARY KEY,
         name TEXT NOT NULL UNIQUE,
+        address TEXT DEFAULT '',
         website TEXT DEFAULT '',
         phone TEXT DEFAULT '',
         tax_exempt_filed INTEGER NOT NULL DEFAULT 0
@@ -107,11 +108,15 @@ def init_db():
         note TEXT NOT NULL DEFAULT ''
     );
     """)
-    # Migration for existing databases: add table_name column if missing
-    try:
-        db.execute("ALTER TABLE order_history ADD COLUMN table_name TEXT NOT NULL DEFAULT 'orders'")
-    except Exception:
-        pass
+    # Migrations for existing databases
+    for stmt in [
+        "ALTER TABLE order_history ADD COLUMN table_name TEXT NOT NULL DEFAULT 'orders'",
+        "ALTER TABLE vendors ADD COLUMN address TEXT DEFAULT ''",
+    ]:
+        try:
+            db.execute(stmt)
+        except Exception:
+            pass
     db.commit()
     db.close()
 
@@ -331,9 +336,10 @@ def vendors():
         name = request.form.get("name", "").strip()
         if name:
             db.execute(
-                "INSERT OR IGNORE INTO vendors (name, website, phone, tax_exempt_filed) "
-                "VALUES (?,?,?,?)",
-                (name, request.form.get("website", "").strip(),
+                "INSERT OR IGNORE INTO vendors (name, address, website, phone, tax_exempt_filed) "
+                "VALUES (?,?,?,?,?)",
+                (name, request.form.get("address", "").strip(),
+                 request.form.get("website", "").strip(),
                  request.form.get("phone", "").strip(),
                  1 if request.form.get("tax_exempt_filed") else 0))
             db.commit()
@@ -346,8 +352,9 @@ def vendors():
 def update_vendor(vid):
     db = get_db()
     db.execute(
-        "UPDATE vendors SET name=?, website=?, phone=?, tax_exempt_filed=? WHERE id=?",
+        "UPDATE vendors SET name=?, address=?, website=?, phone=?, tax_exempt_filed=? WHERE id=?",
         (request.form.get("name", "").strip(),
+         request.form.get("address", "").strip(),
          request.form.get("website", "").strip(),
          request.form.get("phone", "").strip(),
          1 if request.form.get("tax_exempt_filed") else 0, vid))
@@ -411,8 +418,9 @@ def api_create_vendor():
         return jsonify(error="name required"), 400
     db = get_db()
     cur = db.execute(
-        "INSERT OR IGNORE INTO vendors (name, website, phone, tax_exempt_filed) VALUES (?,?,?,0)",
-        (name, data.get("website", "").strip(), data.get("phone", "").strip()))
+        "INSERT OR IGNORE INTO vendors (name, address, website, phone, tax_exempt_filed) VALUES (?,?,?,?,0)",
+        (name, data.get("address", "").strip(),
+         data.get("website", "").strip(), data.get("phone", "").strip()))
     db.commit()
     if cur.lastrowid:
         vid = cur.lastrowid
@@ -433,9 +441,11 @@ def api_patch_vendor(vid):
     if v is None:
         return jsonify(error="not found"), 404
     data = request.get_json(silent=True) or {}
-    phone = data.get("phone", v["phone"])
+    address = data.get("address", v["address"])
+    phone   = data.get("phone",   v["phone"])
     website = data.get("website", v["website"])
-    db.execute("UPDATE vendors SET phone=?, website=? WHERE id=?", (phone, website, vid))
+    db.execute("UPDATE vendors SET address=?, phone=?, website=? WHERE id=?",
+               (address, phone, website, vid))
     db.commit()
     return jsonify(ok=True)
 

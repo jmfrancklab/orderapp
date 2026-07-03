@@ -14,12 +14,13 @@ link. A vendor with a missing website, phone, or unfiled tax exemption shows a r
 
 <div class="table-wrap">
 <table class="ref-table">
-  <thead><tr><th>Vendor</th><th>Website</th><th>Phone</th>
+  <thead><tr><th>Vendor</th><th>Address</th><th>Website</th><th>Phone</th>
     <th>Tax exemption filed</th><th></th><th></th></tr></thead>
   <tbody>
     {% for v in vendors %}
     <tr>
       <td><input form="v{{ v.id }}" name="name" value="{{ v.name }}" required></td>
+      <td><input form="v{{ v.id }}" name="address" value="{{ v.address }}" placeholder="123 Main St, City, ST 00000"></td>
       <td><input form="v{{ v.id }}" name="website" value="{{ v.website }}" placeholder="digikey.com"></td>
       <td><input form="v{{ v.id }}" name="phone" value="{{ v.phone }}" placeholder="(800) …"></td>
       <td class="center"><input form="v{{ v.id }}" type="checkbox" name="tax_exempt_filed"
@@ -30,6 +31,7 @@ link. A vendor with a missing website, phone, or unfiled tax exemption shows a r
     {% endfor %}
     <tr class="new-row">
       <td><input form="vnew" name="name" placeholder="New vendor" required></td>
+      <td><input form="vnew" name="address" placeholder="address"></td>
       <td><input form="vnew" name="website" placeholder="website"></td>
       <td><input form="vnew" name="phone" placeholder="phone"></td>
       <td class="center"><input form="vnew" type="checkbox" name="tax_exempt_filed"></td>
