@@ -232,12 +232,13 @@ def extract_vendor_info(text):
             name = candidate
             break
 
-    # Build a single formatted address string for storage
+    # Build a single-line address string (comma-separated so it reads correctly
+    # in an <input> field where newlines would be silently dropped).
     addr_parts = []
     if street:
         addr_parts.append(street)
     addr_parts.append(f"{city}, {state} {zipcode}")
-    address = "\n".join(addr_parts)
+    address = ", ".join(addr_parts)
 
     # Phone from lines near the address block
     nearby = '\n'.join(all_lines[max(0, csz_line_idx - 5):csz_line_idx + 8])

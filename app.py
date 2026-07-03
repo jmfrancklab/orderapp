@@ -21,7 +21,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.9.6"
+__version__ = "0.9.7"
 
 # ── Config ────────────────────────────────────────────────────────────────────
 def _load_config():
@@ -681,8 +681,9 @@ def api_quote_vendor(oid):
         return jsonify(matched=False, provider=provider,
                        message="Quote read, but no vendor information found in the PDF.")
 
-    # Silently backfill any empty fields on the matched vendor from this quote.
-    if not vendor.get("address") or not vendor.get("phone"):
+    # Silently backfill any empty/placeholder fields from this quote.
+    if (not vendor.get("address") or not vendor.get("phone")
+            or vendor["name"] == vendor.get("domain")):
         extracted = quotes.extract_vendor_info(text)
         if extracted:
             updates = {}
@@ -690,6 +691,9 @@ def api_quote_vendor(oid):
                 updates["address"] = extracted["address"]
             if not vendor.get("phone") and extracted.get("phone"):
                 updates["phone"] = extracted["phone"]
+            # Replace domain-as-name placeholder with the real company name.
+            if vendor["name"] == vendor.get("domain") and extracted.get("name"):
+                updates["name"] = extracted["name"]
             if updates:
                 set_clause = ", ".join(f"{k}=?" for k in updates)
                 db.execute(f"UPDATE vendors SET {set_clause} WHERE id=?",
