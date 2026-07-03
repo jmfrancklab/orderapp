@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}History{% endblock %}
+{% block content %}
+
+<p class="explain">Every field change, tracker add/remove, and submission is logged
+here. Showing the 300 most recent entries, newest first.</p>
+
+{% if rows %}
+<div class="table-wrap">
+<table class="ref-table hist-table">
+  <thead>
+    <tr>
+      <th>When</th>
+      <th>Who</th>
+      <th>Table</th>
+      <th>Field</th>
+      <th>Change</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+    <tr class="hist-row">
+
+      <td class="hist-time">
+        {{ r.changed_at[:10] }}<br>
+        <span class="hist-time-sub">{{ r.changed_at[11:16] }}</span>
+      </td>
+
+      <td class="hist-by">{{ r.changed_by }}</td>
+
+      <td class="hist-tname">
+        <span class="badge badge-{{ r.table_name | replace('_', '-') }}">
+          {{ r.table_name }}
+        </span>
+        {% if r.order_id %}
+          <span class="hist-oid">#{{ r.order_id }}</span>
+        {% endif %}
+      </td>
+
+      <td class="hist-field">{{ r.field }}</td>
+
+      <td class="hist-change">
+        {% if r.old_value is not none %}
+          <span class="hist-old">{{ r.old_value }}</span>
+        {% endif %}
+        {% if r.old_value is not none and r.new_value is not none %}
+          <span class="hist-arrow"> &#8594; </span>
+        {% elif r.old_value is none and r.new_value is not none %}
+          <span class="hist-arrow">&#8594; </span>
+        {% elif r.old_value is not none and r.new_value is none %}
+          <span class="hist-arrow"> &#8594; <em class="hist-deleted">deleted</em></span>
+        {% endif %}
+        {% if r.new_value is not none %}
+          <span class="hist-new">{{ r.new_value }}</span>
+        {% endif %}
+      </td>
+
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="empty">No history yet.</p>
+{% endif %}
+
+{% endblock %}

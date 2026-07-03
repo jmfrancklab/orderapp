@@ -21,7 +21,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.9.5"
+__version__ = "0.9.6"
 
 # ── Config ────────────────────────────────────────────────────────────────────
 def _load_config():
@@ -515,6 +515,28 @@ def unblock_ip(bid):
     return redirect(url_for("users"))
 
 
+@app.route("/vendors/<int:vid>/delete", methods=["POST"])
+@login_required
+def delete_vendor(vid):
+    db = get_db()
+    v = db.execute("SELECT * FROM vendors WHERE id = ?", (vid,)).fetchone()
+    if v:
+        log_change(db, 0, "name", v["name"], None, table_name="vendors")
+        db.execute("DELETE FROM vendors WHERE id = ?", (vid,))
+        db.commit()
+    return redirect(url_for("vendors"))
+
+
+@app.route("/history")
+@login_required
+def history():
+    db = get_db()
+    rows = db.execute(
+        "SELECT * FROM order_history ORDER BY id DESC LIMIT 300"
+    ).fetchall()
+    return render_template("history.html", tab="history", rows=rows)
+
+
 @app.route("/api/vendors", methods=["POST"])
 @login_required
 def api_create_vendor():
@@ -658,6 +680,21 @@ def api_quote_vendor(oid):
                            hint_domains=hints)
         return jsonify(matched=False, provider=provider,
                        message="Quote read, but no vendor information found in the PDF.")
+
+    # Silently backfill any empty fields on the matched vendor from this quote.
+    if not vendor.get("address") or not vendor.get("phone"):
+        extracted = quotes.extract_vendor_info(text)
+        if extracted:
+            updates = {}
+            if not vendor.get("address") and extracted.get("address"):
+                updates["address"] = extracted["address"]
+            if not vendor.get("phone") and extracted.get("phone"):
+                updates["phone"] = extracted["phone"]
+            if updates:
+                set_clause = ", ".join(f"{k}=?" for k in updates)
+                db.execute(f"UPDATE vendors SET {set_clause} WHERE id=?",
+                           list(updates.values()) + [vendor["id"]])
+                db.commit()
 
     if order["vendor_id"] != vendor["id"]:
         log_change(db, oid, "vendor_id", order["vendor_id"], vendor["id"])

@@ -15,6 +15,7 @@
     <a href="{{ url_for('vendors') }}"   class="{{ 'active' if tab=='vendors' }}">Vendors</a>
     <a href="{{ url_for('projects') }}"  class="{{ 'active' if tab=='projects' }}">Projects</a>
     <a href="{{ url_for('users') }}"     class="{{ 'active' if tab=='users' }}">Users</a>
+    <a href="{{ url_for('history') }}"   class="{{ 'active' if tab=='history' }}">History</a>
   </nav>
   <span class="who">
     {{ session['email'] }} · <a href="{{ url_for('logout') }}">sign out</a>

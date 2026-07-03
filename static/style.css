@@ -204,6 +204,45 @@ input[data-field="link"] { font-family: var(--mono); font-size: .8rem; }
 }
 .error { color: var(--alert); font-size: .82rem; margin: 0; }
 
+/* ------------------------------------------------- vendor row actions */
+.vrow-actions { white-space: nowrap; display: flex; gap: .3rem; align-items: center; }
+.vdel { color: var(--alert) !important; opacity: .55; border-color: var(--alert) !important; }
+.vdel:hover { opacity: 1; background: var(--alert) !important; color: #fff !important; }
+
+/* ------------------------------------------------- history badges */
+.badge {
+  display: inline-block; padding: .15rem .55rem; border-radius: 999px;
+  font-size: .68rem; font-weight: 700; letter-spacing: .05em;
+  text-transform: uppercase; white-space: nowrap;
+}
+.badge-orders         { background: var(--accent-soft); color: var(--accent); }
+.badge-allowed-emails { background: #dbeafe; color: #1d4ed8; }
+.badge-vendors        { background: #dcfce7; color: #15803d; }
+.badge-blocked-ips    { background: #fee2e2; color: #dc2626; }
+
+/* ------------------------------------------------- history table */
+.hist-table td { vertical-align: middle; }
+.hist-time {
+  font-family: var(--mono); font-size: .78rem; white-space: nowrap;
+  color: var(--ink);
+}
+.hist-time-sub { color: #8a94a0; }
+.hist-by {
+  font-size: .8rem; max-width: 14rem;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.hist-tname { white-space: nowrap; }
+.hist-oid { font-family: var(--mono); font-size: .72rem; color: #8a94a0; margin-left: .3em; }
+.hist-field { font-family: var(--mono); font-size: .8rem; white-space: nowrap; }
+.hist-change {
+  font-family: var(--mono); font-size: .8rem;
+  max-width: 30rem; word-break: break-all;
+}
+.hist-old     { color: #9aa5b1; text-decoration: line-through; }
+.hist-arrow   { color: var(--accent); font-weight: 700; }
+.hist-new     { color: var(--ink); font-weight: 600; }
+.hist-deleted { font-style: italic; color: var(--alert); font-weight: 400; }
+
 /* ------------------------------------------------- section subheadings */
 .ref-section {
   font-size: .8rem; text-transform: uppercase; letter-spacing: .1em;

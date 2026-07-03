@@ -5,7 +5,8 @@
 <p class="explain">Vendors here feed the vendor dropdown on the order sheet. The
 website is also what lets the order sheet auto-detect the vendor from a pasted
 link. A vendor with a missing website, phone, or unfiled tax exemption shows a red
-<span class="flag-demo">?</span> on the order sheet.</p>
+<span class="flag-demo">?</span> on the order sheet. The <strong>Save</strong>
+button appears only after you edit a row.</p>
 
 {% for v in vendors %}
 <form id="v{{ v.id }}" method="post" action="{{ url_for('update_vendor', vid=v.id) }}"></form>
@@ -14,26 +15,39 @@ link. A vendor with a missing website, phone, or unfiled tax exemption shows a r
 
 <div class="table-wrap">
 <table class="ref-table">
-  <thead><tr><th>Vendor</th><th>Address</th><th>Website</th><th>Phone</th>
-    <th>Tax exemption filed</th><th></th><th></th></tr></thead>
+  <thead><tr>
+    <th>Vendor</th><th>Address</th><th>Website</th><th>Phone</th>
+    <th>Tax exemption filed</th><th></th><th></th>
+  </tr></thead>
   <tbody>
     {% for v in vendors %}
-    <tr>
-      <td><input form="v{{ v.id }}" name="name" value="{{ v.name }}" required></td>
+    <tr class="vrow">
+      <td><input form="v{{ v.id }}" name="name"    value="{{ v.name }}"    required></td>
       <td><input form="v{{ v.id }}" name="address" value="{{ v.address }}" placeholder="123 Main St, City, ST 00000"></td>
       <td><input form="v{{ v.id }}" name="website" value="{{ v.website }}" placeholder="digikey.com"></td>
-      <td><input form="v{{ v.id }}" name="phone" value="{{ v.phone }}" placeholder="(800) …"></td>
-      <td class="center"><input form="v{{ v.id }}" type="checkbox" name="tax_exempt_filed"
-            {{ 'checked' if v.tax_exempt_filed }}></td>
-      <td>{% if v.incomplete %}<span class="flag on" title="Missing info">?</span>{% endif %}</td>
-      <td><button form="v{{ v.id }}" type="submit" class="mini">Save</button></td>
+      <td><input form="v{{ v.id }}" name="phone"   value="{{ v.phone }}"   placeholder="(800) …"></td>
+      <td class="center">
+        <input form="v{{ v.id }}" type="checkbox" name="tax_exempt_filed"
+               {{ 'checked' if v.tax_exempt_filed }}>
+      </td>
+      <td>
+        {% if v.incomplete %}<span class="flag on" title="Missing info">?</span>{% endif %}
+      </td>
+      <td class="vrow-actions">
+        <button form="v{{ v.id }}" type="submit" class="mini vsave">Save</button>
+        <form method="post" action="{{ url_for('delete_vendor', vid=v.id) }}"
+              style="display:inline"
+              onsubmit="return confirm('Delete vendor "{{ v.name }}"? Orders referencing it will have no vendor set.')">
+          <button type="submit" class="mini vdel" title="Delete vendor">🗑</button>
+        </form>
+      </td>
     </tr>
     {% endfor %}
     <tr class="new-row">
-      <td><input form="vnew" name="name" placeholder="New vendor" required></td>
+      <td><input form="vnew" name="name"    placeholder="New vendor" required></td>
       <td><input form="vnew" name="address" placeholder="address"></td>
       <td><input form="vnew" name="website" placeholder="website"></td>
-      <td><input form="vnew" name="phone" placeholder="phone"></td>
+      <td><input form="vnew" name="phone"   placeholder="phone"></td>
       <td class="center"><input form="vnew" type="checkbox" name="tax_exempt_filed"></td>
       <td></td>
       <td><button form="vnew" type="submit" class="mini">Add</button></td>
@@ -41,5 +55,21 @@ link. A vendor with a missing website, phone, or unfiled tax exemption shows a r
   </tbody>
 </table>
 </div>
+
+<script>
+(function () {
+  // Hide Save buttons for existing rows on load; reveal on first edit.
+  document.querySelectorAll('.vsave').forEach(function (b) { b.hidden = true; });
+
+  function revealSave(formId) {
+    if (!formId || formId === 'vnew') return;
+    var btn = document.querySelector('button[form="' + formId + '"].vsave');
+    if (btn) btn.hidden = false;
+  }
+
+  document.addEventListener('input',  function (e) { revealSave(e.target.getAttribute('form')); });
+  document.addEventListener('change', function (e) { revealSave(e.target.getAttribute('form')); });
+}());
+</script>
 
 {% endblock %}
