@@ -21,7 +21,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.9.7"
+__version__ = "0.9.8"
 
 # ── Config ────────────────────────────────────────────────────────────────────
 def _load_config():
@@ -116,10 +116,8 @@ def ms_callback():
         db.execute(
             "INSERT OR IGNORE INTO allowed_emails (email, added_by, added_at) VALUES (?,?,?)",
             (email, "microsoft-auth", now_iso()))
-        db.execute(
-            "INSERT INTO order_history (order_id, changed_by, changed_at, field,"
-            " old_value, new_value, table_name) VALUES (0,'microsoft-auth',?,?,?,?,'allowed_emails')",
-            (now_iso(), "email", None, email))
+        log_change(db, None, "email", None, email,
+                   table_name="allowed_emails", by="microsoft-auth")
         db.commit()
 
     session["email"] = email
@@ -203,7 +201,7 @@ def init_db():
         note TEXT NOT NULL DEFAULT ''
     );
     """)
-    # Migrations for existing databases
+    # Column-level migrations (idempotent — exception = already exists)
     for stmt in [
         "ALTER TABLE order_history ADD COLUMN table_name TEXT NOT NULL DEFAULT 'orders'",
         "ALTER TABLE vendors ADD COLUMN address TEXT DEFAULT ''",
@@ -212,6 +210,32 @@ def init_db():
             db.execute(stmt)
         except Exception:
             pass
+
+    # Fix order_history if it still carries the old NOT NULL / FK constraint on
+    # order_id (SQLite can't drop constraints, so rename + recreate + copy).
+    old = db.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='order_history'"
+    ).fetchone()
+    if old and "order_id INTEGER NOT NULL" in (old[0] or ""):
+        db.executescript("""
+            ALTER TABLE order_history RENAME TO _order_history_v1;
+            CREATE TABLE order_history (
+                id         INTEGER PRIMARY KEY,
+                order_id   INTEGER,
+                changed_by TEXT NOT NULL,
+                changed_at TEXT NOT NULL,
+                field      TEXT NOT NULL,
+                old_value  TEXT,
+                new_value  TEXT,
+                table_name TEXT NOT NULL DEFAULT 'orders'
+            );
+            INSERT INTO order_history
+                SELECT id, order_id, changed_by, changed_at, field,
+                       old_value, new_value, COALESCE(table_name, 'orders')
+                FROM _order_history_v1;
+            DROP TABLE _order_history_v1;
+        """)
+
     db.commit()
     db.close()
 
@@ -229,7 +253,7 @@ def log_change(db, record_id, field, old, new, table_name='orders', by=None):
     db.execute(
         "INSERT INTO order_history (order_id, changed_by, changed_at, field,"
         " old_value, new_value, table_name) VALUES (?,?,?,?,?,?,?)",
-        (record_id or 0, by or current_user() or 'system', now_iso(), field,
+        (record_id or None, by or current_user() or 'system', now_iso(), field,
          None if old is None else str(old),
          None if new is None else str(new),
          table_name))
@@ -336,10 +360,8 @@ def login():
                     (ip, now_iso(), count))
                 db.execute("UPDATE blocked_ips SET attempts=?, blocked_at=? WHERE ip=?",
                            (count, now_iso(), ip))
-                db.execute(
-                    "INSERT INTO order_history (order_id, changed_by, changed_at, field,"
-                    " old_value, new_value, table_name) VALUES (0,'system',?,?,?,?,'blocked_ips')",
-                    (now_iso(), "ip", None, ip))
+                log_change(db, None, "ip", None, ip,
+                           table_name="blocked_ips", by="system")
                 db.commit()
                 error = ("This IP has been blocked after too many failed attempts. "
                          "Contact an existing user to unblock it from the Users tab.")
