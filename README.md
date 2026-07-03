@@ -123,6 +123,16 @@ can log in until at least one address is added. From the PythonAnywhere bash con
 Run it as many times as needed. Once logged in, additional users can be added from
 the **Users** tab without touching the console.
 
+**Resetting the database (nuclear option).** If the schema is out of date
+or you just want a clean slate, wipe and recreate in one step:
+
+    cd ~/orderapp
+    python3 danger_reset_database.py   # prompts for YES confirmation
+    python3 add_user.py your@email.com
+
+This permanently deletes `orders.db` and recreates it from scratch using the
+current schema. All orders, vendors, history, and allowed users are lost.
+
 **Every subsequent deploy:**
 
     # locally
