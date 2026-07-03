@@ -296,7 +296,13 @@
          { link: linkInput.value.trim() },
          function (data) {
            if (data.matched) {
-             if (select) { select.value = data.vendor_id; updateFlag(select); }
+             if (select) {
+               var vid = String(data.vendor_id);
+               var opt = select.querySelector('option[value="' + vid + '"]');
+               if (opt) opt.textContent = data.vendor_name; // refresh if name changed
+               select.value = vid;
+               updateFlag(select);
+             }
              rowNote(row, "vendor from quote: " + data.vendor_name);
            } else if (data.fuzzy_candidates !== undefined || data.extracted) {
              rowNote(row, "");

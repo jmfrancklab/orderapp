@@ -21,7 +21,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.9.8"
+__version__ = "0.9.9"
 
 # ── Config ────────────────────────────────────────────────────────────────────
 def _load_config():
@@ -721,13 +721,21 @@ def api_quote_vendor(oid):
                 db.execute(f"UPDATE vendors SET {set_clause} WHERE id=?",
                            list(updates.values()) + [vendor["id"]])
                 db.commit()
+                # Re-read so the response reflects the backfilled name.
+                refreshed = db.execute(
+                    "SELECT name FROM vendors WHERE id=?", (vendor["id"],)).fetchone()
+                vendor_name = refreshed["name"] if refreshed else vendor["name"]
+            else:
+                vendor_name = vendor["name"]
+    else:
+        vendor_name = vendor["name"]
 
     if order["vendor_id"] != vendor["id"]:
         log_change(db, oid, "vendor_id", order["vendor_id"], vendor["id"])
         db.execute("UPDATE orders SET vendor_id = ? WHERE id = ?", (vendor["id"], oid))
         db.commit()
     return jsonify(matched=True, provider=provider,
-                   vendor_id=vendor["id"], vendor_name=vendor["name"],
+                   vendor_id=vendor["id"], vendor_name=vendor_name,
                    incomplete=vendor["incomplete"])
 
 
