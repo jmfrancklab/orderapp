@@ -21,7 +21,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.9.9"
+__version__ = "0.10.0"
 
 # ── Config ────────────────────────────────────────────────────────────────────
 def _load_config():
@@ -169,6 +169,7 @@ def init_db():
         vendor_id INTEGER REFERENCES vendors(id) ON DELETE SET NULL,
         project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
         use_note TEXT NOT NULL DEFAULT '',
+        cost TEXT NOT NULL DEFAULT '',
         status TEXT NOT NULL DEFAULT 'draft',   -- 'draft' | 'submitted'
         submitted_at TEXT                       -- locked after submission
     );
@@ -205,6 +206,7 @@ def init_db():
     for stmt in [
         "ALTER TABLE order_history ADD COLUMN table_name TEXT NOT NULL DEFAULT 'orders'",
         "ALTER TABLE vendors ADD COLUMN address TEXT DEFAULT ''",
+        "ALTER TABLE orders ADD COLUMN cost TEXT NOT NULL DEFAULT ''",
     ]:
         try:
             db.execute(stmt)
@@ -630,7 +632,7 @@ def update_project(pid):
 
 # Everything is editable at any time EXCEPT who submitted (user_email) and
 # when (submitted_at). Every change is written to order_history.
-EDITABLE_FIELDS = {"description", "link", "vendor_id", "project_id", "use_note"}
+EDITABLE_FIELDS = {"description", "link", "vendor_id", "project_id", "use_note", "cost"}
 
 
 @app.route("/api/orders/<int:oid>", methods=["POST"])
@@ -682,6 +684,13 @@ def api_quote_vendor(oid):
     except quotes.QuoteError as e:
         return jsonify(matched=False, provider=provider, message=str(e))
 
+    # Extract price from the PDF regardless of vendor match outcome
+    extracted_price = quotes.extract_net_price(text)
+    if extracted_price and extracted_price != (order["cost"] or ""):
+        log_change(db, oid, "cost", order["cost"], extracted_price)
+        db.execute("UPDATE orders SET cost = ? WHERE id = ?", (extracted_price, oid))
+        db.commit()
+
     all_vendors = fetch_vendors(db)
     vendor, hints = quotes.match_vendor(text, all_vendors)
     if vendor is None:
@@ -699,8 +708,10 @@ def api_quote_vendor(oid):
             return jsonify(matched=False, provider=provider,
                            fuzzy_candidates=safe_fuzzy,
                            extracted=extracted,
-                           hint_domains=hints)
+                           hint_domains=hints,
+                           price=extracted_price)
         return jsonify(matched=False, provider=provider,
+                       price=extracted_price,
                        message="Quote read, but no vendor information found in the PDF.")
 
     # Silently backfill any empty/placeholder fields from this quote.
@@ -736,7 +747,8 @@ def api_quote_vendor(oid):
         db.commit()
     return jsonify(matched=True, provider=provider,
                    vendor_id=vendor["id"], vendor_name=vendor_name,
-                   incomplete=vendor["incomplete"])
+                   incomplete=vendor["incomplete"],
+                   price=extracted_price)
 
 
 @app.route("/api/orders/<int:oid>/trackers", methods=["POST"])
@@ -775,6 +787,168 @@ def api_remove_tracker(oid):
         log_change(db, oid, "tracker", email, None)
     db.commit()
     return jsonify(ok=True)
+
+
+@app.route("/api/orders/<int:oid>/fetch_price", methods=["POST"])
+@login_required
+def api_fetch_price(oid):
+    """Scrape item price from a product page URL and save it on the order."""
+    db = get_db()
+    order = order_visible_to(db, oid, current_user())
+    if order is None:
+        return jsonify(error="not found"), 404
+    # Accept link from request body (may be ahead of the autosave debounce)
+    data = request.get_json(silent=True) or {}
+    link = data.get("link", "").strip() or (order["link"] or "").strip()
+    if not link:
+        return jsonify(ok=False, message="no link on this order")
+    if quotes.classify_link(link):
+        return jsonify(ok=False, message="use the quote vendor button for quote links")
+    price = quotes.fetch_item_price(link)
+    if price is None:
+        return jsonify(ok=False, message="could not extract price from this page")
+    if price != (order["cost"] or ""):
+        log_change(db, oid, "cost", order["cost"], price)
+        db.execute("UPDATE orders SET cost = ? WHERE id = ?", (price, oid))
+        db.commit()
+    return jsonify(ok=True, price=price)
+
+
+# ------------------------------------------------------------------ Excel export
+
+def _xlsx_response(wb, filename):
+    from io import BytesIO
+    from flask import send_file
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return send_file(buf, download_name=filename, as_attachment=True,
+                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+def _make_workbook(title, headers, rows_iter):
+    """Build a styled openpyxl Workbook.
+
+    headers: list of (label, column_width) tuples
+    rows_iter: iterable of row-value tuples matching the header count
+    """
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+    ACCENT   = "0E6E6B"
+    ALT_FILL = "E3EFEE"
+    RULE     = "C9D2CF"
+
+    thin   = Side(style="thin", color=RULE)
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    h_fill = PatternFill("solid", fgColor=ACCENT)
+    a_fill = PatternFill("solid", fgColor=ALT_FILL)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = title
+    ws.freeze_panes = "A2"
+    ws.row_dimensions[1].height = 20
+
+    for col, (label, width) in enumerate(headers, 1):
+        c = ws.cell(row=1, column=col, value=label)
+        c.font = Font(bold=True, color="FFFFFF")
+        c.fill = h_fill
+        c.alignment = Alignment(vertical="center")
+        c.border = border
+        ws.column_dimensions[c.column_letter].width = width
+
+    for ri, values in enumerate(rows_iter, 2):
+        alt = (ri % 2 == 1)
+        for col, val in enumerate(values, 1):
+            c = ws.cell(row=ri, column=col, value=val)
+            if alt:
+                c.fill = a_fill
+            c.alignment = Alignment(vertical="center", wrap_text=False)
+            c.border = border
+            # Format numeric cost columns
+            if isinstance(val, float):
+                c.number_format = '#,##0.00'
+
+    return wb
+
+
+def _cost_val(raw):
+    """Convert raw cost string to float if possible, else keep as string."""
+    if not raw:
+        return ""
+    try:
+        return float(raw)
+    except (ValueError, TypeError):
+        return raw
+
+
+@app.route("/export/<string:view>.xlsx")
+@login_required
+def export_xlsx(view):
+    db  = get_db()
+    email = current_user()
+
+    if view == "submitted":
+        vendor_map  = {v["id"]: v["name"] for v in fetch_vendors(db)}
+        project_map = {p["id"]: p["name"] for p in fetch_projects(db)}
+        rows = db.execute(
+            """SELECT DISTINCT o.* FROM orders o
+               LEFT JOIN trackers t ON t.order_id = o.id
+               WHERE o.status = 'submitted' AND (o.user_email = ? OR t.email = ?)
+               ORDER BY o.submitted_at DESC, o.id DESC""",
+            (email, email)).fetchall()
+        headers = [("ID", 5), ("Submitted", 12), ("By", 24), ("Description", 30),
+                   ("Link", 42), ("Vendor", 20), ("Project", 18), ("Use", 22), ("Cost ($)", 12)]
+        def _rows():
+            for r in rows:
+                yield (r["id"], (r["submitted_at"] or "")[:10], r["user_email"],
+                       r["description"], r["link"],
+                       vendor_map.get(r["vendor_id"], ""),
+                       project_map.get(r["project_id"], ""),
+                       r["use_note"], _cost_val(r["cost"]))
+        wb = _make_workbook("Submitted Orders", headers, _rows())
+        return _xlsx_response(wb, "submitted_orders.xlsx")
+
+    elif view == "drafts":
+        vendor_map  = {v["id"]: v["name"] for v in fetch_vendors(db)}
+        project_map = {p["id"]: p["name"] for p in fetch_projects(db)}
+        rows = db.execute(
+            "SELECT * FROM orders WHERE user_email = ? AND status = 'draft' ORDER BY id",
+            (email,)).fetchall()
+        headers = [("ID", 5), ("Description", 30), ("Link", 42), ("Vendor", 20),
+                   ("Project", 18), ("Use", 22), ("Cost ($)", 12)]
+        def _rows():
+            for r in rows:
+                yield (r["id"], r["description"], r["link"],
+                       vendor_map.get(r["vendor_id"], ""),
+                       project_map.get(r["project_id"], ""),
+                       r["use_note"], _cost_val(r["cost"]))
+        wb = _make_workbook("Draft Orders", headers, _rows())
+        return _xlsx_response(wb, "draft_orders.xlsx")
+
+    elif view == "vendors":
+        vendors = fetch_vendors(db)
+        headers = [("Vendor", 24), ("Address", 36), ("Website", 22),
+                   ("Phone", 16), ("Tax Exempt Filed", 18)]
+        def _rows():
+            for v in vendors:
+                yield (v["name"], v["address"], v["website"], v["phone"],
+                       "Yes" if v["tax_exempt_filed"] else "No")
+        wb = _make_workbook("Vendors", headers, _rows())
+        return _xlsx_response(wb, "vendors.xlsx")
+
+    elif view == "projects":
+        projects = fetch_projects(db)
+        headers = [("Project", 28), ("Notes", 50)]
+        def _rows():
+            for p in projects:
+                yield (p["name"], p["notes"])
+        wb = _make_workbook("Projects", headers, _rows())
+        return _xlsx_response(wb, "projects.xlsx")
+
+    else:
+        return ("Unknown export view.", 404)
 
 
 if __name__ == "__main__":

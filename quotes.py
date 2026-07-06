@@ -259,6 +259,149 @@ def extract_vendor_info(text):
             "zip": zipcode, "address": address, "phone": phone, "website": website}
 
 
+# ------------------------------------------------------------------ price extraction
+
+# Labeled price lines, highest-priority patterns first
+_PRICE_PRIORITY = [
+    (3, re.compile(
+        r"(?:grand\s*total|total\s*due|amount\s*due|balance\s*due|invoice\s*total|"
+        r"total\s*amount\s*due)[^\n$]*\$?\s*([\d,]+\.\d{2})", re.I)),
+    (2, re.compile(
+        r"(?:net\s*(?:price|total|amount)|total\s*(?:price|amount|cost))[^\n$]*\$?\s*([\d,]+\.\d{2})", re.I)),
+    (1, re.compile(
+        r"(?:subtotal|sub\s*total|total\s*charges|order\s*total)[^\n$]*\$?\s*([\d,]+\.\d{2})", re.I)),
+]
+
+
+def extract_net_price(text):
+    """Return the net/total price from a quote PDF as '1234.56', or None."""
+    best_priority, best_val = -1, None
+    for priority, pat in _PRICE_PRIORITY:
+        for m in pat.finditer(text):
+            raw = m.group(1).replace(",", "")
+            try:
+                f = float(raw)
+                if priority > best_priority or (priority == best_priority and f > (best_val or 0)):
+                    best_priority, best_val = priority, f
+            except ValueError:
+                pass
+    return str(round(best_val, 2)) if best_val is not None else None
+
+
+def _clean_price(s):
+    s = str(s).replace(",", "").replace("$", "").strip()
+    try:
+        return str(round(float(s), 2))
+    except (ValueError, TypeError):
+        return None
+
+
+def _price_from_jsonld(data):
+    """Recursively extract price from a schema.org Product/Offer JSON-LD object."""
+    if isinstance(data, list):
+        for item in data:
+            p = _price_from_jsonld(item)
+            if p:
+                return p
+        return None
+    if not isinstance(data, dict):
+        return None
+    t = data.get("@type", "")
+    if isinstance(t, list):
+        t = " ".join(t)
+    if "Product" in t or "Offer" in t:
+        offers = data.get("offers") or data.get("Offers")
+        if isinstance(offers, list):
+            offers = offers[0] if offers else None
+        if isinstance(offers, dict):
+            price = offers.get("price") or offers.get("lowPrice")
+            if price is not None:
+                p = _clean_price(price)
+                if p:
+                    return p
+        price = data.get("price")
+        if price is not None:
+            p = _clean_price(price)
+            if p:
+                return p
+    for v in data.values():
+        if isinstance(v, (dict, list)):
+            p = _price_from_jsonld(v)
+            if p:
+                return p
+    return None
+
+
+def fetch_item_price(url):
+    """Scrape the unit/item price from a product page URL (DigiKey, Amazon, generic).
+
+    Returns a price string like '12.34', or None if nothing found.
+    """
+    import json as _json
+    try:
+        r = requests.get(url, timeout=15, allow_redirects=True, headers={
+            "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                           "AppleWebKit/537.36 (KHTML, like Gecko) "
+                           "Chrome/124.0 Safari/537.36"),
+            "Accept": "text/html,application/xhtml+xml,*/*",
+        })
+    except requests.RequestException:
+        return None
+    if r.status_code != 200:
+        return None
+    html = r.text
+
+    # 1. JSON-LD product schema (works for many e-commerce sites)
+    for m in re.finditer(
+            r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+            html, re.S | re.I):
+        try:
+            data = _json.loads(m.group(1))
+            p = _price_from_jsonld(data)
+            if p:
+                return p
+        except Exception:
+            pass
+
+    # 2. Open Graph price meta tag
+    m = re.search(
+        r'<meta[^>]+property=["\']og:price:amount["\'][^>]+content=["\']([0-9,.]+)["\']',
+        html, re.I)
+    if m:
+        p = _clean_price(m.group(1))
+        if p:
+            return p
+
+    # 3. DigiKey: unit price in inline JS / data attributes
+    for pat in (r'"unitPrice"\s*:\s*"?\$?([\d,]+\.\d{2})"?',
+                r'data-unit-price=["\']([0-9.]+)["\']'):
+        m = re.search(pat, html)
+        if m:
+            p = _clean_price(m.group(1))
+            if p:
+                return p
+
+    # 4. Amazon: priceAmount in embedded JSON
+    m = re.search(r'"priceAmount"\s*:\s*"?([\d.]+)"?', html)
+    if m:
+        p = _clean_price(m.group(1))
+        if p:
+            return p
+
+    # 5. Generic: dollar amount near price-related text (strip HTML tags first)
+    text = re.sub(r'<[^>]+>', ' ', html)
+    m = re.search(
+        r'(?:unit\s+price|price\s+each|your\s+price|item\s+price|list\s+price)'
+        r'\s*[:\s]*\$?\s*([\d,]+\.\d{2})',
+        text, re.I)
+    if m:
+        p = _clean_price(m.group(1))
+        if p:
+            return p
+
+    return None
+
+
 def fuzzy_match_vendors(name, vendors, n=3, cutoff=0.45):
     """Return up to n vendors whose names are similar to the given name.
 

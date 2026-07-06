@@ -56,6 +56,10 @@ button appears only after you edit a row.</p>
 </table>
 </div>
 
+<div class="sheet-actions" style="margin-top:.9rem">
+  <a href="{{ url_for('export_xlsx', view='vendors') }}" class="mini export-btn">Export to Excel</a>
+</div>
+
 <script>
 (function () {
   // Hide Save buttons for existing rows on load; reveal on first edit.

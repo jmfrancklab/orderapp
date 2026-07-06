@@ -30,6 +30,7 @@ immediately and will still be here next time you sign in.</p>
     <span>Vendor <em class="head-hint">auto-filled from the link or quote</em></span>
     <span>Project <em class="head-hint">official grant or funding category</em></span>
     <span>Use <em class="head-hint">hardware / compute / chemical / … then detail</em></span>
+    <span>Cost <em class="head-hint">auto-filled from link</em></span>
     <span>Trackers <em class="head-hint">others tracking this order — also grants them login access</em></span>
     <span></span>
   </div>
@@ -49,6 +50,7 @@ immediately and will still be here next time you sign in.</p>
       {% endfor %}
     </select>
     <input data-field="use_note" value="{{ d.use_note }}" placeholder="What's it for?">
+    <span class="cost-cell"><span class="cost-prefix">$</span><input data-field="cost" value="{{ d.cost }}" placeholder="0.00" class="cost-input"></span>
     <span class="tracker-cell">
       <input class="tracker-input" type="email" placeholder="email + Enter">
       <span class="chips">
@@ -78,6 +80,7 @@ immediately and will still be here next time you sign in.</p>
         onsubmit="return confirm('Submit all rows? They will move to the Submitted tab.');">
     <button type="submit" class="submit-btn">Submit order</button>
   </form>
+  <a href="{{ url_for('export_xlsx', view='drafts') }}" class="mini export-btn">Export to Excel</a>
   {% endif %}
 </div>
 

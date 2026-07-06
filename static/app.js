@@ -295,6 +295,7 @@
     post("/api/orders/" + row.dataset.id + "/quote_vendor", "POST",
          { link: linkInput.value.trim() },
          function (data) {
+           if (data.price) setCostInput(row, data.price);
            if (data.matched) {
              if (select) {
                var vid = String(data.vendor_id);
@@ -303,12 +304,42 @@
                select.value = vid;
                updateFlag(select);
              }
-             rowNote(row, "vendor from quote: " + data.vendor_name);
+             var noteMsg = "vendor from quote: " + data.vendor_name;
+             if (data.price) noteMsg += " · $" + data.price;
+             rowNote(row, noteMsg);
            } else if (data.fuzzy_candidates !== undefined || data.extracted) {
-             rowNote(row, "");
+             rowNote(row, data.price ? ("price: $" + data.price) : "");
              showVendorPopup(row, data);
            } else {
-             rowNote(row, data.message || "couldn't read the quote", true);
+             rowNote(row, data.message || "couldn't read the quote", !data.price);
+           }
+         });
+  }
+
+  /* --- price fetch --------------------------------------------------- */
+
+  function setCostInput(row, price) {
+    var inp = row.querySelector('input[data-field="cost"]');
+    if (inp && !inp.value) {
+      inp.value = price;
+      saveField(inp);
+    }
+  }
+
+  function fetchPrice(linkInput) {
+    var row = rowOf(linkInput);
+    if (!row) return;
+    var costInp = row.querySelector('input[data-field="cost"]');
+    if (costInp && costInp.value) return;   // don't overwrite a manually-entered cost
+    rowNote(row, "fetching price…");
+    post("/api/orders/" + row.dataset.id + "/fetch_price", "POST",
+         { link: linkInput.value.trim() },
+         function (data) {
+           if (data.ok && data.price) {
+             setCostInput(row, data.price);
+             rowNote(row, "price: $" + data.price);
+           } else {
+             rowNote(row, "");
            }
          });
   }
@@ -320,16 +351,21 @@
     if (!host) return;
     if (quoteProvider(host)) { quoteVendor(linkInput, row); return; }
     var select = row.querySelector(".vendor-select");
-    if (!select || select.value) return;          // never override a choice
+    if (!select || select.value) {
+      // Even if vendor already set, still try to fill in price
+      fetchPrice(linkInput);
+      return;
+    }
     for (var i = 0; i < select.options.length; i++) {
       var d = select.options[i].dataset.domain;
       if (d && (host === d || host.endsWith("." + d))) {
         select.value = select.options[i].value;
         updateFlag(select);
         saveField(select);
-        return;
+        break;
       }
     }
+    fetchPrice(linkInput);
   }
 
   /* --- trackers ------------------------------------------------------ */
