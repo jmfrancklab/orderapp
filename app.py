@@ -864,6 +864,59 @@ def api_remove_tracker(oid):
     return jsonify(ok=True)
 
 
+@app.route("/api/orders/<int:oid>/link_vendor", methods=["POST"])
+@login_required
+def api_link_vendor(oid):
+    """Look up vendor by domain for a plain product URL.
+
+    If the domain matches a known vendor, returns matched=True.
+    Otherwise fetches the vendor's homepage to extract contact info and
+    returns the same popup-compatible response as api_quote_vendor.
+    """
+    db = get_db()
+    order = order_visible_to(db, oid, current_user())
+    if order is None:
+        return jsonify(error="not found"), 404
+
+    data = request.get_json(silent=True) or {}
+    link = data.get("link", "").strip()
+    if not link:
+        return jsonify(error="link required"), 400
+
+    dom = domain_of(link)
+    if not dom:
+        return jsonify(error="invalid URL"), 400
+
+    all_vendors = fetch_vendors(db)
+    matched = next((v for v in all_vendors if v["domain"] == dom), None)
+    if matched:
+        if order["vendor_id"] != matched["id"]:
+            log_change(db, oid, "vendor_id", order["vendor_id"], matched["id"])
+            db.execute("UPDATE orders SET vendor_id=? WHERE id=?",
+                       (matched["id"], oid))
+            db.commit()
+        return jsonify(matched=True, vendor_id=matched["id"],
+                       vendor_name=matched["name"], incomplete=matched["incomplete"])
+
+    # Not in DB — try to extract contact info from the vendor's homepage
+    extracted = {"name": dom, "address": "", "phone": "", "website": dom}
+    for homepage in (f"https://www.{dom}", f"https://{dom}"):
+        html = quotes.fetch_html(homepage)
+        if html:
+            extracted = quotes.extract_vendor_from_html(html, dom)
+            break
+
+    fuzzy = []
+    if extracted.get("name") and extracted["name"] != dom:
+        fuzzy = quotes.fuzzy_match_vendors(extracted["name"], all_vendors)
+    safe_fuzzy = [
+        {k: v[k] for k in ("id", "name", "domain", "incomplete", "score")}
+        for v in fuzzy
+    ]
+    return jsonify(matched=False, extracted=extracted,
+                   fuzzy_candidates=safe_fuzzy, hint_domains=[dom])
+
+
 @app.route("/api/orders/<int:oid>/fetch_price", methods=["POST"])
 @login_required
 def api_fetch_price(oid):

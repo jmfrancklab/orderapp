@@ -350,6 +350,30 @@
          });
   }
 
+  function linkVendor(linkInput, row) {
+    rowNote(row, "looking up vendor…");
+    post("/api/orders/" + row.dataset.id + "/link_vendor", "POST",
+         { link: linkInput.value.trim() },
+         function (data) {
+           if (data.matched) {
+             var select = row.querySelector(".vendor-select");
+             if (select) {
+               var vid = String(data.vendor_id);
+               var opt = select.querySelector('option[value="' + vid + '"]');
+               if (opt) opt.textContent = data.vendor_name;
+               select.value = vid;
+               updateFlag(select);
+             }
+             rowNote(row, "vendor: " + data.vendor_name);
+           } else if (data.fuzzy_candidates !== undefined || data.extracted) {
+             rowNote(row, "");
+             showVendorPopup(row, data);
+           } else {
+             rowNote(row, "");
+           }
+         });
+  }
+
   function autoVendor(linkInput) {
     var row = rowOf(linkInput);
     if (!row) return;
@@ -357,21 +381,28 @@
     if (!host) return;
     if (quoteProvider(host)) { quoteVendor(linkInput, row); return; }
     var select = row.querySelector(".vendor-select");
-    if (!select || select.value) {
-      // Even if vendor already set, still try to fill in price
-      fetchPrice(linkInput);
-      return;
-    }
+
+    fetchPrice(linkInput);   // always try to fill price
+
+    if (!select || select.value) return;   // vendor already chosen
+
+    // Fast path: domain matches a known vendor in the dropdown
+    var localMatch = false;
     for (var i = 0; i < select.options.length; i++) {
       var d = select.options[i].dataset.domain;
       if (d && (host === d || host.endsWith("." + d))) {
         select.value = select.options[i].value;
         updateFlag(select);
         saveField(select);
+        localMatch = true;
         break;
       }
     }
-    fetchPrice(linkInput);
+
+    // Slow path: ask server to identify vendor from homepage
+    if (!localMatch) {
+      linkVendor(linkInput, row);
+    }
   }
 
   /* --- trackers ------------------------------------------------------ */

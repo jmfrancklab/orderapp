@@ -114,6 +114,11 @@ def extract_text(pdf_bytes, max_pages=3):
     return text
 
 
+# Matches both quoted and unquoted type= values (eBay omits the quotes)
+_JSONLD_RE = re.compile(
+    r'<script[^>]+type=["\']?application/ld\+json["\']?[^>]*>(.*?)</script>',
+    re.S | re.I)
+
 _DOMAIN_RE = re.compile(
     r"\b((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:com|net|org|io|de|co|us|biz))\b",
     re.I)
@@ -339,7 +344,8 @@ def _price_from_jsonld(data):
     if "Product" in t or "Offer" in t:
         offers = data.get("offers") or data.get("Offers")
         if isinstance(offers, list):
-            offers = offers[0] if offers else None
+            # Skip null/non-dict entries (eBay puts null as the first element)
+            offers = next((o for o in offers if isinstance(o, dict)), None)
         if isinstance(offers, dict):
             price = offers.get("price") or offers.get("lowPrice")
             if price is not None:
@@ -359,29 +365,69 @@ def _price_from_jsonld(data):
     return None
 
 
-def fetch_item_price(url):
-    """Scrape the unit/item price from a product page URL (DigiKey, Amazon, generic).
+_BROWSER_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) "
+                   "Chrome/124.0.0.0 Safari/537.36"),
+    "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
+    "Accept": ("text/html,application/xhtml+xml,application/xml;"
+               "q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"),
+    "Accept-Language": "en-US,en;q=0.9",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+}
 
-    Returns a price string like '12.34', or None if nothing found.
+_ACCESS_DENIED_RE = re.compile(
+    r"access.{0,10}denied|cf-error-title|challenge-running|"
+    r"checking.{0,20}browser|blocked",
+    re.I)
+
+
+def fetch_html(url, timeout=15):
+    """Fetch a URL and return the HTML text, or None on any failure.
+
+    Tries curl_cffi first (Chrome TLS impersonation — handles many bot checks);
+    falls back to requests if curl_cffi is not installed.  Returns None when
+    the site blocks the request (403, 503, or an access-denied HTML page).
     """
-    import json as _json
     try:
-        r = requests.get(url, timeout=15, allow_redirects=True, headers={
-            "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                           "AppleWebKit/537.36 (KHTML, like Gecko) "
-                           "Chrome/124.0 Safari/537.36"),
-            "Accept": "text/html,application/xhtml+xml,*/*",
-        })
-    except requests.RequestException:
+        from curl_cffi import requests as _cf
+        r = _cf.get(url, impersonate="chrome124", timeout=timeout,
+                    allow_redirects=True)
+    except ImportError:
+        try:
+            r = requests.get(url, timeout=timeout, allow_redirects=True,
+                             headers=_BROWSER_HEADERS)
+        except requests.RequestException:
+            return None
+    except Exception:
         return None
+
     if r.status_code != 200:
         return None
     html = r.text
+    # Detect bot-detection / access-denied pages served as 200
+    if _ACCESS_DENIED_RE.search(html[:2000]):
+        return None
+    return html
 
-    # 1. JSON-LD product schema (works for many e-commerce sites)
+
+def extract_price_from_html(html):
+    """Extract a unit/item price from product-page HTML.
+
+    Tries in order: JSON-LD Product/Offer schema, Open Graph price meta,
+    DigiKey unitPrice, Amazon priceAmount, generic text patterns.
+    Returns a price string like '12.34', or None.
+    """
+    import json as _json
+
+    # 1. JSON-LD product schema
     for m in re.finditer(
-            r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
-            html, re.S | re.I):
+            _JSONLD_RE, html):
         try:
             data = _json.loads(m.group(1))
             p = _price_from_jsonld(data)
@@ -415,7 +461,7 @@ def fetch_item_price(url):
         if p:
             return p
 
-    # 5. Generic: dollar amount near price-related text (strip HTML tags first)
+    # 5. Generic: dollar amount near price-related text
     text = re.sub(r'<[^>]+>', ' ', html)
     m = re.search(
         r'(?:unit\s+price|price\s+each|your\s+price|item\s+price|list\s+price)'
@@ -427,6 +473,91 @@ def fetch_item_price(url):
             return p
 
     return None
+
+
+def _find_organization_in_jsonld(data):
+    """Recursively find an Organization (or LocalBusiness) in JSON-LD data."""
+    if isinstance(data, list):
+        for item in data:
+            r = _find_organization_in_jsonld(item)
+            if r:
+                return r
+        return None
+    if not isinstance(data, dict):
+        return None
+    t = data.get("@type", "")
+    if isinstance(t, list):
+        t = " ".join(t)
+    if any(k in t for k in ("Organization", "LocalBusiness", "Corporation")):
+        name = data.get("name", "")
+        addr = data.get("address", {})
+        phone = (data.get("telephone") or
+                 (data.get("contactPoint") or {}).get("telephone") or "")
+        if isinstance(addr, dict):
+            parts = [addr.get("streetAddress", "")]
+            city = addr.get("addressLocality", "")
+            state = addr.get("addressRegion", "")
+            zipc = addr.get("postalCode", "")
+            loc = ", ".join(filter(None, [city, state]))
+            if zipc:
+                loc += " " + zipc
+            if loc:
+                parts.append(loc)
+            address = ", ".join(p for p in parts if p)
+        else:
+            address = str(addr) if addr else ""
+        # Normalise phone: strip leading +1 country code
+        phone = re.sub(r'^\+1[-.\s]?', '', phone)
+        if name or address:
+            return {"name": name, "address": address,
+                    "phone": phone, "website": data.get("url", "")}
+    for v in data.values():
+        if isinstance(v, (dict, list)):
+            r = _find_organization_in_jsonld(v)
+            if r:
+                return r
+    return None
+
+
+def extract_vendor_from_html(html, domain):
+    """Extract vendor contact info from a webpage HTML string.
+
+    Tries JSON-LD Organization schema first, then address-block regex on
+    visible text.  Always returns a dict with keys: name, address, phone,
+    website (falling back to the domain when nothing is found).
+    """
+    import json as _json
+    for m in re.finditer(
+            _JSONLD_RE, html):
+        try:
+            data = _json.loads(m.group(1))
+            org = _find_organization_in_jsonld(data)
+            if org:
+                org.setdefault("website", domain)
+                if not org["website"]:
+                    org["website"] = domain
+                return org
+        except Exception:
+            pass
+
+    # Fall back: run address-block extractor on page text
+    text = re.sub(r'<[^>]+>', '\n', html)
+    info = extract_vendor_info(text)
+    if info and (info.get("name") or info.get("address")):
+        return {"name": info.get("name") or domain,
+                "address": info.get("address") or "",
+                "phone": info.get("phone") or "",
+                "website": domain}
+
+    return {"name": domain, "address": "", "phone": "", "website": domain}
+
+
+def fetch_item_price(url):
+    """Fetch a product-page URL and return the unit price, or None."""
+    html = fetch_html(url)
+    if html is None:
+        return None
+    return extract_price_from_html(html)
 
 
 def fuzzy_match_vendors(name, vendors, n=3, cutoff=0.45):
