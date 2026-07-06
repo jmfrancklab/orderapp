@@ -50,7 +50,7 @@ immediately and will still be here next time you sign in.</p>
       {% endfor %}
     </select>
     <input data-field="use_note" value="{{ d.use_note }}" placeholder="What's it for?">
-    <span class="cost-cell"><span class="cost-prefix">$</span><input data-field="cost" value="{{ d.cost }}" placeholder="0.00" class="cost-input"></span>
+    <span class="cost-cell"><span class="cost-prefix">$</span><input data-field="cost" value="{{ d.cost | fmt_cost }}" placeholder="0.00" class="cost-input"></span>
     <span class="tracker-cell">
       <input class="tracker-input" type="email" placeholder="email + Enter">
       <span class="chips">

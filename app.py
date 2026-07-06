@@ -40,6 +40,29 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 app.secret_key = os.environ.get("ORDERAPP_SECRET", "dev-secret-change-me")
 
 
+@app.template_filter('fmt_cost')
+def fmt_cost(value):
+    """Format a stored cost string ('1234.56') as '1,234.56' for display."""
+    s = str(value or '').replace(',', '').strip()
+    if not s:
+        return ''
+    try:
+        return '{:,.2f}'.format(float(s))
+    except ValueError:
+        return value or ''
+
+
+def _normalise_cost(raw):
+    """Strip commas/whitespace from user input; return plain decimal or ''."""
+    s = str(raw or '').replace(',', '').strip()
+    if not s:
+        return ''
+    try:
+        return str(round(float(s), 2))
+    except ValueError:
+        return s
+
+
 @app.context_processor
 def inject_globals():
     return {"app_version": __version__,
@@ -170,8 +193,9 @@ def init_db():
         project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
         use_note TEXT NOT NULL DEFAULT '',
         cost TEXT NOT NULL DEFAULT '',
-        status TEXT NOT NULL DEFAULT 'draft',   -- 'draft' | 'submitted'
-        submitted_at TEXT                       -- locked after submission
+        status TEXT NOT NULL DEFAULT 'draft',         -- 'draft' | 'submitted'
+        order_status TEXT NOT NULL DEFAULT 'submitted',-- fulfillment status
+        submitted_at TEXT                             -- locked after submission
     );
     CREATE TABLE IF NOT EXISTS trackers (
         order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
@@ -207,6 +231,7 @@ def init_db():
         "ALTER TABLE order_history ADD COLUMN table_name TEXT NOT NULL DEFAULT 'orders'",
         "ALTER TABLE vendors ADD COLUMN address TEXT DEFAULT ''",
         "ALTER TABLE orders ADD COLUMN cost TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE orders ADD COLUMN order_status TEXT NOT NULL DEFAULT 'submitted'",
     ]:
         try:
             db.execute(stmt)
@@ -424,6 +449,27 @@ def delete_row(oid):
     return redirect(url_for("orders"))
 
 
+@app.route("/api/orders/<int:oid>/delete", methods=["POST"])
+@login_required
+def api_delete_order(oid):
+    """Permanently delete any order visible to the user; log all fields cleared."""
+    db = get_db()
+    email = current_user()
+    order = order_visible_to(db, oid, email)
+    if order is None:
+        return jsonify(error="not found"), 404
+    # Log every meaningful field as cleared so the history table shows what was lost
+    for field in ("description", "link", "vendor_id", "project_id",
+                  "use_note", "cost", "order_status", "status"):
+        val = order[field]
+        if val is not None and str(val).strip():
+            log_change(db, oid, field, val, None)
+    log_change(db, oid, "deleted", None, "record deleted")
+    db.execute("DELETE FROM orders WHERE id = ?", (oid,))
+    db.commit()
+    return jsonify(ok=True)
+
+
 @app.route("/orders/submit", methods=["POST"])
 @login_required
 def submit_orders():
@@ -435,7 +481,7 @@ def submit_orders():
     for oid in ids:
         log_change(db, oid, "status", "draft", "submitted")
     db.execute(
-        "UPDATE orders SET status = 'submitted', submitted_at = ? "
+        "UPDATE orders SET status = 'submitted', order_status = 'submitted', submitted_at = ? "
         "WHERE user_email = ? AND status = 'draft'",
         (ts, current_user()))
     db.commit()
@@ -632,7 +678,8 @@ def update_project(pid):
 
 # Everything is editable at any time EXCEPT who submitted (user_email) and
 # when (submitted_at). Every change is written to order_history.
-EDITABLE_FIELDS = {"description", "link", "vendor_id", "project_id", "use_note", "cost"}
+EDITABLE_FIELDS = {"description", "link", "vendor_id", "project_id", "use_note", "cost",
+                   "order_status"}
 
 
 @app.route("/api/orders/<int:oid>", methods=["POST"])
@@ -653,6 +700,8 @@ def api_save(oid):
             continue
         if field in ("vendor_id", "project_id"):
             value = int(value) if str(value).strip() else None
+        elif field == "cost":
+            value = _normalise_cost(value)
         if value != order[field]:
             log_change(db, oid, field, order[field], value)
             sets.append(f"{field} = ?")
@@ -899,14 +948,16 @@ def export_xlsx(view):
                ORDER BY o.submitted_at DESC, o.id DESC""",
             (email, email)).fetchall()
         headers = [("ID", 5), ("Submitted", 12), ("By", 24), ("Description", 30),
-                   ("Link", 42), ("Vendor", 20), ("Project", 18), ("Use", 22), ("Cost ($)", 12)]
+                   ("Link", 42), ("Vendor", 20), ("Project", 18), ("Use", 22),
+                   ("Cost ($)", 12), ("Order Status", 14)]
         def _rows():
             for r in rows:
                 yield (r["id"], (r["submitted_at"] or "")[:10], r["user_email"],
                        r["description"], r["link"],
                        vendor_map.get(r["vendor_id"], ""),
                        project_map.get(r["project_id"], ""),
-                       r["use_note"], _cost_val(r["cost"]))
+                       r["use_note"], _cost_val(r["cost"]),
+                       r["order_status"] or "submitted")
         wb = _make_workbook("Submitted Orders", headers, _rows())
         return _xlsx_response(wb, "submitted_orders.xlsx")
 

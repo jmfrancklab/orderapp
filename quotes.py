@@ -261,30 +261,57 @@ def extract_vendor_info(text):
 
 # ------------------------------------------------------------------ price extraction
 
-# Labeled price lines, highest-priority patterns first
-_PRICE_PRIORITY = [
-    (3, re.compile(
-        r"(?:grand\s*total|total\s*due|amount\s*due|balance\s*due|invoice\s*total|"
-        r"total\s*amount\s*due)[^\n$]*\$?\s*([\d,]+\.\d{2})", re.I)),
-    (2, re.compile(
-        r"(?:net\s*(?:price|total|amount)|total\s*(?:price|amount|cost))[^\n$]*\$?\s*([\d,]+\.\d{2})", re.I)),
-    (1, re.compile(
-        r"(?:subtotal|sub\s*total|total\s*charges|order\s*total)[^\n$]*\$?\s*([\d,]+\.\d{2})", re.I)),
+# Per-line label patterns, checked in priority order
+_PRICE_LABEL_PATS = [
+    (3, re.compile(r'\b(?:grand\s*total|total\s*due|amount\s*due|balance\s*due|'
+                   r'invoice\s*total|total\s*amount\s*due)\b', re.I)),
+    (2, re.compile(r'\b(?:net\s*(?:price|total|amount)|'
+                   r'total\s*(?:price|amount|cost))\b', re.I)),
+    (1, re.compile(r'\b(?:subtotal|sub\s*total|total\s*charges|'
+                   r'order\s*total|untaxed\s*amount)\b', re.I)),
 ]
+# Plain "Total" alone on a line (PDFs often put label and value on separate lines)
+_TOTAL_ONLY_RE = re.compile(r'^\s*total\s*$', re.I)
+# Dollar amount (with or without commas)
+_AMOUNT_RE = re.compile(r'(?<!\d)([\d,]+\.\d{2})(?!\d)')
 
 
 def extract_net_price(text):
-    """Return the net/total price from a quote PDF as '1234.56', or None."""
+    """Return the net/total price from a quote PDF as '1234.56', or None.
+
+    Handles both inline format ("Total: $1,234.56") and multi-line PDF layouts
+    where the label and dollar amount appear on separate lines (scans up to 5
+    lines ahead of the label).
+    """
+    lines = text.split('\n')
+    n = len(lines)
     best_priority, best_val = -1, None
-    for priority, pat in _PRICE_PRIORITY:
-        for m in pat.finditer(text):
-            raw = m.group(1).replace(",", "")
+
+    for i, line in enumerate(lines):
+        priority = -1
+        for p, pat in _PRICE_LABEL_PATS:
+            if pat.search(line):
+                priority = p
+                break
+        # Plain "Total" on its own line → treat as a grand total
+        if priority < 0 and _TOTAL_ONLY_RE.match(line):
+            priority = 2
+
+        if priority < 0:
+            continue
+
+        # Search this line plus the next 4 for the first positive dollar amount
+        window = '\n'.join(lines[i:min(i + 5, n)])
+        for m in _AMOUNT_RE.finditer(window):
+            raw = m.group(1).replace(',', '')
             try:
                 f = float(raw)
-                if priority > best_priority or (priority == best_priority and f > (best_val or 0)):
+                if f > 0 and priority > best_priority:
                     best_priority, best_val = priority, f
+                    break
             except ValueError:
                 pass
+
     return str(round(best_val, 2)) if best_val is not None else None
 
 

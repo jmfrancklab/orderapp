@@ -318,10 +318,16 @@
 
   /* --- price fetch --------------------------------------------------- */
 
+  function fmtCurrency(s) {
+    var f = parseFloat(String(s).replace(/,/g, ''));
+    if (isNaN(f)) return s;
+    return f.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  }
+
   function setCostInput(row, price) {
     var inp = row.querySelector('input[data-field="cost"]');
     if (inp && !inp.value) {
-      inp.value = price;
+      inp.value = fmtCurrency(price);
       saveField(inp);
     }
   }
@@ -387,11 +393,18 @@
     if (e.target.matches("[data-field]")) debounceSave(e.target);
   });
 
+  function updateStatusClass(sel) {
+    var val = (sel.value || 'submitted').replace(/\s+/g, '-');
+    sel.className = sel.className.replace(/\bstatus-\S+/g, '').trim();
+    sel.classList.add('status-select', 'status-' + val);
+  }
+
   document.addEventListener("change", function (e) {
     var t = e.target;
     if (t.matches("select[data-field]")) {
       saveField(t);
       if (t.classList.contains("vendor-select")) updateFlag(t);
+      if (t.classList.contains("status-select")) updateStatusClass(t);
     } else if (t.matches('input[data-field="link"]')) {
       autoVendor(t);
     }
@@ -413,12 +426,34 @@
   });
 
   document.addEventListener("click", function (e) {
-    if (!e.target.classList.contains("chip-x")) return;
-    var chip = e.target.closest(".chip");
-    var row = rowOf(e.target);
-    post("/api/orders/" + row.dataset.id + "/trackers", "DELETE",
-         { email: e.target.dataset.email },
-         function () { chip.remove(); });
+    // chip remove
+    if (e.target.classList.contains("chip-x")) {
+      var chip = e.target.closest(".chip");
+      var row = rowOf(e.target);
+      post("/api/orders/" + row.dataset.id + "/trackers", "DELETE",
+           { email: e.target.dataset.email },
+           function () { chip.remove(); });
+      return;
+    }
+    // delete button: show inline confirm
+    if (e.target.classList.contains("del-btn")) {
+      var confirm = e.target.closest(".row-del").querySelector(".del-confirm");
+      if (confirm) confirm.hidden = false;
+      return;
+    }
+    // cancel delete
+    if (e.target.classList.contains("del-no")) {
+      var confirm = e.target.closest(".del-confirm");
+      if (confirm) confirm.hidden = true;
+      return;
+    }
+    // confirm delete
+    if (e.target.classList.contains("del-yes")) {
+      var row = rowOf(e.target);
+      post("/api/orders/" + row.dataset.id + "/delete", "POST", {},
+           function () { row.remove(); });
+      return;
+    }
   });
 
   /* initialise flags on load */

@@ -12,15 +12,16 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import quotes
+from conftest import xor_crypt
 
 FIXTURE_DIR = os.path.join(os.path.dirname(__file__), "fixtures")
-REDBARN_PDF = os.path.join(FIXTURE_DIR, "redbarn_quote.pdf")
+REDBARN_ENC = os.path.join(FIXTURE_DIR, "redbarn_quote.pdf.enc")
 
 
 @pytest.fixture(scope="module")
 def redbarn_text():
-    with open(REDBARN_PDF, "rb") as f:
-        pdf_bytes = f.read()
+    with open(REDBARN_ENC, "rb") as f:
+        pdf_bytes = xor_crypt(f.read())
     return quotes.extract_text(pdf_bytes)
 
 
@@ -57,6 +58,29 @@ def test_extract_phone(redbarn_info):
 
 def test_extract_website(redbarn_info):
     assert redbarn_info["website"] == "thinkredbarn.com"
+
+
+# ── Price extraction ──────────────────────────────────────────────────────────
+
+def test_extract_price(redbarn_text):
+    """Red Barn quote total is $9,576.31 — appears on a separate line from 'Total'."""
+    price = quotes.extract_net_price(redbarn_text)
+    assert price == "9576.31"
+
+def test_extract_price_inline():
+    """Inline label+amount on one line."""
+    text = "Grand Total: $1,234.56\n"
+    assert quotes.extract_net_price(text) == "1234.56"
+
+def test_extract_price_multiline():
+    """Label on one line, amount several lines below (Red Barn PDF style)."""
+    text = "Total\nTotal\n$ \n$ \n9,576.31\n9,576.31\n"
+    assert quotes.extract_net_price(text) == "9576.31"
+
+def test_extract_price_priority():
+    """Grand Total beats Subtotal when both appear."""
+    text = "Subtotal\n100.00\nGrand Total\n115.00\n"
+    assert quotes.extract_net_price(text) == "115.0"
 
 
 # ── Regex behaviour: comma vs no-comma city/state separator ──────────────────
