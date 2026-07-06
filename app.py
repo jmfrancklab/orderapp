@@ -8,7 +8,7 @@ import os
 import re
 import sqlite3
 import tomllib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
 from flask import (Flask, g, jsonify, redirect, render_template, request,
@@ -275,15 +275,41 @@ def now_iso():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+_MERGE_WINDOW = timedelta(minutes=30)
+
+
 def log_change(db, record_id, field, old, new, table_name='orders', by=None):
-    """Record one field change in order_history."""
-    db.execute(
-        "INSERT INTO order_history (order_id, changed_by, changed_at, field,"
-        " old_value, new_value, table_name) VALUES (?,?,?,?,?,?,?)",
-        (record_id or None, by or current_user() or 'system', now_iso(), field,
-         None if old is None else str(old),
-         None if new is None else str(new),
-         table_name))
+    """Record one field change in order_history.
+
+    If the same user changed the same field on the same record within the
+    last 30 minutes, update that existing row's new_value and changed_at
+    instead of inserting a new one.  This collapses rapid edits (e.g. typing
+    a description character by character) into a single A → Z entry.
+    """
+    who = by or current_user() or 'system'
+    cutoff = (datetime.now(timezone.utc) - _MERGE_WINDOW).isoformat(timespec="seconds")
+
+    existing = db.execute(
+        "SELECT id FROM order_history"
+        " WHERE order_id IS ? AND table_name=? AND field=? AND changed_by=?"
+        " AND changed_at>=? ORDER BY id DESC LIMIT 1",
+        (record_id or None, table_name, field, who, cutoff)
+    ).fetchone()
+
+    if existing:
+        db.execute(
+            "UPDATE order_history SET new_value=?, changed_at=? WHERE id=?",
+            (None if new is None else str(new), now_iso(), existing["id"])
+        )
+    else:
+        db.execute(
+            "INSERT INTO order_history (order_id, changed_by, changed_at, field,"
+            " old_value, new_value, table_name) VALUES (?,?,?,?,?,?,?)",
+            (record_id or None, who, now_iso(), field,
+             None if old is None else str(old),
+             None if new is None else str(new),
+             table_name)
+        )
 
 
 def vendor_incomplete(v):
