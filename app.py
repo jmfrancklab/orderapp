@@ -883,7 +883,10 @@ def api_link_vendor(oid):
     if not link:
         return jsonify(error="link required"), 400
 
-    dom = domain_of(link)
+    # Follow redirects first so shortlinks (mou.sr, amzn.to, …) resolve to
+    # the real vendor domain before we look up or fetch homepage info.
+    final_url = quotes.resolve_redirect(link)
+    dom = domain_of(final_url) or domain_of(link)
     if not dom:
         return jsonify(error="invalid URL"), 400
 
@@ -932,6 +935,8 @@ def api_fetch_price(oid):
         return jsonify(ok=False, message="no link on this order")
     if quotes.classify_link(link):
         return jsonify(ok=False, message="use the quote vendor button for quote links")
+    # Follow shortlinks so the real product page is fetched
+    link = quotes.resolve_redirect(link)
     price = quotes.fetch_item_price(link)
     if price is None:
         return jsonify(ok=False, message="could not extract price from this page")

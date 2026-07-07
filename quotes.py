@@ -416,6 +416,28 @@ def fetch_html(url, timeout=15):
     return html
 
 
+def resolve_redirect(url, timeout=10):
+    """Follow HTTP redirects and return the final URL (unchanged on failure).
+
+    Uses HEAD so no body is downloaded.  Handles shortlinks like mou.sr.
+    """
+    try:
+        from curl_cffi import requests as _cf
+        r = _cf.head(url, impersonate="chrome124", timeout=timeout,
+                     allow_redirects=True)
+        return str(r.url)
+    except ImportError:
+        pass
+    except Exception:
+        pass
+    try:
+        r = requests.head(url, timeout=timeout, allow_redirects=True,
+                          headers=_BROWSER_HEADERS)
+        return str(r.url)
+    except Exception:
+        return url
+
+
 def extract_price_from_html(html):
     """Extract a unit/item price from product-page HTML.
 

@@ -57,12 +57,12 @@
   var _popupHintDomains = [];
 
   function showVendorPopup(row, data) {
-    _popupRow = row;
+    closeVendorPopup();        // clear any existing popup BEFORE setting state
+    _popupRow = row;           // must come AFTER closeVendorPopup (which nulls _popupRow)
     _popupExtracted = data.extracted || null;
     _popupCandidates = data.fuzzy_candidates || [];
     _popupHintDomains = data.hint_domains || [];
     var hintDomains = _popupHintDomains;
-    closeVendorPopup();
 
     var overlay = document.createElement('div');
     overlay.className = 'vendor-overlay';
