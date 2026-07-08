@@ -21,7 +21,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.10.2"
+__version__ = "0.10.3"
 
 # ── Config ────────────────────────────────────────────────────────────────────
 def _load_config():
@@ -65,8 +65,17 @@ def _normalise_cost(raw):
 
 @app.context_processor
 def inject_globals():
+    # Domains of quote-storage providers (Dropbox, SharePoint, OneDrive …)
+    # derived from vendor_catalog.yaml so JS quoteProvider() stays in sync.
+    quote_domains = [
+        d
+        for entry in quotes._load_catalog().get("vendors", [])
+        if "quote_storage" in entry
+        for d in entry.get("domains", [])
+    ]
     return {"app_version": __version__,
-            "ms_auth": _CONFIG.get("auth_provider") == "microsoft"}
+            "ms_auth": _CONFIG.get("auth_provider") == "microsoft",
+            "quote_storage_domains": quote_domains}
 
 
 # ── Microsoft Entra ID (Azure AD) auth ───────────────────────────────────────
@@ -893,6 +902,18 @@ def api_link_vendor(oid):
     all_vendors = fetch_vendors(db)
     matched = next((v for v in all_vendors if v["domain"] == dom), None)
     if matched:
+        # Backfill name/address/phone from catalog when vendor was auto-created
+        # with the domain as placeholder name (e.g. "ebay.com" → "eBay").
+        cat = quotes.catalog_entry_for(dom)
+        if cat and matched["name"] == matched.get("domain"):
+            updates = {k: cat[k] for k in ("name", "address", "phone")
+                       if cat.get(k)}
+            if updates:
+                set_clause = ", ".join(f"{k}=?" for k in updates)
+                db.execute(f"UPDATE vendors SET {set_clause} WHERE id=?",
+                           list(updates.values()) + [matched["id"]])
+                db.commit()
+                matched = dict(matched, **updates)
         if order["vendor_id"] != matched["id"]:
             log_change(db, oid, "vendor_id", order["vendor_id"], matched["id"])
             db.execute("UPDATE orders SET vendor_id=? WHERE id=?",

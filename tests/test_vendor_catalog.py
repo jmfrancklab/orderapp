@@ -128,3 +128,49 @@ class TestCatalogPricePatterns:
         m = re.search(entry["price"]["part_from_url"], url)
         assert m is not None
         assert m.group(1) == "726888"
+
+
+# ── Quote-storage providers from catalog ─────────────────────────────────────
+
+class TestQuoteStorageCatalog:
+    def test_dropbox_has_quote_storage(self):
+        e = quotes.catalog_entry_for("dropbox.com")
+        assert e is not None
+        assert e.get("quote_storage", {}).get("provider") == "dropbox"
+
+    def test_sharepoint_has_quote_storage(self):
+        e = quotes.catalog_entry_for("sharepoint.com")
+        assert e is not None
+        assert e.get("quote_storage", {}).get("provider") == "sharepoint"
+
+    def test_onedrive_has_quote_storage(self):
+        e = quotes.catalog_entry_for("1drv.ms")
+        assert e is not None
+        assert e.get("quote_storage", {}).get("provider") == "onedrive"
+
+    def test_classify_link_dropbox(self):
+        assert quotes.classify_link("https://www.dropbox.com/s/abc123/quote.pdf?dl=0") == "dropbox"
+
+    def test_classify_link_sharepoint(self):
+        assert quotes.classify_link("https://acme.sharepoint.com/:b:/g/...") == "sharepoint"
+
+    def test_classify_link_onedrive(self):
+        assert quotes.classify_link("https://1drv.ms/b/s!abc") == "onedrive"
+
+    def test_classify_link_purchase_page_is_none(self):
+        assert quotes.classify_link("https://www.mouser.com/ProductDetail/x") is None
+
+    def test_classify_link_ebay_is_none(self):
+        assert quotes.classify_link("https://www.ebay.com/p/1701411334") is None
+
+    def test_login_hint_from_catalog(self):
+        hint = quotes._login_hint("dropbox")
+        assert "anyone with the link" in hint.lower()
+
+    def test_quote_storage_domains_list(self):
+        """All three quote-storage providers have domains in the catalog."""
+        entries = quotes._quote_storage_entries()
+        providers = {e["quote_storage"]["provider"] for e in entries}
+        assert "dropbox" in providers
+        assert "sharepoint" in providers
+        assert "onedrive" in providers

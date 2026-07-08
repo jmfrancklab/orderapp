@@ -118,15 +118,23 @@ class QuoteError(Exception):
 
 # ------------------------------------------------------------------ classify
 
+def _quote_storage_entries():
+    """Return catalog entries that have a quote_storage block."""
+    return [e for e in _load_catalog().get("vendors", []) if e.get("quote_storage")]
+
+
 def classify_link(url):
-    """Return 'dropbox', 'sharepoint', 'onedrive', or None (ordinary link)."""
+    """Return the quote-storage provider name ('dropbox', 'sharepoint', …) or None.
+
+    Provider mapping is read from vendor_catalog.yaml quote_storage entries so
+    new providers can be added without changing Python code.
+    """
     host = (urlparse(url if "://" in url else "https://" + url).hostname or "").lower()
-    if host.endswith("dropbox.com") or host.endswith("dropboxusercontent.com"):
-        return "dropbox"
-    if host.endswith("sharepoint.com"):
-        return "sharepoint"
-    if host == "1drv.ms" or host.endswith("onedrive.live.com"):
-        return "onedrive"
+    for entry in _quote_storage_entries():
+        for domain in entry.get("domains", []):
+            d = domain.lower()
+            if host == d or host.endswith("." + d):
+                return entry["quote_storage"]["provider"]
     return None
 
 
@@ -159,17 +167,15 @@ _DIRECT = {"dropbox": dropbox_direct,
            "sharepoint": sharepoint_direct,
            "onedrive": onedrive_direct}
 
-_LOGIN_HINT = {
-    "dropbox": ("Dropbox wouldn't hand over the file — the link may be "
-                "password-protected or restricted to invited people. Use a "
-                "'anyone with the link' share."),
-    "sharepoint": ("SharePoint asked for a Microsoft sign-in, so this share is "
-                   "restricted to the organization. Until Microsoft sign-in is "
-                   "wired into this app, use an 'Anyone with the link' share, "
-                   "or enter the vendor by hand."),
-    "onedrive": ("OneDrive wouldn't hand over the file — check that the link "
-                 "is shared with 'Anyone with the link'."),
-}
+
+def _login_hint(provider):
+    """Return the user-facing login-wall message for a quote-storage provider."""
+    for entry in _quote_storage_entries():
+        if entry["quote_storage"].get("provider") == provider:
+            hint = entry["quote_storage"].get("login_hint", "")
+            if hint:
+                return hint.strip()
+    return f"Could not access the {provider} link — check sharing permissions."
 
 
 def fetch_quote_pdf(url, provider):
@@ -183,7 +189,7 @@ def fetch_quote_pdf(url, provider):
         raise QuoteError(f"Couldn't reach {provider}: {e.__class__.__name__}")
     if r.status_code in (401, 403) or not r.content.startswith(b"%PDF"):
         # HTML instead of a PDF almost always means a login/permission wall.
-        raise QuoteError(_LOGIN_HINT[provider])
+        raise QuoteError(_login_hint(provider))
     if r.status_code != 200:
         raise QuoteError(f"{provider} returned HTTP {r.status_code} for the quote link.")
     return r.content

@@ -123,15 +123,53 @@ class TestEbayRecognition:
 def test_matched_after_vendor_added(client):
     """After creating Mouser in the DB, re-submitting the URL returns matched=True."""
     c, oid = client
-    # Create vendor
     r = c.post("/api/vendors",
                json={"name": "Mouser Electronics", "website": "mouser.com"},
                content_type="application/json")
     assert r.status_code == 200
     vid = r.get_json()["id"]
 
-    # Now link_vendor should find it
     data = link_vendor(client, "https://www.mouser.com/ProductDetail/Analog-Devices/DC2645A")
     assert data["matched"] is True
     assert data["vendor_id"] == vid
     assert data["vendor_name"] == "Mouser Electronics"
+
+
+# ── Catalog backfill: placeholder name replaced by catalog name ───────────────
+
+class TestBackfillFromCatalog:
+    """When vendor was auto-created with domain as name, api_link_vendor
+    must update the DB and return the catalog name."""
+
+    def _add_placeholder(self, client_tuple, name, website):
+        c, oid = client_tuple
+        r = c.post("/api/vendors",
+                   json={"name": name, "website": website},
+                   content_type="application/json")
+        assert r.status_code == 200
+        return r.get_json()["id"]
+
+    def test_ebay_placeholder_replaced(self, client):
+        """Vendor 'ebay.com' in DB → matched=True, vendor_name='eBay'."""
+        self._add_placeholder(client, "ebay.com", "ebay.com")
+        data = link_vendor(client, "https://www.ebay.com/p/1701411334")
+        assert data["matched"] is True
+        assert data["vendor_name"] == "eBay"
+
+    def test_ebay_db_name_updated(self, client):
+        """After backfill the DB row must have the catalog name, not 'ebay.com'."""
+        import sqlite3, app as app_module
+        conn = sqlite3.connect(app_module.DB_PATH)
+        row = conn.execute(
+            "SELECT name FROM vendors WHERE website='ebay.com'"
+        ).fetchone()
+        conn.close()
+        assert row is not None
+        assert row[0] == "eBay"
+
+    def test_mouser_placeholder_replaced(self, client):
+        """Vendor 'mouser.com' in DB → matched=True, vendor_name='Mouser Electronics'."""
+        self._add_placeholder(client, "mouser.com", "mouser.com")
+        data = link_vendor(client, "https://www.mouser.com/ProductDetail/Analog-Devices/DC2645A")
+        assert data["matched"] is True
+        assert data["vendor_name"] == "Mouser Electronics"

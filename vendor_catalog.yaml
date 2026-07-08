@@ -11,6 +11,38 @@
 
 vendors:
 
+  # ── Quote-storage providers (PDF quotes hosted here, not purchase pages) ─────
+
+  - id: dropbox
+    name: Dropbox
+    domains: [dropbox.com, dl.dropboxusercontent.com]
+    quote_storage:
+      provider: dropbox
+      login_hint: >
+        Dropbox wouldn't hand over the file — the link may be password-protected
+        or restricted to invited people. Use a 'anyone with the link' share.
+
+  - id: sharepoint
+    name: SharePoint
+    domains: [sharepoint.com]
+    quote_storage:
+      provider: sharepoint
+      login_hint: >
+        SharePoint asked for a Microsoft sign-in, so this share is restricted
+        to the organization. Until Microsoft sign-in is wired into this app,
+        use an 'Anyone with the link' share, or enter the vendor by hand.
+
+  - id: onedrive
+    name: OneDrive
+    domains: [1drv.ms, onedrive.live.com]
+    quote_storage:
+      provider: onedrive
+      login_hint: >
+        OneDrive wouldn't hand over the file — check that the link is shared
+        with 'Anyone with the link'.
+
+  # ── Purchase-page vendors ────────────────────────────────────────────────────
+
   - id: mouser
     name: Mouser Electronics
     domains: [mouser.com, mou.sr]

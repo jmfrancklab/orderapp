@@ -26,6 +26,7 @@
 <main>
 {% block content %}{% endblock %}
 </main>
+<script>var QUOTE_STORAGE_DOMAINS = {{ quote_storage_domains | tojson }};</script>
 <script src="{{ url_for('static', filename='app.js') }}" defer></script>
 </body>
 </html>

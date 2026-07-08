@@ -272,13 +272,15 @@
     } catch (e) { return ""; }
   }
 
-  /* Dropbox and SharePoint/OneDrive links are quotes, not purchase pages —
-     the server fetches the PDF and reads the vendor out of it. */
+  /* Quote-storage provider check — derived from QUOTE_STORAGE_DOMAINS injected
+     by base.html from vendor_catalog.yaml, so no hardcoding needed here. */
   function quoteProvider(host) {
-    if (host === "dropbox.com" || host.endsWith(".dropbox.com") ||
-        host.endsWith("dropboxusercontent.com")) return "dropbox";
-    if (host.endsWith("sharepoint.com")) return "sharepoint";
-    if (host === "1drv.ms" || host.endsWith("onedrive.live.com")) return "onedrive";
+    var domains = (typeof QUOTE_STORAGE_DOMAINS !== 'undefined')
+                  ? QUOTE_STORAGE_DOMAINS : [];
+    for (var i = 0; i < domains.length; i++) {
+      var d = domains[i].toLowerCase();
+      if (host === d || host.endsWith('.' + d)) return d;
+    }
     return null;
   }
 
@@ -345,7 +347,7 @@
              setCostInput(row, data.price);
              rowNote(row, "price: $" + data.price);
            } else {
-             rowNote(row, "");
+             rowNote(row, "price not found — enter manually");
            }
          });
   }
