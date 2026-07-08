@@ -21,7 +21,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.10.0"
+__version__ = "0.10.1"
 
 # ── Config ────────────────────────────────────────────────────────────────────
 def _load_config():
@@ -901,13 +901,17 @@ def api_link_vendor(oid):
         return jsonify(matched=True, vendor_id=matched["id"],
                        vendor_name=matched["name"], incomplete=matched["incomplete"])
 
-    # Not in DB — try to extract contact info from the vendor's homepage
-    extracted = {"name": dom, "address": "", "phone": "", "website": dom}
-    for homepage in (f"https://www.{dom}", f"https://{dom}"):
-        html = quotes.fetch_html(homepage)
-        if html:
-            extracted = quotes.extract_vendor_from_html(html, dom)
-            break
+    # Not in DB — get contact info.
+    # extract_vendor_from_html checks vendor_catalog.yaml first, so known
+    # vendors (Mouser, DigiKey, …) return instantly without any HTTP fetch.
+    # For unknown vendors we try the homepage for JSON-LD Organisation data.
+    html = None
+    if not quotes.catalog_entry_for(dom):
+        for homepage in (f"https://www.{dom}", f"https://{dom}"):
+            html = quotes.fetch_html(homepage)
+            if html:
+                break
+    extracted = quotes.extract_vendor_from_html(html or "", dom)
 
     fuzzy = []
     if extracted.get("name") and extracted["name"] != dom:

@@ -79,6 +79,9 @@ vendors:
   - id: ebay
     name: eBay
     domains: [ebay.com, ebay.co.uk, ebay.ca]
+    address: "2025 Hamilton Avenue, San Jose, CA 95125"
+    phone: "866-540-3229"
+    website: ebay.com
     price:
       extra_patterns:
         - '"price"\s*:\s*"?([\d.]+)"?'
