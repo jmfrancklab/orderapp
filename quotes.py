@@ -16,11 +16,100 @@ separate throughout:
 import base64
 import difflib
 import io
+import os
 import re
 from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
 
 import requests
 from pypdf import PdfReader
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+
+# ------------------------------------------------------------------ vendor catalog
+
+_catalog_cache = None
+
+
+def _load_catalog():
+    global _catalog_cache
+    if _catalog_cache is None:
+        path = os.path.join(_HERE, "vendor_catalog.yaml")
+        try:
+            import yaml
+            with open(path) as f:
+                _catalog_cache = yaml.safe_load(f) or {}
+        except Exception:
+            _catalog_cache = {}
+    return _catalog_cache
+
+
+def catalog_entry_for(domain):
+    """Return the vendor_catalog.yaml entry whose domains list contains *domain*."""
+    domain = (domain or "").lower()
+    for entry in _load_catalog().get("vendors", []):
+        if domain in [d.lower() for d in entry.get("domains", [])]:
+            return entry
+    return None
+
+
+# ------------------------------------------------------------------ API price handlers
+
+def _mouser_api_price(part_number, api_key):
+    """Mouser Search API v2 — returns unit price string or None."""
+    try:
+        r = requests.post(
+            "https://api.mouser.com/api/v2/search/partnumber",
+            params={"apiKey": api_key},
+            json={"SearchByPartRequest": {
+                "mouserPartNumber": part_number,
+                "partSearchOptions": "1",
+            }},
+            timeout=10,
+        )
+        if r.status_code != 200:
+            return None
+        for part in (r.json().get("SearchResults") or {}).get("Parts") or []:
+            breaks = part.get("PriceBreaks") or []
+            if breaks:
+                return _clean_price(breaks[0].get("Price", ""))
+    except Exception:
+        pass
+    return None
+
+
+def _digikey_api_price(catalog_id, client_id, client_secret):
+    """DigiKey Product Search API v4 (OAuth2 client credentials) — returns price or None."""
+    try:
+        tok = requests.post(
+            "https://api.digikey.com/v1/oauth2/token",
+            data={"grant_type": "client_credentials",
+                  "client_id": client_id,
+                  "client_secret": client_secret},
+            timeout=10,
+        )
+        if tok.status_code != 200:
+            return None
+        token = tok.json().get("access_token")
+        if not token:
+            return None
+        r = requests.get(
+            f"https://api.digikey.com/products/v4/search/{catalog_id}/pricing",
+            headers={"Authorization": f"Bearer {token}",
+                     "X-DIGIKEY-Client-Id": client_id,
+                     "X-DIGIKEY-Locale-Site": "US",
+                     "X-DIGIKEY-Locale-Language": "en",
+                     "X-DIGIKEY-Locale-Currency": "USD"},
+            timeout=10,
+        )
+        if r.status_code != 200:
+            return None
+        for row in r.json().get("StandardPricing") or []:
+            p = _clean_price(str(row.get("UnitPrice", "")))
+            if p:
+                return p
+    except Exception:
+        pass
+    return None
 
 
 class QuoteError(Exception):
@@ -438,11 +527,11 @@ def resolve_redirect(url, timeout=10):
         return url
 
 
-def extract_price_from_html(html):
+def extract_price_from_html(html, catalog_entry=None):
     """Extract a unit/item price from product-page HTML.
 
     Tries in order: JSON-LD Product/Offer schema, Open Graph price meta,
-    DigiKey unitPrice, Amazon priceAmount, generic text patterns.
+    DigiKey unitPrice, Amazon priceAmount, catalog extra_patterns, generic text.
     Returns a price string like '12.34', or None.
     """
     import json as _json
@@ -483,7 +572,16 @@ def extract_price_from_html(html):
         if p:
             return p
 
-    # 5. Generic: dollar amount near price-related text
+    # 5. Catalog vendor-specific extra patterns
+    if catalog_entry:
+        for pat in (catalog_entry.get("price") or {}).get("extra_patterns") or []:
+            m = re.search(pat, html)
+            if m:
+                p = _clean_price(m.group(1))
+                if p:
+                    return p
+
+    # 6. Generic: dollar amount near price-related text
     text = re.sub(r'<[^>]+>', ' ', html)
     m = re.search(
         r'(?:unit\s+price|price\s+each|your\s+price|item\s+price|list\s+price)'
@@ -544,10 +642,20 @@ def _find_organization_in_jsonld(data):
 def extract_vendor_from_html(html, domain):
     """Extract vendor contact info from a webpage HTML string.
 
-    Tries JSON-LD Organization schema first, then address-block regex on
-    visible text.  Always returns a dict with keys: name, address, phone,
-    website (falling back to the domain when nothing is found).
+    Checks vendor_catalog.yaml first (static, always accurate), then tries
+    JSON-LD Organization schema, then address-block regex on visible text.
+    Always returns a dict with keys: name, address, phone, website.
     """
+    # Catalog static data — fastest and most reliable
+    entry = catalog_entry_for(domain)
+    if entry and (entry.get("name") or entry.get("address")):
+        return {
+            "name":    entry.get("name", domain),
+            "address": entry.get("address", ""),
+            "phone":   entry.get("phone", ""),
+            "website": entry.get("website", domain),
+        }
+
     import json as _json
     for m in re.finditer(
             _JSONLD_RE, html):
@@ -575,11 +683,42 @@ def extract_vendor_from_html(html, domain):
 
 
 def fetch_item_price(url):
-    """Fetch a product-page URL and return the unit price, or None."""
+    """Fetch a product-page URL and return the unit price, or None.
+
+    Tries vendor API (if key configured) before falling back to HTML scraping.
+    """
+    # Identify vendor from URL domain
+    host = (urlparse(url).hostname or "").lower()
+    host = re.sub(r'^www\.', '', host)
+    entry = catalog_entry_for(host)
+
+    # API-based pricing (reliable, bypasses bot detection)
+    if entry:
+        price_cfg = entry.get("price") or {}
+        handler = price_cfg.get("api_handler")
+        part_pat = price_cfg.get("part_from_url", "")
+        part_m = re.search(part_pat, url) if part_pat else None
+
+        if handler == "mouser" and part_m:
+            key = os.environ.get(price_cfg.get("api_key_env", ""), "")
+            if key:
+                p = _mouser_api_price(part_m.group(1), key)
+                if p:
+                    return p
+
+        elif handler == "digikey" and part_m:
+            cid = os.environ.get(price_cfg.get("client_id_env", ""), "")
+            sec = os.environ.get(price_cfg.get("client_secret_env", ""), "")
+            if cid and sec:
+                p = _digikey_api_price(part_m.group(1), cid, sec)
+                if p:
+                    return p
+
+    # HTML scraping fallback
     html = fetch_html(url)
     if html is None:
         return None
-    return extract_price_from_html(html)
+    return extract_price_from_html(html, entry)
 
 
 def fuzzy_match_vendors(name, vendors, n=3, cutoff=0.45):

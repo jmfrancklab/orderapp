@@ -1,0 +1,84 @@
+# ACERT ordering — vendor catalog
+# Edit this file to add vendors, update contact info, or tune price extraction.
+# API keys belong in environment variables (the WSGI file on PythonAnywhere),
+# never here.  This file is committed to the repo.
+#
+# price block keys:
+#   api_handler   — named handler in quotes.py (mouser | digikey)
+#   api_key_env   — env var name holding the API key
+#   part_from_url — regex (first capture group = part/catalog number in the URL)
+#   extra_patterns— additional regexes tried after JSON-LD (first capture = price)
+
+vendors:
+
+  - id: mouser
+    name: Mouser Electronics
+    domains: [mouser.com, mou.sr]
+    address: "1000 North Main Street, Mansfield, TX 76063"
+    phone: "800-346-6873"
+    website: mouser.com
+    price:
+      api_handler: mouser
+      api_key_env: MOUSER_API_KEY          # free key at developer.mouser.com
+      part_from_url: '/ProductDetail/[^/]+/([A-Za-z0-9._-]+)'
+
+  - id: digikey
+    name: DigiKey Electronics
+    domains: [digikey.com]
+    address: "701 Brooks Ave S, Thief River Falls, MN 56701"
+    phone: "800-344-4539"
+    website: digikey.com
+    price:
+      api_handler: digikey
+      client_id_env: DIGIKEY_CLIENT_ID     # free at developer.digikey.com
+      client_secret_env: DIGIKEY_CLIENT_SECRET
+      # DigiKey catalog ID is the trailing integer in the product URL
+      part_from_url: '/en/products/detail/[^/]+/[^/]+/(\d+)'
+
+  - id: fisher
+    name: Thermo Fisher Scientific
+    domains: [fishersci.com, thermofisher.com, fisherscientific.com]
+    address: "168 Third Avenue, Waltham, MA 02451"
+    phone: "800-766-7000"
+    website: fishersci.com
+    price:
+      extra_patterns:
+        - '"price"\s*:\s*([0-9]+\.?[0-9]*)'
+        - 'data-analytics-product-price=["\x27]([0-9.]+)["\x27]'
+
+  - id: amazon
+    name: Amazon
+    domains: [amazon.com, amzn.to, a.co]
+    price:
+      extra_patterns:
+        - '"priceAmount"\s*:\s*"?([\d.]+)"?'
+        - '"buyingPrice"\s*:\s*([\d.]+)'
+
+  - id: trc
+    name: Toronto Research Chemicals
+    domains: [trc-canada.com]
+    address: "2 Brisbane Road, Toronto, ON M3J 2J8, Canada"
+    phone: "416-665-9696"
+    website: trc-canada.com
+    price:
+      extra_patterns:
+        - '"price"\s*:\s*"?([\d.]+)"?'
+        - 'id=["\x27]ctl00_ContentPlaceHolder1_price["\x27][^>]*>\s*\$\s*([\d,]+\.?\d*)'
+
+  - id: sigma
+    name: MilliporeSigma
+    domains: [sigmaaldrich.com, sigma-aldrich.com, emdmillipore.com, merckmillipore.com]
+    address: "3050 Spruce Street, St. Louis, MO 63103"
+    phone: "800-325-3010"
+    website: sigmaaldrich.com
+    price:
+      extra_patterns:
+        - '"price"\s*:\s*"?([\d.]+)"?'
+        - 'data-price=["\x27]([0-9.]+)["\x27]'
+
+  - id: ebay
+    name: eBay
+    domains: [ebay.com, ebay.co.uk, ebay.ca]
+    price:
+      extra_patterns:
+        - '"price"\s*:\s*"?([\d.]+)"?'
