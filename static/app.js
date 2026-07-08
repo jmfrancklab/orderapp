@@ -384,22 +384,29 @@
 
     fetchPrice(linkInput);   // always try to fill price
 
-    if (!select || select.value) return;   // vendor already chosen
+    if (!select) return;
 
-    // Fast path: domain matches a known vendor in the dropdown
+    // Fast path: domain matches a vendor already in the dropdown.
+    // Always show a note, even if that vendor is already selected.
     var localMatch = false;
     for (var i = 0; i < select.options.length; i++) {
       var d = select.options[i].dataset.domain;
       if (d && (host === d || host.endsWith("." + d))) {
-        select.value = select.options[i].value;
-        updateFlag(select);
-        saveField(select);
+        if (!select.value) {
+          select.value = select.options[i].value;
+          updateFlag(select);
+          saveField(select);
+        }
+        rowNote(row, "vendor: " + select.options[i].textContent.trim());
         localMatch = true;
         break;
       }
     }
 
-    // Slow path: ask server to identify vendor from homepage
+    // If vendor was manually chosen for a non-matching URL, leave it alone.
+    if (!localMatch && select.value) return;
+
+    // Slow path: ask server to identify vendor from homepage / catalog.
     if (!localMatch) {
       linkVendor(linkInput, row);
     }
