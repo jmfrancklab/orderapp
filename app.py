@@ -21,7 +21,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.10.4"
+__version__ = "0.10.5"
 
 # ── Config ────────────────────────────────────────────────────────────────────
 def _load_config():
@@ -38,6 +38,11 @@ app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 # CHANGE THIS before deploying (any long random string):
 app.secret_key = os.environ.get("ORDERAPP_SECRET", "dev-secret-change-me")
+# SameSite=None lets the bookmarklet send the session cookie in cross-site
+# POST requests (mouser.com → our server).  Secure=True is required with
+# SameSite=None; PythonAnywhere serves over HTTPS so this is always set.
+app.config["SESSION_COOKIE_SAMESITE"] = "None"
+app.config["SESSION_COOKIE_SECURE"] = True
 
 
 @app.template_filter('fmt_cost')
@@ -95,10 +100,16 @@ _BOOKMARKLET = (
     r"});}"
     r"catch(e){}});"
     r"if(!price){"
-    r"['.pd-price','[itemprop=\"price\"]','.price','#priceblock_ourprice'].some(function(sel){"
+    r"['.pd-price','[itemprop=\"price\"]','.price','#priceblock_ourprice',"
+    r"'.a-price .a-offscreen','span[data-a-color=\"price\"] .a-offscreen',"
+    r"'.priceToPay .a-offscreen'].some(function(sel){"
     r"var el=document.querySelector(sel);"
     r"if(el){var m=(el.textContent||el.getAttribute('content')||'').match(/([\d,]+\.\d{2})/);"
     r"if(m){price=m[1].replace(/,/g,'');return true;}}});}"
+    r"if(!price){"
+    r"var w=document.querySelector('.a-price-whole');"
+    r"var f=document.querySelector('.a-price-fraction');"
+    r"if(w&&f)price=(w.textContent.replace(/[^0-9]/g,''))+'.'+(f.textContent.replace(/[^0-9]/g,''));}"
     r"if(!desc)desc=document.title||'';"
     r"if(!website)website=window.location.hostname;"
     r"var div=document.createElement('div');"
@@ -111,12 +122,16 @@ _BOOKMARKLET = (
     r"headers:{'Content-Type':'application/json'},credentials:'include',"
     r"body:JSON.stringify({url:url,price:price,description:desc,"
     r"vendor_name:vname,address:addr,phone:phone,website:website})})"
-    r".then(function(r){return r.json();})"
-    r".then(function(){div.textContent=price?'✓ Captured: $'+price:'✓ Captured!';"
+    r".then(function(r){"
+    r"if(!r.ok)throw new Error('HTTP '+r.status+' — open ACERT and sign in first');"
+    r"return r.json();})"
+    r".then(function(d){"
+    r"if(!d.ok)throw new Error(d.error||'server error');"
+    r"div.textContent=price?'✓ Captured: $'+price:'✓ Captured!';"
     r"setTimeout(function(){div.remove();},1800);})"
-    r".catch(function(){div.style.background='#c0392b';"
-    r"div.textContent='✗ Not captured — are you signed in to ACERT?';"
-    r"setTimeout(function(){div.remove();},3000);});"
+    r".catch(function(e){div.style.background='#c0392b';"
+    r"div.textContent='✗ '+(e.message||'Not captured — sign in to ACERT first');"
+    r"setTimeout(function(){div.remove();},4000);});"
     r"})()"
 )
 
