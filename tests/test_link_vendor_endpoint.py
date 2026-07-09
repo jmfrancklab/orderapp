@@ -173,3 +173,82 @@ class TestBackfillFromCatalog:
         data = link_vendor(client, "https://www.mouser.com/ProductDetail/Analog-Devices/DC2645A")
         assert data["matched"] is True
         assert data["vendor_name"] == "Mouser Electronics"
+
+
+# ── Bookmarklet capture endpoints ─────────────────────────────────────────────
+
+class TestBookmarkletCapture:
+    CAPTURE = {
+        "url": "https://www.mouser.com/ProductDetail/Analog-Devices/DC2645A",
+        "price": "49.59",
+        "description": "DC2645A — LTC2664 Demo Board",
+        "vendor_name": "Mouser Electronics",
+        "address": "1000 North Main Street, Mansfield, TX 76063",
+        "phone": "800-346-6873",
+        "website": "mouser.com",
+    }
+
+    def test_capture_stored_and_retrieved(self, client):
+        c, oid = client
+        # POST from bookmarklet (simulated cross-origin)
+        r = c.post("/api/bookmarklet/capture",
+                   json=self.CAPTURE, content_type="application/json",
+                   headers={"Origin": "https://www.mouser.com"})
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+        # GET from our app — should return and clear the capture
+        r2 = c.get("/api/captures")
+        data = r2.get_json()
+        assert len(data["items"]) >= 1
+        urls = [i["url"] for i in data["items"]]
+        assert self.CAPTURE["url"] in urls
+
+    def test_capture_cleared_after_get(self, client):
+        c, _ = client
+        r = c.get("/api/captures")
+        assert r.get_json()["items"] == []   # should be empty now
+
+    def test_cors_headers_present(self, client):
+        c, _ = client
+        r = c.post("/api/bookmarklet/capture",
+                   json=self.CAPTURE, content_type="application/json",
+                   headers={"Origin": "https://www.mouser.com"})
+        assert "Access-Control-Allow-Origin" in r.headers
+        assert "Access-Control-Allow-Credentials" in r.headers
+
+    def test_cors_preflight(self, client):
+        c, _ = client
+        r = c.options("/api/bookmarklet/capture",
+                      headers={"Origin": "https://www.mouser.com"})
+        assert r.status_code == 200
+        assert "Access-Control-Allow-Origin" in r.headers
+
+
+class TestOrderFromCapture:
+    def test_creates_populated_row(self, client):
+        c, _ = client
+        capture = {
+            "url": "https://www.mouser.com/ProductDetail/TI/SN74HC00N",
+            "price": "0.52",
+            "description": "SN74HC00N Quad NAND Gate",
+            "vendor_name": "Mouser Electronics",
+            "website": "mouser.com",
+        }
+        r = c.post("/api/orders/from_capture",
+                   json=capture, content_type="application/json")
+        assert r.status_code == 200
+        d = r.get_json()
+        assert d["ok"] is True
+        assert d["order_id"] > 0
+
+    def test_row_has_correct_cost(self, client):
+        import sqlite3, app as app_module
+        conn = sqlite3.connect(app_module.DB_PATH)
+        rows = conn.execute(
+            "SELECT cost, description FROM orders WHERE link LIKE '%SN74HC00N%'"
+        ).fetchall()
+        conn.close()
+        assert len(rows) >= 1
+        assert rows[0][0] == "0.52"
+        assert "SN74HC00N" in rows[0][1]

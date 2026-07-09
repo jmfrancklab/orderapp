@@ -37,7 +37,7 @@ PythonAnywhere (shared hosting). Constraints that matter:
 |---|---|
 | `app.py` | Flask backend — all routes, DB schema, auth |
 | `quotes.py` | PDF parsing, price extraction, vendor detection |
-| `vendor_catalog.yaml` | Vendor domains, contact info, price-extraction config |
+| `vendor_catalog.toml` | Vendor domains, contact info, price-extraction config |
 | `config.toml` | Runtime config (`auth_provider`, `microsoft.allowed_domains`) |
 | `add_user.py` | Console script to seed the first allowed user |
 | `danger_reset_database.py` | Wipe DB (with confirmation) |

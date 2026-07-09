@@ -21,7 +21,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.10.3"
+__version__ = "0.10.4"
 
 # ── Config ────────────────────────────────────────────────────────────────────
 def _load_config():
@@ -63,6 +63,168 @@ def _normalise_cost(raw):
         return s
 
 
+# ── Bookmarklet ───────────────────────────────────────────────────────────────
+
+# Minified bookmarklet — __CAPTURE_URL__ is substituted with the real endpoint
+# URL at render time inside inject_globals().
+_BOOKMARKLET = (
+    r"(function(){"
+    r"var url=window.location.href;"
+    r"var c=document.querySelector('link[rel=\"canonical\"]');"
+    r"if(c&&c.href)url=c.href;"
+    r"else{var o=document.querySelector('meta[property=\"og:url\"]');"
+    r"if(o&&o.content)url=o.content;}"
+    r"var price=null,desc=null,vname=null,addr=null,phone=null,website=null;"
+    r"[].forEach.call(document.querySelectorAll('[type=\"application/ld+json\"]'),function(s){"
+    r"try{var d=JSON.parse(s.textContent);"
+    r"(Array.isArray(d)?d:[d]).forEach(function(item){"
+    r"var t=(item['@type']||'').toString();"
+    r"if(/Product/.test(t)){"
+    r"if(!desc)desc=item.name||null;"
+    r"var o=item.offers;if(Array.isArray(o))o=o.filter(function(x){return x&&x.price;})[0];"
+    r"if(o&&o.price&&!price)price=String(o.price);"
+    r"if(item.brand&&item.brand.name&&!vname)vname=item.brand.name;}"
+    r"if(/Organization|LocalBusiness|Corporation/.test(t)){"
+    r"if(!vname&&item.name)vname=item.name;"
+    r"if(!phone&&item.telephone)phone=item.telephone;"
+    r"if(!website&&item.url)website=item.url;"
+    r"var a=item.address;"
+    r"if(a&&typeof a==='object'&&!addr){"
+    r"addr=[a.streetAddress,[a.addressLocality,a.addressRegion,a.postalCode]"
+    r".filter(Boolean).join(', ')].filter(Boolean).join(', ');}}"
+    r"});}"
+    r"catch(e){}});"
+    r"if(!price){"
+    r"['.pd-price','[itemprop=\"price\"]','.price','#priceblock_ourprice'].some(function(sel){"
+    r"var el=document.querySelector(sel);"
+    r"if(el){var m=(el.textContent||el.getAttribute('content')||'').match(/([\d,]+\.\d{2})/);"
+    r"if(m){price=m[1].replace(/,/g,'');return true;}}});}"
+    r"if(!desc)desc=document.title||'';"
+    r"if(!website)website=window.location.hostname;"
+    r"var div=document.createElement('div');"
+    r"div.style.cssText='position:fixed;top:10px;right:10px;background:#0e6e6b;color:#fff;"
+    r"padding:12px 18px;border-radius:4px;font:600 14px system-ui;z-index:99999;"
+    r"box-shadow:0 4px 12px rgba(0,0,0,.3);';"
+    r"div.textContent='⏳ Sending to ACERT…';"
+    r"document.body.appendChild(div);"
+    r"fetch('__CAPTURE_URL__',{method:'POST',"
+    r"headers:{'Content-Type':'application/json'},credentials:'include',"
+    r"body:JSON.stringify({url:url,price:price,description:desc,"
+    r"vendor_name:vname,address:addr,phone:phone,website:website})})"
+    r".then(function(r){return r.json();})"
+    r".then(function(){div.textContent=price?'✓ Captured: $'+price:'✓ Captured!';"
+    r"setTimeout(function(){div.remove();},1800);})"
+    r".catch(function(){div.style.background='#c0392b';"
+    r"div.textContent='✗ Not captured — are you signed in to ACERT?';"
+    r"setTimeout(function(){div.remove();},3000);});"
+    r"})()"
+)
+
+# In-memory capture store: email → list of capture dicts from the bookmarklet.
+# Cleared when the orders page reads them. Intentionally not persisted —
+# captures are ephemeral helpers for the current browser session.
+_capture_store: dict = {}
+
+
+def _cors_resp(resp):
+    """Add CORS headers that allow credentialed cross-origin requests."""
+    origin = request.headers.get("Origin", "")
+    resp.headers["Access-Control-Allow-Origin"] = origin or "*"
+    resp.headers["Access-Control-Allow-Credentials"] = "true"
+    return resp
+
+
+@app.route("/api/bookmarklet/capture", methods=["POST", "OPTIONS"])
+def api_bookmarklet_capture():
+    """Receive a product capture from the browser bookmarklet (cross-origin)."""
+    if request.method == "OPTIONS":
+        r = app.make_default_options_response()
+        r.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        return _cors_resp(r)
+    if not current_user():
+        return _cors_resp(jsonify(error="not logged in — open ACERT in another tab first")), 401
+    data = request.get_json(silent=True) or {}
+    if not data.get("url"):
+        return _cors_resp(jsonify(error="url required")), 400
+    _capture_store.setdefault(current_user(), []).append(data)
+    return _cors_resp(jsonify(ok=True, queued=len(_capture_store[current_user()])))
+
+
+@app.route("/api/captures")
+def api_captures():
+    """Return and clear all pending bookmarklet captures for the current user."""
+    if not current_user():
+        return jsonify(error="not logged in"), 401
+    items = _capture_store.pop(current_user(), [])
+    return jsonify(items=items)
+
+
+@app.route("/api/orders/from_capture", methods=["POST"])
+def api_order_from_capture():
+    """Create a fully-populated draft order row from a bookmarklet capture."""
+    if not current_user():
+        return jsonify(error="not logged in"), 401
+    db = get_db()
+    email = current_user()
+    data = request.get_json(silent=True) or {}
+
+    # Inherit project from the user's most recent draft (same as + button)
+    last = db.execute(
+        "SELECT project_id FROM orders WHERE user_email=? AND status='draft'"
+        " ORDER BY id DESC LIMIT 1", (email,)).fetchone()
+    project_id = last["project_id"] if last else None
+
+    # Resolve vendor: prefer existing DB entry by domain, else create from capture
+    link = data.get("url", "")
+    dom = domain_of(link)
+    vendor_id = None
+    if dom:
+        all_v = fetch_vendors(db)
+        matched = next((v for v in all_v if v["domain"] == dom), None)
+        if matched:
+            vendor_id = matched["id"]
+            # Backfill placeholder name with catalog / capture data
+            cat = quotes.catalog_entry_for(dom)
+            want_name = (cat or {}).get("name") or data.get("vendor_name") or ""
+            if want_name and matched["name"] == matched.get("domain"):
+                updates = {}
+                if want_name: updates["name"] = want_name
+                for k in ("address", "phone"):
+                    src = (cat or {}).get(k) or data.get(k, "")
+                    if src and not matched.get(k):
+                        updates[k] = src
+                if updates:
+                    set_cl = ", ".join(f"{k}=?" for k in updates)
+                    db.execute(f"UPDATE vendors SET {set_cl} WHERE id=?",
+                               list(updates.values()) + [vendor_id])
+        elif data.get("vendor_name"):
+            cat = quotes.catalog_entry_for(dom)
+            vname   = (cat or {}).get("name") or data["vendor_name"]
+            vaddr   = (cat or {}).get("address") or data.get("address", "")
+            vphone  = (cat or {}).get("phone") or data.get("phone", "")
+            vsite   = (cat or {}).get("website") or data.get("website") or dom
+            cur = db.execute(
+                "INSERT OR IGNORE INTO vendors"
+                " (name, address, website, phone, tax_exempt_filed) VALUES (?,?,?,?,0)",
+                (vname, vaddr, vsite, vphone))
+            if cur.lastrowid:
+                vendor_id = cur.lastrowid
+            else:
+                row = db.execute("SELECT id FROM vendors WHERE name=?",
+                                 (vname,)).fetchone()
+                vendor_id = row["id"] if row else None
+
+    cost = _normalise_cost(data.get("price", ""))
+    desc = (data.get("description") or "")[:200].strip()
+
+    cur = db.execute(
+        "INSERT INTO orders (user_email, description, link, vendor_id, project_id, cost)"
+        " VALUES (?,?,?,?,?,?)",
+        (email, desc, link, vendor_id, project_id, cost))
+    db.commit()
+    return jsonify(ok=True, order_id=cur.lastrowid)
+
+
 @app.context_processor
 def inject_globals():
     # Domains of quote-storage providers (Dropbox, SharePoint, OneDrive …)
@@ -73,9 +235,17 @@ def inject_globals():
         if "quote_storage" in entry
         for d in entry.get("domains", [])
     ]
+    # Bookmarklet JS — URL injected at render time so it points to this server
+    try:
+        bm_api = url_for("api_bookmarklet_capture", _external=True)
+    except RuntimeError:
+        bm_api = ""
+    from urllib.parse import quote as _urlquote
+    bookmarklet = "javascript:" + _urlquote(_BOOKMARKLET.replace("__CAPTURE_URL__", bm_api))
     return {"app_version": __version__,
             "ms_auth": _CONFIG.get("auth_provider") == "microsoft",
-            "quote_storage_domains": quote_domains}
+            "quote_storage_domains": quote_domains,
+            "bookmarklet": bookmarklet}
 
 
 # ── Microsoft Entra ID (Azure AD) auth ───────────────────────────────────────

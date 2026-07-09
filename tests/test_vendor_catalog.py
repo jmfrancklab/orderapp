@@ -1,4 +1,4 @@
-"""Tests for vendor_catalog.yaml loading and catalog-driven extraction.
+"""Tests for vendor_catalog.toml loading and catalog-driven extraction.
 
 All tests run offline — no HTTP required.
 """
@@ -174,3 +174,19 @@ class TestQuoteStorageCatalog:
         assert "dropbox" in providers
         assert "sharepoint" in providers
         assert "onedrive" in providers
+
+
+# ── Resilience: missing catalog file ─────────────────────────────────────────
+
+def test_catalog_missing_file_graceful():
+    """A missing toml file returns {} without raising — catalog disabled silently."""
+    orig = quotes._HERE
+    quotes._catalog_cache = None   # reset so it tries to reload
+    quotes._HERE = "/nonexistent/path/xyz"
+    try:
+        result = quotes._load_catalog()
+        assert result == {}
+        assert quotes.catalog_entry_for("mouser.com") is None
+    finally:
+        quotes._HERE = orig
+        quotes._catalog_cache = None   # reload real catalog for subsequent tests

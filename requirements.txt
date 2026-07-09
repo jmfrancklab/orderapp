@@ -4,4 +4,4 @@ pypdf>=4.0
 msal>=1.28
 openpyxl>=3.1
 curl-cffi>=0.5   # Chrome TLS impersonation for sites that block plain requests
-pyyaml>=6.0      # vendor_catalog.yaml loading
+# pyyaml removed — vendor catalog now uses vendor_catalog.toml (stdlib tomllib)

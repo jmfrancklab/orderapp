@@ -268,6 +268,22 @@ input[data-field="link"] { font-family: var(--mono); font-size: .8rem; }
 .hist-new     { color: var(--ink); font-weight: 600; }
 .hist-deleted { font-style: italic; color: var(--alert); font-weight: 400; }
 
+/* ------------------------------------------------- bookmarklet bar */
+.bookmarklet-bar {
+  display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+  padding: .55rem 1rem; margin-bottom: 1rem;
+  background: var(--accent-soft); border: 1px solid var(--accent);
+  border-radius: 3px;
+}
+.bookmarklet-link {
+  display: inline-block; padding: .35rem .9rem;
+  background: var(--accent); color: #fff; text-decoration: none;
+  border-radius: 3px; font-weight: 600; font-size: .88rem;
+  cursor: grab; white-space: nowrap; flex: none;
+}
+.bookmarklet-link:hover { background: #0a5a58; }
+.bookmarklet-hint { font-size: .8rem; color: #4b5563; }
+
 /* ------------------------------------------------- section subheadings */
 .ref-section {
   font-size: .8rem; text-transform: uppercase; letter-spacing: .1em;

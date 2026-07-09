@@ -498,4 +498,37 @@
 
   /* initialise flags on load */
   document.querySelectorAll(".vendor-select").forEach(updateFlag);
+
+  /* --- bookmarklet capture polling ---------------------------------------- */
+
+  var _lastCapCheck = 0;
+
+  function checkCaptures() {
+    // Only on the orders page; debounce to at most once per 3 s
+    if (!document.querySelector(".sheet")) return;
+    var now = Date.now();
+    if (now - _lastCapCheck < 3000) return;
+    _lastCapCheck = now;
+
+    fetch("/api/captures")
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.items || !d.items.length) return;
+        var remaining = d.items.length;
+        d.items.forEach(function (item) {
+          fetch("/api/orders/from_capture", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(item)
+          }).then(function () {
+            remaining--;
+            if (remaining === 0) location.reload();
+          });
+        });
+      });
+  }
+
+  checkCaptures();
+  window.addEventListener("focus", checkCaptures);
+
 })();

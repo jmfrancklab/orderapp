@@ -33,13 +33,19 @@ _catalog_cache = None
 def _load_catalog():
     global _catalog_cache
     if _catalog_cache is None:
-        path = os.path.join(_HERE, "vendor_catalog.yaml")
+        import tomllib  # stdlib since Python 3.11 — no extra install needed
+        path = os.path.join(_HERE, "vendor_catalog.toml")
         try:
-            import yaml
-            with open(path) as f:
-                _catalog_cache = yaml.safe_load(f) or {}
-        except Exception:
+            with open(path, "rb") as f:
+                _catalog_cache = tomllib.load(f)
+            n = len(_catalog_cache.get("vendors", []))
+            print(f"[catalog] loaded {n} vendors from {path}", flush=True)
+        except FileNotFoundError:
             _catalog_cache = {}
+            print(f"[catalog] WARNING: {path} not found — vendor catalog disabled", flush=True)
+        except Exception as e:
+            _catalog_cache = {}
+            print(f"[catalog] WARNING: catalog load failed: {e}", flush=True)
     return _catalog_cache
 
 
