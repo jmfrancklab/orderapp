@@ -645,6 +645,42 @@ def index():
     return redirect(url_for("orders"))
 
 
+@app.route("/debug/health")
+def debug_health():
+    """Diagnostic endpoint — returns JSON showing what works and what doesn't.
+    Remove this route once the production issue is resolved."""
+    import traceback as _tb
+    result = {"version": __version__, "ok": True, "checks": {}}
+
+    # 1. DB connection + schema
+    try:
+        db = get_db()
+        cols = {row[1] for row in db.execute("PRAGMA table_info(orders)")}
+        result["checks"]["db_orders_cols"] = sorted(cols)
+    except Exception:
+        result["ok"] = False
+        result["checks"]["db_error"] = _tb.format_exc()
+
+    # 2. Catalog
+    try:
+        cat = quotes._load_catalog()
+        result["checks"]["catalog_vendors"] = len(cat.get("vendors", []))
+    except Exception:
+        result["ok"] = False
+        result["checks"]["catalog_error"] = _tb.format_exc()
+
+    # 3. inject_globals
+    try:
+        with app.test_request_context("/"):
+            ig = inject_globals()
+        result["checks"]["inject_globals_keys"] = list(ig.keys())
+    except Exception:
+        result["ok"] = False
+        result["checks"]["inject_globals_error"] = _tb.format_exc()
+
+    return jsonify(result)
+
+
 @app.route("/orders")
 @login_required
 def orders():
