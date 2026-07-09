@@ -21,7 +21,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.10.5"
+__version__ = "0.10.6"
 
 # ── Config ────────────────────────────────────────────────────────────────────
 def _load_config():
@@ -115,23 +115,30 @@ _BOOKMARKLET = (
     r"var div=document.createElement('div');"
     r"div.style.cssText='position:fixed;top:10px;right:10px;background:#0e6e6b;color:#fff;"
     r"padding:12px 18px;border-radius:4px;font:600 14px system-ui;z-index:99999;"
-    r"box-shadow:0 4px 12px rgba(0,0,0,.3);';"
+    r"box-shadow:0 4px 12px rgba(0,0,0,.3);transition:opacity .3s;';"
     r"div.textContent='⏳ Sending to ACERT…';"
     r"document.body.appendChild(div);"
-    r"fetch('__CAPTURE_URL__',{method:'POST',"
-    r"headers:{'Content-Type':'application/json'},credentials:'include',"
-    r"body:JSON.stringify({url:url,price:price,description:desc,"
-    r"vendor_name:vname,address:addr,phone:phone,website:website})})"
-    r".then(function(r){"
-    r"if(!r.ok)throw new Error('HTTP '+r.status+' — open ACERT and sign in first');"
-    r"return r.json();})"
-    r".then(function(d){"
-    r"if(!d.ok)throw new Error(d.error||'server error');"
+    # Use window.open relay so the POST happens same-origin on our server,
+    # bypassing any CSP connect-src restrictions on the product page (e.g. eBay).
+    # The relay page postMessages back the result so we can update the overlay.
+    r"var payload=btoa(unescape(encodeURIComponent(JSON.stringify("
+    r"{url:url,price:price,description:desc,vendor_name:vname,"
+    r"address:addr,phone:phone,website:website}))));"
+    r"var timer=setTimeout(function(){"
+    r"div.textContent=price?'✓ Sent: $'+price:'✓ Sent!';"
+    r"setTimeout(function(){div.remove();},1800);},8000);"
+    r"window.addEventListener('message',function(e){"
+    r"if(!e.data||e.data.type==='acert-ok'&&!e.data.price&&!price)return;"
+    r"if(e.data.type==='acert-ok'||e.data.type==='acert-err'){"
+    r"clearTimeout(timer);"
+    r"if(e.data.type==='acert-ok'){"
     r"div.textContent=price?'✓ Captured: $'+price:'✓ Captured!';"
-    r"setTimeout(function(){div.remove();},1800);})"
-    r".catch(function(e){div.style.background='#c0392b';"
-    r"div.textContent='✗ '+(e.message||'Not captured — sign in to ACERT first');"
-    r"setTimeout(function(){div.remove();},4000);});"
+    r"setTimeout(function(){div.remove();},1800);}"
+    r"else{div.style.background='#c0392b';"
+    r"div.textContent='✗ '+(e.data.error||'Not captured — sign in to ACERT first');"
+    r"setTimeout(function(){div.remove();},4000);}}},"
+    r"{once:true});"
+    r"window.open('__RELAY_URL__#'+payload);"
     r"})()"
 )
 
@@ -174,6 +181,13 @@ def api_captures():
     return jsonify(items=items)
 
 
+@app.route("/bookmarklet-relay")
+def bookmarklet_relay():
+    """Relay page for the bookmarklet — loaded same-origin so it can POST to
+    our API without hitting the product page's CSP connect-src restrictions."""
+    return render_template("bookmarklet_relay.html")
+
+
 @app.route("/api/orders/from_capture", methods=["POST"])
 def api_order_from_capture():
     """Create a fully-populated draft order row from a bookmarklet capture."""
@@ -212,7 +226,7 @@ def api_order_from_capture():
                     set_cl = ", ".join(f"{k}=?" for k in updates)
                     db.execute(f"UPDATE vendors SET {set_cl} WHERE id=?",
                                list(updates.values()) + [vendor_id])
-        elif data.get("vendor_name"):
+        elif data.get("vendor_name") or quotes.catalog_entry_for(dom):
             cat = quotes.catalog_entry_for(dom)
             vname   = (cat or {}).get("name") or data["vendor_name"]
             vaddr   = (cat or {}).get("address") or data.get("address", "")
@@ -252,11 +266,16 @@ def inject_globals():
     ]
     # Bookmarklet JS — URL injected at render time so it points to this server
     try:
-        bm_api = url_for("api_bookmarklet_capture", _external=True)
+        bm_api   = url_for("api_bookmarklet_capture", _external=True)
+        bm_relay = url_for("bookmarklet_relay",        _external=True)
     except RuntimeError:
-        bm_api = ""
+        bm_api = bm_relay = ""
     from urllib.parse import quote as _urlquote
-    bookmarklet = "javascript:" + _urlquote(_BOOKMARKLET.replace("__CAPTURE_URL__", bm_api))
+    bookmarklet = "javascript:" + _urlquote(
+        _BOOKMARKLET
+        .replace("__CAPTURE_URL__", bm_api)
+        .replace("__RELAY_URL__",   bm_relay)
+    )
     return {"app_version": __version__,
             "ms_auth": _CONFIG.get("auth_provider") == "microsoft",
             "quote_storage_domains": quote_domains,

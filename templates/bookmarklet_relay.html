@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>ACERT capture relay</title></head>
+<body>
+<script>
+(function () {
+  /* Relay page for the ACERT bookmarklet.
+     Loaded same-origin so the fetch to /api/bookmarklet/capture succeeds
+     without hitting CSP connect-src restrictions on the product page.
+     Data arrives in the URL hash as base64-encoded JSON; result is sent
+     back to the opener via postMessage, then this tab closes itself. */
+  function done(type, extra) {
+    if (window.opener) {
+      try { window.opener.postMessage(Object.assign({type: type}, extra), '*'); }
+      catch (e) {}
+    }
+    setTimeout(function () { window.close(); }, 150);
+  }
+
+  try {
+    var raw = decodeURIComponent(escape(atob(location.hash.slice(1))));
+    var data = JSON.parse(raw);
+  } catch (e) {
+    done('acert-err', {error: 'bad payload: ' + e.message});
+    return;
+  }
+
+  fetch('/api/bookmarklet/capture', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(data)
+  })
+  .then(function (r) {
+    if (!r.ok) throw new Error('HTTP ' + r.status + ' — are you signed in to ACERT?');
+    return r.json();
+  })
+  .then(function (d) {
+    if (!d.ok) throw new Error(d.error || 'server error');
+    done('acert-ok', {price: data.price});
+  })
+  .catch(function (e) {
+    done('acert-err', {error: e.message});
+  });
+})();
+</script>
+</body>
+</html>

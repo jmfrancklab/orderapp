@@ -108,3 +108,35 @@ class TestPriceFromHtml:
         price = quotes.extract_price_from_html(html)
         assert price is not None
         assert float(price) > 0
+
+
+# ── Real browser-saved fixtures (saved by user from Chrome) ──────────────────
+
+class TestRealPageFixtures:
+    """Price extraction from HTML saved directly from the user's browser.
+    These are the exact pages the bookmarklet runs on — if extraction fails
+    here, the bookmarklet price capture will silently send price=null.
+    """
+
+    def _price(self, fixture_name, domain):
+        path = os.path.join(FIXTURE_DIR, fixture_name)
+        if not os.path.exists(path):
+            pytest.skip(f"{fixture_name} not present")
+        html = read_fixture(fixture_name)
+        entry = quotes.catalog_entry_for(domain)
+        return quotes.extract_price_from_html(html, entry)
+
+    def test_ebay_example_price(self):
+        price = self._price("ebay_example.html", "ebay.com")
+        assert price is not None, "No price found in ebay_example.html"
+        assert float(price) > 0
+
+    def test_mouser_example_price(self):
+        price = self._price("mouser_example.html", "mouser.com")
+        assert price is not None, "No price found in mouser_example.html"
+        assert float(price) > 0
+
+    def test_amazon_example_price(self):
+        price = self._price("amazon_example.html", "amazon.com")
+        assert price is not None, "No price found in amazon_example.html"
+        assert float(price) > 0
