@@ -21,7 +21,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.10.7"
+__version__ = "0.10.8"
 
 # ── Config ────────────────────────────────────────────────────────────────────
 def _load_config():
@@ -223,9 +223,9 @@ def api_order_from_capture():
                                list(updates.values()) + [vendor_id])
         elif data.get("vendor_name") or quotes.catalog_entry_for(dom):
             cat = quotes.catalog_entry_for(dom)
-            vname   = (cat or {}).get("name") or data["vendor_name"]
-            vaddr   = (cat or {}).get("address") or data.get("address", "")
-            vphone  = (cat or {}).get("phone") or data.get("phone", "")
+            vname   = (cat or {}).get("name") or data.get("vendor_name") or dom
+            vaddr   = (cat or {}).get("address") or data.get("address") or ""
+            vphone  = (cat or {}).get("phone")   or data.get("phone")   or ""
             vsite   = (cat or {}).get("website") or data.get("website") or dom
             cur = db.execute(
                 "INSERT OR IGNORE INTO vendors"
@@ -522,7 +522,7 @@ def log_change(db, record_id, field, old, new, table_name='orders', by=None):
 
 def vendor_incomplete(v):
     """A vendor is flagged if website, phone, or tax-exemption filing is missing."""
-    return not (v["website"].strip() and v["phone"].strip()
+    return not ((v["website"] or "").strip() and (v["phone"] or "").strip()
                 and v["tax_exempt_filed"])
 
 
