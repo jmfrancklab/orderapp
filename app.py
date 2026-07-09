@@ -21,7 +21,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.10.6"
+__version__ = "0.10.7"
 
 # ── Config ────────────────────────────────────────────────────────────────────
 def _load_config():
@@ -38,11 +38,6 @@ app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 # CHANGE THIS before deploying (any long random string):
 app.secret_key = os.environ.get("ORDERAPP_SECRET", "dev-secret-change-me")
-# SameSite=None lets the bookmarklet send the session cookie in cross-site
-# POST requests (mouser.com → our server).  Secure=True is required with
-# SameSite=None; PythonAnywhere serves over HTTPS so this is always set.
-app.config["SESSION_COOKIE_SAMESITE"] = "None"
-app.config["SESSION_COOKIE_SECURE"] = True
 
 
 @app.template_filter('fmt_cost')
@@ -268,7 +263,7 @@ def inject_globals():
     try:
         bm_api   = url_for("api_bookmarklet_capture", _external=True)
         bm_relay = url_for("bookmarklet_relay",        _external=True)
-    except RuntimeError:
+    except Exception:
         bm_api = bm_relay = ""
     from urllib.parse import quote as _urlquote
     bookmarklet = "javascript:" + _urlquote(
