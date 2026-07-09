@@ -669,14 +669,47 @@ def debug_health():
         result["ok"] = False
         result["checks"]["catalog_error"] = _tb.format_exc()
 
-    # 3. inject_globals
+    # 3. inject_globals in real request context
     try:
-        with app.test_request_context("/"):
-            ig = inject_globals()
+        ig = inject_globals()
         result["checks"]["inject_globals_keys"] = list(ig.keys())
+        result["checks"]["bookmarklet_len"] = len(ig.get("bookmarklet", ""))
     except Exception:
         result["ok"] = False
         result["checks"]["inject_globals_error"] = _tb.format_exc()
+
+    # 4. Fetch vendors (used in orders page)
+    try:
+        db = get_db()
+        vendors = fetch_vendors(db)
+        result["checks"]["vendor_count"] = len(vendors)
+    except Exception:
+        result["ok"] = False
+        result["checks"]["fetch_vendors_error"] = _tb.format_exc()
+
+    # 5. Orders query + field access (simulates orders page render)
+    try:
+        db = get_db()
+        rows = db.execute("SELECT * FROM orders LIMIT 5").fetchall()
+        result["checks"]["sample_orders"] = len(rows)
+        if rows:
+            sample = dict(rows[0])
+            result["checks"]["sample_order_keys"] = sorted(sample.keys())
+            # Test fmt_cost on each
+            for r in rows:
+                fmt_cost(r["cost"])
+    except Exception:
+        result["ok"] = False
+        result["checks"]["orders_query_error"] = _tb.format_exc()
+
+    # 6. Template render test (renders orders.html with empty drafts)
+    try:
+        html = render_template("orders.html", tab="orders", drafts=[],
+                               vendors=[], projects=[], trackers={})
+        result["checks"]["template_render"] = f"ok ({len(html)} chars)"
+    except Exception:
+        result["ok"] = False
+        result["checks"]["template_render_error"] = _tb.format_exc()
 
     return jsonify(result)
 
