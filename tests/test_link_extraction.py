@@ -129,7 +129,22 @@ class TestRealPageFixtures:
     def test_ebay_example_price(self):
         price = self._price("ebay_example.html", "ebay.com")
         assert price is not None, "No price found in ebay_example.html"
-        assert float(price) > 0
+        assert float(price) == pytest.approx(29.99), f"Expected 29.99, got {price}"
+
+    def test_ebay_bookmarklet_regex_finds_price(self):
+        """The raw-HTML scan in the bookmarklet JS must find the eBay price even
+        when the page has no Product JSON-LD (eBay /p/ pages have only
+        BreadcrumbList + WebPage schemas)."""
+        import re
+        path = os.path.join(FIXTURE_DIR, "ebay_example.html")
+        if not os.path.exists(path):
+            pytest.skip("ebay_example.html not present")
+        with open(path) as f:
+            html = f.read()
+        pat = re.compile(r"""['"]price['"]\s*:\s*['"']?([\d]+\.[\d]{2})['"']?""")
+        m = pat.search(html)
+        assert m is not None, "Bookmarklet regex found no price in ebay_example.html"
+        assert float(m.group(1)) == pytest.approx(29.99)
 
     def test_mouser_example_price(self):
         price = self._price("mouser_example.html", "mouser.com")

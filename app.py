@@ -105,6 +105,12 @@ _BOOKMARKLET = (
     r"var w=document.querySelector('.a-price-whole');"
     r"var f=document.querySelector('.a-price-fraction');"
     r"if(w&&f)price=(w.textContent.replace(/[^0-9]/g,''))+'.'+(f.textContent.replace(/[^0-9]/g,''));}"
+    r"if(!price){"
+    # Scan raw page source for embedded price JSON (catches eBay /p/ pages and
+    # other sites where price is in a non-JSON-LD script block).
+    r"var src=document.documentElement.innerHTML;"
+    r"var pm=src.match(/['\"]price['\"]\s*:\s*['\"]?([\d]+\.[\d]{2})['\"]?/);"
+    r"if(pm&&parseFloat(pm[1])>0)price=pm[1];}"
     r"if(!desc)desc=document.title||'';"
     r"if(!website)website=window.location.hostname;"
     r"var div=document.createElement('div');"
