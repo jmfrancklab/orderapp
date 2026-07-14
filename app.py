@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 from flask import (Flask, g, jsonify, redirect, render_template, request,
                    session, url_for)
 from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.security import check_password_hash, generate_password_hash
 
 import quotes
 
@@ -21,7 +22,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.10.9"
+__version__ = "0.10.10"
 
 # ── Config ────────────────────────────────────────────────────────────────────
 def _load_config():
@@ -448,6 +449,7 @@ def init_db():
         "ALTER TABLE orders ADD COLUMN cost TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE orders ADD COLUMN order_status TEXT NOT NULL DEFAULT 'submitted'",
         "ALTER TABLE orders ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE allowed_emails ADD COLUMN password_hash TEXT",
     ]:
         try:
             db.execute(stmt)
@@ -618,8 +620,8 @@ def login():
         if not EMAIL_RE.match(email):
             error = "Enter a valid email address."
         elif db.execute("SELECT 1 FROM allowed_emails WHERE email = ?", (email,)).fetchone():
-            session["email"] = email
-            return redirect(url_for("orders"))
+            session["pending_email"] = email
+            return redirect(url_for("login_password"))
         else:
             count = _ip_attempts.get(ip, 0) + 1
             _ip_attempts[ip] = count
@@ -645,6 +647,49 @@ def login():
 def logout():
     session.clear()
     return redirect(url_for("login"))
+
+
+@app.route("/login/password", methods=["GET", "POST"])
+def login_password():
+    # Redirect fully-logged-in users
+    if current_user():
+        return redirect(url_for("orders"))
+    email = session.get("pending_email")
+    if not email:
+        return redirect(url_for("login"))
+    db = get_db()
+    row = db.execute(
+        "SELECT password_hash FROM allowed_emails WHERE email = ?", (email,)
+    ).fetchone()
+    if row is None:
+        session.pop("pending_email", None)
+        return redirect(url_for("login"))
+    creating = row["password_hash"] is None
+    error = None
+    if request.method == "POST":
+        pw = request.form.get("password", "")
+        if creating:
+            confirm = request.form.get("confirm", "")
+            if len(pw) < 8:
+                error = "Password must be at least 8 characters."
+            elif pw != confirm:
+                error = "Passwords do not match."
+            else:
+                db.execute(
+                    "UPDATE allowed_emails SET password_hash = ? WHERE email = ?",
+                    (generate_password_hash(pw), email))
+                db.commit()
+                session.pop("pending_email", None)
+                session["email"] = email
+                return redirect(url_for("orders"))
+        else:
+            if check_password_hash(row["password_hash"], pw):
+                session.pop("pending_email", None)
+                session["email"] = email
+                return redirect(url_for("orders"))
+            else:
+                error = "Incorrect password."
+    return render_template("login_password.html", email=email, creating=creating, error=error)
 
 # ------------------------------------------------------------------ pages
 
@@ -1027,6 +1072,52 @@ def api_save(oid):
         db.execute(f"UPDATE orders SET {', '.join(sets)} WHERE id = ?", vals)
         db.commit()
     return jsonify(ok=True)
+
+
+@app.route("/api/orders/import_excel", methods=["POST"])
+@login_required
+def import_excel():
+    db = get_db()
+    email = current_user()
+    data = request.get_json(silent=True) or {}
+    rows = data.get("rows", [])
+    inserted = 0
+    for r in rows:
+        desc     = str(r.get("description", "")).strip()
+        link     = str(r.get("link", "")).strip()
+        use_note = str(r.get("use_note", "")).strip()
+        cost     = _normalise_cost(str(r.get("cost", "")).strip())
+        try:
+            qty = max(1, int(r.get("quantity", 1)))
+        except (ValueError, TypeError):
+            qty = 1
+
+        vendor_name = str(r.get("vendor", "")).strip()
+        vendor_id = None
+        if vendor_name:
+            vrow = db.execute(
+                "SELECT id FROM vendors WHERE LOWER(name) LIKE LOWER(?)",
+                (f"%{vendor_name}%",)
+            ).fetchone()
+            if vrow:
+                vendor_id = vrow["id"]
+
+        project_name = str(r.get("project", "")).strip()
+        project_id = None
+        if project_name:
+            prow = db.execute(
+                "SELECT id FROM projects WHERE LOWER(name) = LOWER(?)", (project_name,)
+            ).fetchone()
+            if prow:
+                project_id = prow["id"]
+
+        db.execute(
+            "INSERT INTO orders (user_email, description, link, vendor_id, project_id,"
+            " use_note, cost, quantity) VALUES (?,?,?,?,?,?,?,?)",
+            (email, desc, link, vendor_id, project_id, use_note, cost, qty))
+        inserted += 1
+    db.commit()
+    return jsonify(ok=True, inserted=inserted)
 
 
 @app.route("/api/orders/<int:oid>/quote_vendor", methods=["POST"])

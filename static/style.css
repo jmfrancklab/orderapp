@@ -335,6 +335,35 @@ input[data-field="link"] { font-family: var(--mono); font-size: .8rem; }
   display: flex; flex-wrap: wrap; gap: .5rem; padding-top: .5rem;
 }
 
+/* ------------------------------------------------- excel import modal */
+.xl-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,.30); z-index: 9998;
+}
+.xl-popup {
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  z-index: 9999;
+  background: #fff; border: 2px solid var(--ink);
+  box-shadow: 8px 8px 0 var(--accent-soft);
+  padding: 1.4rem 1.6rem;
+  width: min(620px, 94vw); max-height: 85vh; overflow-y: auto;
+}
+.xl-popup-head {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  margin-bottom: 1rem;
+}
+.xl-popup-head strong { font-size: 1rem; }
+.xl-popup table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+.xl-popup th {
+  font-size: .72rem; text-transform: uppercase; letter-spacing: .08em;
+  color: #5a6572; font-weight: 600; text-align: left;
+  padding: .3rem .4rem; border-bottom: 2px solid var(--ink);
+}
+.xl-popup td { padding: .35rem .4rem; border-bottom: 1px solid var(--rule); }
+.xl-popup td:first-child { font-family: var(--mono); font-size: .82rem; }
+.xl-popup select { width: 100%; font-size: .84rem; }
+.xl-popup-actions { display: flex; gap: .5rem; padding-top: 1rem; flex-wrap: wrap; }
+.import-btn { cursor: pointer; }
+
 /* ------------------------------------------------- small screens */
 @media (max-width: 900px) {
   .sheet-head { display: none; }

@@ -531,4 +531,177 @@
   checkCaptures();
   window.addEventListener("focus", checkCaptures);
 
+  /* --- excel import -------------------------------------------------- */
+
+  var WEB_FIELDS = [
+    { key: "description", labels: ["description", "desc", "item", "name", "product"] },
+    { key: "link",        labels: ["link", "url", "href", "website"] },
+    { key: "vendor",      labels: ["vendor", "supplier", "manufacturer", "company", "store"] },
+    { key: "project",     labels: ["project", "grant", "fund", "account", "budget", "code"] },
+    { key: "use_note",    labels: ["use", "purpose", "note", "reason", "detail", "comment"] },
+    { key: "cost",        labels: ["cost", "price", "amount", "total", "unit price", "each"] },
+    { key: "quantity",    labels: ["quantity", "qty", "count", "num", "number", "units"] }
+  ];
+  var WEB_FIELD_DISPLAY = {
+    description: "Description", link: "Link", vendor: "Vendor",
+    project: "Project", use_note: "Use", cost: "Cost", quantity: "Qty"
+  };
+
+  function xlFuzzyKey(colName) {
+    var norm = colName.toLowerCase().replace(/[^a-z0-9]/g, '');
+    var best = null, bestScore = 0;
+    WEB_FIELDS.forEach(function (f) {
+      var score = 0;
+      f.labels.forEach(function (lbl) {
+        var n = lbl.replace(/[^a-z0-9]/g, '');
+        if (norm === n) { score = Math.max(score, 1.0); return; }
+        if (norm.indexOf(n) !== -1 || n.indexOf(norm) !== -1) { score = Math.max(score, 0.85); return; }
+        // bigram overlap
+        function bigrams(s) {
+          var bg = {}; for (var i = 0; i < s.length - 1; i++) bg[s.slice(i, i+2)] = 1; return bg;
+        }
+        var bA = bigrams(norm), bB = bigrams(n);
+        var inter = 0;
+        Object.keys(bA).forEach(function(k) { if (bB[k]) inter++; });
+        var union = Object.keys(bA).length + Object.keys(bB).length - inter;
+        if (union > 0) score = Math.max(score, inter / union);
+      });
+      if (score > bestScore) { bestScore = score; best = f.key; }
+    });
+    return bestScore >= 0.5 ? best : null;
+  }
+
+  var _xlOverlay = null, _xlPopup = null;
+
+  function closeXlModal() {
+    if (_xlOverlay) { _xlOverlay.remove(); _xlOverlay = null; }
+    if (_xlPopup)   { _xlPopup.remove();   _xlPopup = null; }
+  }
+
+  function showXlModal(headers, dataRows) {
+    closeXlModal();
+
+    var overlay = document.createElement('div');
+    overlay.className = 'xl-overlay';
+    overlay.onclick = closeXlModal;
+    document.body.appendChild(overlay);
+    _xlOverlay = overlay;
+
+    var pop = document.createElement('div');
+    pop.className = 'xl-popup';
+    pop.onclick = function(e) { e.stopPropagation(); };
+    _xlPopup = pop;
+
+    var head = document.createElement('div');
+    head.className = 'xl-popup-head';
+    var title = document.createElement('strong');
+    title.textContent = 'Map spreadsheet columns (' + dataRows.length + ' rows)';
+    var xBtn = document.createElement('button');
+    xBtn.type = 'button'; xBtn.className = 'vendor-popup-x';
+    xBtn.textContent = '×'; xBtn.onclick = closeXlModal;
+    head.appendChild(title); head.appendChild(xBtn);
+    pop.appendChild(head);
+
+    var hint = document.createElement('p');
+    hint.className = 'vendor-popup-label';
+    hint.style.marginBottom = '.7rem';
+    hint.textContent = 'Choose which spreadsheet column maps to each order field. '
+                     + 'Columns with no useful match are set to “Do not import”.';
+    pop.appendChild(hint);
+
+    var tbl = document.createElement('table');
+    var thead = document.createElement('thead');
+    var hr = document.createElement('tr');
+    ['Spreadsheet column', 'Maps to'].forEach(function(h) {
+      var th = document.createElement('th'); th.textContent = h; hr.appendChild(th);
+    });
+    thead.appendChild(hr); tbl.appendChild(thead);
+
+    var tbody = document.createElement('tbody');
+    var selects = {};   // header → <select> element
+
+    headers.forEach(function(col) {
+      var tr = document.createElement('tr');
+      var td1 = document.createElement('td'); td1.textContent = col;
+      var td2 = document.createElement('td');
+      var sel = document.createElement('select');
+      var none = document.createElement('option');
+      none.value = ''; none.textContent = 'Do not import';
+      sel.appendChild(none);
+      WEB_FIELDS.forEach(function(f) {
+        var opt = document.createElement('option');
+        opt.value = f.key;
+        opt.textContent = WEB_FIELD_DISPLAY[f.key];
+        sel.appendChild(opt);
+      });
+      var matched = xlFuzzyKey(col);
+      sel.value = matched || '';
+      td2.appendChild(sel);
+      tr.appendChild(td1); tr.appendChild(td2);
+      tbody.appendChild(tr);
+      selects[col] = sel;
+    });
+    tbl.appendChild(tbody);
+    pop.appendChild(tbl);
+
+    var actions = document.createElement('div');
+    actions.className = 'xl-popup-actions';
+
+    var importBtn = document.createElement('button');
+    importBtn.type = 'button'; importBtn.className = 'submit-btn';
+    importBtn.textContent = 'Import ' + dataRows.length + ' rows';
+    importBtn.onclick = function() {
+      var rows = dataRows.map(function(raw) {
+        var obj = {};
+        headers.forEach(function(col) {
+          var field = selects[col].value;
+          if (field) obj[field] = (raw[col] !== undefined && raw[col] !== null) ? String(raw[col]) : '';
+        });
+        return obj;
+      });
+      importBtn.disabled = true; importBtn.textContent = 'Importing…';
+      fetch('/api/orders/import_excel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rows: rows })
+      }).then(function(r) { return r.json(); }).then(function(d) {
+        if (d.ok) { closeXlModal(); location.reload(); }
+        else { importBtn.disabled = false; importBtn.textContent = 'Import ' + dataRows.length + ' rows'; }
+      }).catch(function() {
+        importBtn.disabled = false; importBtn.textContent = 'Import ' + dataRows.length + ' rows';
+      });
+    };
+    actions.appendChild(importBtn);
+
+    var cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button'; cancelBtn.className = 'mini';
+    cancelBtn.textContent = 'Cancel'; cancelBtn.onclick = closeXlModal;
+    actions.appendChild(cancelBtn);
+    pop.appendChild(actions);
+    document.body.appendChild(pop);
+  }
+
+  var xlInput = document.getElementById('xl-file-input');
+  if (xlInput) {
+    xlInput.addEventListener('change', function() {
+      var file = xlInput.files[0];
+      if (!file) return;
+      xlInput.value = '';   // reset so same file can be re-selected
+      if (typeof XLSX === 'undefined') {
+        alert('SheetJS library not loaded — please refresh the page and try again.');
+        return;
+      }
+      var reader = new FileReader();
+      reader.onload = function(e) {
+        var wb = XLSX.read(e.target.result, { type: 'array' });
+        var ws = wb.Sheets[wb.SheetNames[0]];
+        var rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+        if (!rows.length) { alert('Spreadsheet appears to be empty.'); return; }
+        var headers = Object.keys(rows[0]);
+        showXlModal(headers, rows);
+      };
+      reader.readAsArrayBuffer(file);
+    });
+  }
+
 })();

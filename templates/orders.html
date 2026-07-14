@@ -90,6 +90,14 @@ immediately and will still be here next time you sign in.</p>
   </form>
   <a href="{{ url_for('export_xlsx', view='drafts') }}" class="mini export-btn">Export to Excel</a>
   {% endif %}
+  <label class="mini import-btn" title="Import rows from a spreadsheet">
+    Import from Excel
+    <input id="xl-file-input" type="file" accept=".xlsx,.xls,.csv" style="display:none">
+  </label>
 </div>
 
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 {% endblock %}
