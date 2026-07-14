@@ -11,6 +11,7 @@ in all consoles. No arguments needed.
 Update DOMAIN below to match the PythonAnywhere domain for this app.
 """
 
+import getpass
 import os
 import sys
 import time
@@ -25,7 +26,11 @@ CHECK_URL  = f'https://{DOMAIN}/debug/health'
 def main():
     api_token = os.environ.get('API_TOKEN', '').strip()
     if not api_token:
-        print('ERROR: $API_TOKEN is not set. Open a fresh PythonAnywhere Bash console and try again.')
+        print('$API_TOKEN not set — enter it manually.')
+        print('(Find it at: pythonanywhere.com → Account → API token)')
+        api_token = getpass.getpass('API token: ').strip()
+    if not api_token:
+        print('ERROR: no API token provided.')
         return 1
 
     print(f'Reloading {DOMAIN} ...', flush=True)
