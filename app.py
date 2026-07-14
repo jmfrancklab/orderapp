@@ -21,7 +21,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.10.8"
+__version__ = "0.10.9"
 
 # ── Config ────────────────────────────────────────────────────────────────────
 def _load_config():
@@ -407,6 +407,7 @@ def init_db():
         project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
         use_note TEXT NOT NULL DEFAULT '',
         cost TEXT NOT NULL DEFAULT '',
+        quantity INTEGER NOT NULL DEFAULT 1,
         status TEXT NOT NULL DEFAULT 'draft',         -- 'draft' | 'submitted'
         order_status TEXT NOT NULL DEFAULT 'submitted',-- fulfillment status
         submitted_at TEXT                             -- locked after submission
@@ -446,6 +447,7 @@ def init_db():
         "ALTER TABLE vendors ADD COLUMN address TEXT DEFAULT ''",
         "ALTER TABLE orders ADD COLUMN cost TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE orders ADD COLUMN order_status TEXT NOT NULL DEFAULT 'submitted'",
+        "ALTER TABLE orders ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1",
     ]:
         try:
             db.execute(stmt)
@@ -988,7 +990,7 @@ def update_project(pid):
 # Everything is editable at any time EXCEPT who submitted (user_email) and
 # when (submitted_at). Every change is written to order_history.
 EDITABLE_FIELDS = {"description", "link", "vendor_id", "project_id", "use_note", "cost",
-                   "order_status"}
+                   "quantity", "order_status"}
 
 
 @app.route("/api/orders/<int:oid>", methods=["POST"])
@@ -1011,6 +1013,11 @@ def api_save(oid):
             value = int(value) if str(value).strip() else None
         elif field == "cost":
             value = _normalise_cost(value)
+        elif field == "quantity":
+            try:
+                value = max(1, int(value))
+            except (ValueError, TypeError):
+                value = 1
         if value != order[field]:
             log_change(db, oid, field, order[field], value)
             sets.append(f"{field} = ?")

@@ -37,6 +37,7 @@ immediately and will still be here next time you sign in.</p>
     <span>Project <em class="head-hint">official grant or funding category</em></span>
     <span>Use <em class="head-hint">hardware / compute / chemical / … then detail</em></span>
     <span>Cost <em class="head-hint">auto-filled from link</em></span>
+    <span>Qty</span>
     <span>Trackers <em class="head-hint">others tracking this order — also grants them login access</em></span>
     <span></span>
   </div>
@@ -57,6 +58,7 @@ immediately and will still be here next time you sign in.</p>
     </select>
     <input data-field="use_note" value="{{ d.use_note }}" placeholder="What's it for?">
     <span class="cost-cell"><span class="cost-prefix">$</span><input data-field="cost" value="{{ d.cost | fmt_cost }}" placeholder="0.00" class="cost-input"></span>
+    <input data-field="quantity" type="number" min="1" value="{{ d.quantity }}" class="qty-input">
     <span class="tracker-cell">
       <input class="tracker-input" type="email" placeholder="email + Enter">
       <span class="chips">

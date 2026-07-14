@@ -63,13 +63,13 @@ main { padding: 1.2rem 1.2rem 3rem; max-width: 1500px; margin: 0 auto; }
 .sheet { border-top: 1px solid var(--rule); }
 .sheet-head, .order-row {
   display: grid;
-  grid-template-columns: 1.4fr 1.4fr 1.1fr 1fr 1.2fr 5.5rem 1.3fr 2.2rem;
+  grid-template-columns: 1.4fr 1.4fr 1.1fr 1fr 1.2fr 5.5rem 3rem 1.3fr 2.2rem;
   gap: .6rem; align-items: start;
   padding: .45rem .2rem;
   border-bottom: 1px solid var(--rule);
 }
 .submitted-sheet .sheet-head, .submitted-row {
-  grid-template-columns: 5.5rem 1fr 1.4fr 1.4fr 1.1fr 1fr 1.1fr 5.5rem 7rem 1.2fr 2.2rem;
+  grid-template-columns: 5.5rem 1fr 1.4fr 1.4fr 1.1fr 1fr 1.1fr 5.5rem 3rem 7rem 1.2fr 2.2rem;
 }
 .sheet-head {
   font-size: .72rem; text-transform: uppercase; letter-spacing: .08em;
@@ -116,6 +116,7 @@ input[data-field="link"] { font-family: var(--mono); font-size: .8rem; }
 .cost-cell { display: flex; align-items: center; gap: .18rem; }
 .cost-prefix { font-size: .82rem; color: #5a6572; flex: none; }
 .cost-input { width: 100%; }
+.qty-input { width: 100%; text-align: center; }
 
 /* order status dropdown */
 .status-select { font-size: .8rem; font-weight: 600; }
