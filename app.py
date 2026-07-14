@@ -22,7 +22,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.10.10"
+__version__ = "0.10.11"
 
 # ── Config ────────────────────────────────────────────────────────────────────
 def _load_config():
@@ -441,6 +441,13 @@ def init_db():
         attempts INTEGER NOT NULL DEFAULT 0,
         note TEXT NOT NULL DEFAULT ''
     );
+    CREATE TABLE IF NOT EXISTS app_log (
+        id INTEGER PRIMARY KEY,
+        logged_at TEXT NOT NULL,
+        email TEXT NOT NULL DEFAULT '',
+        action TEXT NOT NULL,
+        detail TEXT NOT NULL DEFAULT ''
+    );
     """)
     # Column-level migrations (idempotent — exception = already exists)
     for stmt in [
@@ -528,6 +535,17 @@ def log_change(db, record_id, field, old, new, table_name='orders', by=None):
              None if new is None else str(new),
              table_name)
         )
+
+
+_LOG_TTL = "'-3 days'"   # SQLite modifier — keep last 3 days of events
+
+def log_event(db, action, detail='', email=None):
+    """Append one event to app_log and prune entries older than 3 days."""
+    who = email or current_user() or 'system'
+    db.execute(
+        "INSERT INTO app_log (logged_at, email, action, detail) VALUES (?,?,?,?)",
+        (now_iso(), who, action, str(detail)))
+    db.execute(f"DELETE FROM app_log WHERE logged_at < datetime('now', {_LOG_TTL})")
 
 
 def vendor_incomplete(v):
@@ -633,11 +651,14 @@ def login():
                            (count, now_iso(), ip))
                 log_change(db, None, "ip", None, ip,
                            table_name="blocked_ips", by="system")
+                log_event(db, "ip_blocked", f"{ip} blocked after {count} failed attempts", email=email)
                 db.commit()
                 error = ("This IP has been blocked after too many failed attempts. "
                          "Contact an existing user to unblock it from the Users tab.")
             else:
                 remaining = _IP_BLOCK_THRESHOLD - count
+                log_event(db, "login_rejected", f"email {email!r} not in allowlist, from {ip} ({remaining} attempts left)", email=email)
+                db.commit()
                 error = (f"That email is not authorized. "
                          f"({remaining} attempt{'s' if remaining != 1 else ''} remaining before this IP is blocked.)")
     return render_template("login.html", error=error)
@@ -678,16 +699,21 @@ def login_password():
                 db.execute(
                     "UPDATE allowed_emails SET password_hash = ? WHERE email = ?",
                     (generate_password_hash(pw), email))
+                log_event(db, "password_set", f"first login, password created; from {get_client_ip()}", email=email)
                 db.commit()
                 session.pop("pending_email", None)
                 session["email"] = email
                 return redirect(url_for("orders"))
         else:
             if check_password_hash(row["password_hash"], pw):
+                log_event(db, "login", f"from {get_client_ip()}", email=email)
+                db.commit()
                 session.pop("pending_email", None)
                 session["email"] = email
                 return redirect(url_for("orders"))
             else:
+                log_event(db, "login_failed", f"wrong password for {email!r} from {get_client_ip()}", email=email)
+                db.commit()
                 error = "Incorrect password."
     return render_template("login_password.html", email=email, creating=creating, error=error)
 
@@ -821,6 +847,8 @@ def api_delete_order(oid):
         if val is not None and str(val).strip():
             log_change(db, oid, field, val, None)
     log_change(db, oid, "deleted", None, "record deleted")
+    desc = (order["description"] or "").strip() or f"order #{oid}"
+    log_event(db, "order_deleted", f"deleted {desc!r}")
     db.execute("DELETE FROM orders WHERE id = ?", (oid,))
     db.commit()
     return jsonify(ok=True)
@@ -840,6 +868,7 @@ def submit_orders():
         "UPDATE orders SET status = 'submitted', order_status = 'submitted', submitted_at = ? "
         "WHERE user_email = ? AND status = 'draft'",
         (ts, current_user()))
+    log_event(db, "orders_submitted", f"{len(ids)} order{'s' if len(ids) != 1 else ''} submitted")
     db.commit()
     return redirect(url_for("submitted"))
 
@@ -875,6 +904,7 @@ def vendors():
                  request.form.get("website", "").strip(),
                  request.form.get("phone", "").strip(),
                  1 if request.form.get("tax_exempt_filed") else 0))
+            log_event(db, "vendor_created", f"vendor {name!r} added")
             db.commit()
         return redirect(url_for("vendors"))
     return render_template("vendors.html", tab="vendors", vendors=fetch_vendors(db))
@@ -891,6 +921,8 @@ def update_vendor(vid):
          request.form.get("website", "").strip(),
          request.form.get("phone", "").strip(),
          1 if request.form.get("tax_exempt_filed") else 0, vid))
+    name = request.form.get("name", "").strip()
+    log_event(db, "vendor_updated", f"vendor #{vid} {name!r} updated")
     db.commit()
     return redirect(url_for("vendors"))
 
@@ -907,6 +939,7 @@ def users():
                 (email, current_user(), now_iso()))
             if cur.rowcount:
                 log_change(db, 0, "email", None, email, table_name="allowed_emails")
+                log_event(db, "user_added", f"added {email!r}")
             db.commit()
         return redirect(url_for("users"))
     emails = db.execute("SELECT * FROM allowed_emails ORDER BY added_at DESC").fetchall()
@@ -922,6 +955,7 @@ def remove_user(uid):
     row = db.execute("SELECT email FROM allowed_emails WHERE id = ?", (uid,)).fetchone()
     if row:
         log_change(db, 0, "email", row["email"], None, table_name="allowed_emails")
+        log_event(db, "user_removed", f"removed {row['email']!r}")
         db.execute("DELETE FROM allowed_emails WHERE id = ?", (uid,))
         db.commit()
     return redirect(url_for("users"))
@@ -935,6 +969,7 @@ def unblock_ip(bid):
     if row:
         ip = row["ip"]
         log_change(db, 0, "ip", ip, None, table_name="blocked_ips")
+        log_event(db, "ip_unblocked", f"unblocked {ip}")
         db.execute("DELETE FROM blocked_ips WHERE id = ?", (bid,))
         db.commit()
         _ip_attempts.pop(ip, None)
@@ -963,6 +998,18 @@ def history():
     return render_template("history.html", tab="history", rows=rows)
 
 
+@app.route("/log")
+@login_required
+def event_log():
+    db = get_db()
+    db.execute(f"DELETE FROM app_log WHERE logged_at < datetime('now', {_LOG_TTL})")
+    db.commit()
+    rows = db.execute(
+        "SELECT * FROM app_log ORDER BY id DESC"
+    ).fetchall()
+    return render_template("event_log.html", tab="log", rows=rows)
+
+
 @app.route("/api/vendors", methods=["POST"])
 @login_required
 def api_create_vendor():
@@ -976,6 +1023,8 @@ def api_create_vendor():
         "INSERT OR IGNORE INTO vendors (name, address, website, phone, tax_exempt_filed) VALUES (?,?,?,?,0)",
         (name, data.get("address", "").strip(),
          data.get("website", "").strip(), data.get("phone", "").strip()))
+    if cur.rowcount:
+        log_event(db, "vendor_created", f"vendor {name!r} auto-created from quote")
     db.commit()
     if cur.lastrowid:
         vid = cur.lastrowid
@@ -1116,6 +1165,7 @@ def import_excel():
             " use_note, cost, quantity) VALUES (?,?,?,?,?,?,?,?)",
             (email, desc, link, vendor_id, project_id, use_note, cost, qty))
         inserted += 1
+    log_event(db, "excel_import", f"imported {inserted} row{'s' if inserted != 1 else ''}")
     db.commit()
     return jsonify(ok=True, inserted=inserted)
 

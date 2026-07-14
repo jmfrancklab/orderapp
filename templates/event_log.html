@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Log{% endblock %}
+{% block content %}
+
+<p class="explain">Events from the last 3 days, newest first. Covers logins, imports,
+submissions, deletions, and user/vendor changes. Useful for debugging — older entries
+are automatically discarded.</p>
+
+<div class="log-wrap">
+  {% if rows %}
+  <table class="log-table">
+    <thead>
+      <tr>
+        <th>Time (UTC)</th>
+        <th>User</th>
+        <th>Action</th>
+        <th>Detail</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr class="log-row log-{{ r.action.split('_')[0] }}">
+        <td class="log-time">{{ (r.logged_at or '')[:19].replace('T', ' ') }}</td>
+        <td class="log-email">{{ r.email }}</td>
+        <td class="log-action">{{ r.action }}</td>
+        <td class="log-detail">{{ r.detail }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">No events recorded yet.</p>
+  {% endif %}
+</div>
+
+{% endblock %}
