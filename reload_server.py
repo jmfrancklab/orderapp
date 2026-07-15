@@ -5,12 +5,13 @@ Reload the PythonAnywhere web app from the console and confirm it came back up.
 Usage (from a PythonAnywhere Bash console):
     python reload_server.py
 
-Requires the $API_TOKEN environment variable, which PythonAnywhere pre-populates
-in all consoles. No arguments needed.
+Uses the $API_TOKEN environment variable if set; otherwise prompts for it.
+Find the token at pythonanywhere.com → Account → API token.
 
 Update DOMAIN below to match the PythonAnywhere domain for this app.
 """
 
+import getpass
 import os
 import sys
 import time
@@ -25,8 +26,11 @@ CHECK_URL  = f'https://{DOMAIN}/debug/health'
 def main():
     api_token = os.environ.get('API_TOKEN', '').strip()
     if not api_token:
-        print('ERROR: $API_TOKEN is not set.')
-        print('Run this script from a PythonAnywhere Bash console — the token is pre-populated there.')
+        print('$API_TOKEN not in environment.')
+        print('Find it at: pythonanywhere.com → Account → API token')
+        api_token = getpass.getpass('Paste API token: ').strip()
+    if not api_token:
+        print('ERROR: no API token provided.')
         return 1
 
     print(f'Reloading {DOMAIN} ...', flush=True)
