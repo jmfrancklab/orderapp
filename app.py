@@ -22,7 +22,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.10.13"
+__version__ = "0.10.14"
 
 # ── Config ────────────────────────────────────────────────────────────────────
 def _load_config():

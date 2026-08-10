@@ -30,6 +30,53 @@
 
   function rowOf(el) { return el.closest(".order-row"); }
 
+  /* --- totals row (sum of cost * quantity for every row currently
+     shown — rows hidden by the column filter are excluded) ---------- */
+
+  function parseMoney(raw) {
+    if (raw == null) return null;
+    var s = String(raw).replace(/,/g, "").trim();
+    if (s === "") return null;
+    var n = parseFloat(s);
+    return isNaN(n) ? null : n;
+  }
+
+  function updateOrderTotals() {
+    var totalEl = document.getElementById("sheet-total");
+    var msgEl = document.getElementById("sheet-missing");
+    if (!totalEl && !msgEl) return;
+
+    var total = 0;
+    var missingQty = [];
+    var missingCost = [];
+    var n = 0;
+
+    document.querySelectorAll(".order-row").forEach(function (row) {
+      if (row.classList.contains("filtered-out")) return;
+      n++;
+      var costEl = row.querySelector('[data-field="cost"]');
+      var qtyEl = row.querySelector('[data-field="quantity"]');
+      var cost = costEl ? parseMoney(costEl.value) : null;
+      var qty = qtyEl ? parseMoney(qtyEl.value) : null;
+      if (qty === null) missingQty.push(n);
+      if (cost === null) missingCost.push(n);
+      if (cost !== null && qty !== null) total += cost * qty;
+    });
+
+    if (totalEl) {
+      totalEl.textContent = "Total: $" + total.toLocaleString(
+        undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+    if (msgEl) {
+      var parts = [];
+      if (missingQty.length) parts.push({ label: "qty", rows: missingQty });
+      if (missingCost.length) parts.push({ label: "cost", rows: missingCost });
+      msgEl.textContent = parts.length ? "missing " + parts.map(function (p, i) {
+        return p.label + " → " + (i === 0 ? "row #" : "") + p.rows.join(",");
+      }).join(" ") : "";
+    }
+  }
+
   function saveField(input) {
     var row = rowOf(input);
     if (!row) return;
@@ -561,6 +608,7 @@
       });
       var emptyMsg = document.getElementById("filtered-empty");
       if (emptyMsg) emptyMsg.hidden = (visibleCount > 0);
+      updateOrderTotals();
       return compiledRegex;
     }
 
@@ -752,7 +800,9 @@
   /* --- delegated events ---------------------------------------------- */
 
   document.addEventListener("input", function (e) {
-    if (e.target.matches("[data-field]")) debounceSave(e.target);
+    if (!e.target.matches("[data-field]")) return;
+    debounceSave(e.target);
+    if (e.target.matches('[data-field="cost"], [data-field="quantity"]')) updateOrderTotals();
   });
 
   function updateStatusClass(sel) {
@@ -813,10 +863,12 @@
     if (e.target.classList.contains("del-yes")) {
       var row = rowOf(e.target);
       post("/api/orders/" + row.dataset.id + "/delete", "POST", {},
-           function () { row.remove(); });
+           function () { row.remove(); updateOrderTotals(); });
       return;
     }
   });
+
+  updateOrderTotals();
 
   /* initialise flags on load */
   document.querySelectorAll(".vendor-select").forEach(updateFlag);

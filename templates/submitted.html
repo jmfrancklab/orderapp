@@ -73,6 +73,13 @@ the vendor just like on the order sheet.</p>
   {% if not rows %}
   <p class="empty">Nothing submitted yet.</p>
   {% endif %}
+
+  {% if rows %}
+  <div class="sheet-foot">
+    <span class="foot-msg" id="sheet-missing"></span>
+    <span class="foot-total" id="sheet-total"></span>
+  </div>
+  {% endif %}
 </div>
 
 {% if rows %}

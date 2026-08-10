@@ -77,6 +77,13 @@ immediately and will still be here next time you sign in.</p>
   {% if not drafts %}
   <p class="empty">No items yet — add a row to start an order.</p>
   {% endif %}
+
+  {% if drafts %}
+  <div class="sheet-foot">
+    <span class="foot-msg" id="sheet-missing"></span>
+    <span class="foot-total" id="sheet-total"></span>
+  </div>
+  {% endif %}
 </div>
 
 <div class="sheet-actions">
