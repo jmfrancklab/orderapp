@@ -165,6 +165,7 @@ input[data-field="link"] { font-family: var(--mono); font-size: .8rem; }
 /* + and submit */
 .sheet-actions {
   display: flex; align-items: center; gap: 1rem; margin-top: .9rem;
+  flex-wrap: wrap;
 }
 .add-btn {
   width: 2.4rem; height: 2.4rem; border-radius: 50%;
@@ -390,6 +391,42 @@ input[data-field="link"] { font-family: var(--mono); font-size: .8rem; }
 .xl-popup select { width: 100%; font-size: .84rem; }
 .xl-popup-actions { display: flex; gap: .5rem; padding-top: 1rem; flex-wrap: wrap; }
 .import-btn { cursor: pointer; }
+
+/* ------------------------------------------------- column filter popup */
+.filter-btn { position: relative; }
+.filter-btn.active { border-color: var(--accent); color: var(--accent); }
+.filter-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 1.1rem; height: 1.1rem; margin-left: .4em; padding: 0 .3em;
+  border-radius: 999px; background: var(--accent); color: #fff;
+  font-size: .68rem; font-weight: 700; line-height: 1;
+}
+
+.filter-popup { width: min(560px, 94vw); }
+
+.filter-section-actions { display: flex; gap: .7rem; margin-bottom: .5rem; }
+.filter-section-actions button {
+  border: none; background: none; padding: 0; cursor: pointer;
+  color: var(--accent); font-size: .74rem; text-decoration: underline;
+}
+
+.filter-check {
+  display: flex; align-items: center; gap: .5rem;
+  font-size: .88rem; margin-bottom: .35rem; cursor: pointer;
+}
+.filter-check input[type="checkbox"] { width: auto; }
+.filter-check-empty { color: #8a94a0; font-style: italic; }
+
+.filter-text-row { display: flex; align-items: center; gap: .6rem; }
+.filter-text-input { flex: 1; }
+.filter-regex-toggle {
+  display: flex; align-items: center; gap: .3rem;
+  font-size: .78rem; color: #5a6572; white-space: nowrap; cursor: pointer;
+}
+.filter-regex-toggle input[type="checkbox"] { width: auto; }
+.filter-regex-error { color: var(--alert); font-size: .74rem; margin-top: .3rem; }
+
+.order-row.filtered-out { display: none; }
 
 /* ------------------------------------------------- small screens */
 @media (max-width: 900px) {

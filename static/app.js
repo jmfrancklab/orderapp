@@ -427,6 +427,328 @@
     cell.querySelector(".chips").appendChild(chip);
   }
 
+  /* --- column filter --------------------------------------------------
+     Google-Sheets-style column filter for the submitted-orders sheet.
+     Entirely DOM-based: no server round-trip, no persisted state — the
+     filter popup is only present when #filter-btn exists on the page. */
+
+  var FILTER_COLUMNS = [
+    { field: "submitted_at", type: "text" },
+    { field: "user_email",   type: "text" },
+    { field: "description",  type: "text" },
+    { field: "link",         type: "text" },
+    { field: "vendor_id",    type: "checkbox", label: "Vendor" },
+    { field: "project_id",   type: "checkbox", label: "Project" },
+    { field: "use_note",     type: "text" },
+    { field: "cost",         type: "text" },
+    { field: "quantity",     type: "text" },
+    { field: "order_status", type: "checkbox", label: "Order Status",
+      fixedValues: ["not ready", "submitted", "ordered", "received"] },
+    { field: "trackers",     type: "text" }
+  ];
+  var FILTER_FIELD_DISPLAY = {
+    submitted_at: "Submitted", user_email: "By", description: "Description",
+    link: "Link", use_note: "Use", cost: "Cost", quantity: "Qty",
+    trackers: "Trackers"
+  };
+
+  var filterBtnEl = document.getElementById("filter-btn");
+
+  if (filterBtnEl) {
+    var filterState = {};
+    FILTER_COLUMNS.forEach(function (col) {
+      filterState[col.field] = (col.type === "checkbox")
+        ? { selected: new Set() }
+        : { query: "", regex: false };
+    });
+
+    function filterLabel(col) {
+      return col.label || FILTER_FIELD_DISPLAY[col.field] || col.field;
+    }
+
+    function getCellValue(row, field) {
+      if (field === "trackers") {
+        return Array.prototype.map.call(
+          row.querySelectorAll(".chip"),
+          function (c) { return c.firstChild ? c.firstChild.textContent : c.textContent; }
+        ).join(" ");
+      }
+      var el = row.querySelector('[data-field="' + field + '"]');
+      if (!el) return "";
+      if (el.tagName === "SPAN") return el.textContent;
+      return el.value;
+    }
+
+    function getCellLabel(row, field) {
+      var el = row.querySelector('[data-field="' + field + '"]');
+      if (!el || el.tagName !== "SELECT") return getCellValue(row, field);
+      var opt = el.selectedOptions[0];
+      return opt ? opt.textContent.trim() : "";
+    }
+
+    function collectUniqueValues(col) {
+      if (col.fixedValues) {
+        return col.fixedValues.map(function (v) {
+          return { value: v, label: v.charAt(0).toUpperCase() + v.slice(1) };
+        });
+      }
+      var seen = {};
+      var sawEmpty = false;
+      document.querySelectorAll(".order-row").forEach(function (row) {
+        var val = getCellValue(row, col.field);
+        if (val === "") { sawEmpty = true; return; }
+        seen[val] = getCellLabel(row, col.field);
+      });
+      var list = Object.keys(seen).map(function (v) { return { value: v, label: seen[v] }; });
+      list.sort(function (a, b) { return a.label.localeCompare(b.label); });
+      if (sawEmpty) list.push({ value: "", label: "(none)" });
+      return list;
+    }
+
+    function debounce(fn, wait) {
+      var t = null;
+      return function () {
+        var args = arguments;
+        clearTimeout(t);
+        t = setTimeout(function () { fn.apply(null, args); }, wait);
+      };
+    }
+
+    function compileRegexSafe(pattern) {
+      try { return { re: new RegExp(pattern, "i"), error: null }; }
+      catch (e) { return { re: null, error: e.message }; }
+    }
+
+    function checkboxColumnMatches(col, row) {
+      var sel = filterState[col.field].selected;
+      if (sel.size === 0) return true;
+      return sel.has(getCellValue(row, col.field));
+    }
+
+    function rowMatchesFilters(row, compiledRegex) {
+      for (var i = 0; i < FILTER_COLUMNS.length; i++) {
+        var col = FILTER_COLUMNS[i];
+        var state = filterState[col.field];
+        if (col.type === "checkbox") {
+          if (!checkboxColumnMatches(col, row)) return false;
+        } else if (state.query !== "") {
+          var haystack = getCellValue(row, col.field) || "";
+          if (state.regex) {
+            var compiled = compiledRegex[col.field];
+            if (compiled && compiled.re && !compiled.re.test(haystack)) return false;
+          } else if (haystack.toLowerCase().indexOf(state.query.toLowerCase()) === -1) {
+            return false;
+          }
+        }
+      }
+      return true;
+    }
+
+    function applyFilters() {
+      // Compile each active regex once per pass, not once per row.
+      var compiledRegex = {};
+      FILTER_COLUMNS.forEach(function (col) {
+        var state = filterState[col.field];
+        if (col.type !== "checkbox" && state.regex && state.query !== "") {
+          compiledRegex[col.field] = compileRegexSafe(state.query);
+        }
+      });
+      var visibleCount = 0;
+      document.querySelectorAll(".order-row").forEach(function (row) {
+        var match = rowMatchesFilters(row, compiledRegex);
+        row.classList.toggle("filtered-out", !match);
+        if (match) visibleCount++;
+      });
+      var emptyMsg = document.getElementById("filtered-empty");
+      if (emptyMsg) emptyMsg.hidden = (visibleCount > 0);
+      return compiledRegex;
+    }
+
+    function activeFilterCount() {
+      var n = 0;
+      FILTER_COLUMNS.forEach(function (col) {
+        var s = filterState[col.field];
+        if (col.type === "checkbox") { if (s.selected.size > 0) n++; }
+        else if (s.query !== "") n++;
+      });
+      return n;
+    }
+
+    function updateFilterBadge() {
+      var badge = document.getElementById("filter-badge");
+      var n = activeFilterCount();
+      if (badge) { badge.hidden = (n === 0); badge.textContent = String(n); }
+      filterBtnEl.classList.toggle("active", n > 0);
+    }
+
+    var _filterOverlay = null, _filterPopup = null;
+
+    function closeFilterPopup() {
+      if (_filterOverlay) { _filterOverlay.remove(); _filterOverlay = null; }
+      if (_filterPopup)   { _filterPopup.remove();   _filterPopup = null; }
+    }
+
+    function clearAllFilters() {
+      FILTER_COLUMNS.forEach(function (col) {
+        if (col.type === "checkbox") filterState[col.field].selected.clear();
+        else { filterState[col.field].query = ""; filterState[col.field].regex = false; }
+      });
+      applyFilters();
+      updateFilterBadge();
+      if (_filterPopup) { closeFilterPopup(); showFilterPopup(); }
+    }
+
+    function buildCheckboxSection(col) {
+      var sec = document.createElement("div");
+      sec.className = "vendor-popup-section";
+      var lbl = document.createElement("div");
+      lbl.className = "vendor-popup-label";
+      lbl.textContent = filterLabel(col);
+      sec.appendChild(lbl);
+
+      var values = collectUniqueValues(col);
+      var state = filterState[col.field];
+
+      var actions = document.createElement("div");
+      actions.className = "filter-section-actions";
+      var allBtn = makePopupBtn("Select all", "", function () {
+        values.forEach(function (v) { state.selected.add(v.value); });
+        sec.querySelectorAll('input[type="checkbox"]').forEach(function (cb) { cb.checked = true; });
+        applyFilters(); updateFilterBadge();
+      });
+      var noneBtn = makePopupBtn("Clear", "", function () {
+        state.selected.clear();
+        sec.querySelectorAll('input[type="checkbox"]').forEach(function (cb) { cb.checked = false; });
+        applyFilters(); updateFilterBadge();
+      });
+      actions.appendChild(allBtn); actions.appendChild(noneBtn);
+      sec.appendChild(actions);
+
+      if (values.length === 0) {
+        var none = document.createElement("div");
+        none.className = "filter-check-empty";
+        none.textContent = "(no values yet)";
+        sec.appendChild(none);
+      }
+
+      values.forEach(function (v) {
+        var row = document.createElement("label");
+        row.className = "filter-check" + (v.value === "" ? " filter-check-empty" : "");
+        var cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = state.selected.has(v.value);
+        cb.addEventListener("change", function () {
+          if (cb.checked) state.selected.add(v.value); else state.selected.delete(v.value);
+          applyFilters(); updateFilterBadge();
+        });
+        row.appendChild(cb);
+        row.appendChild(document.createTextNode(" " + v.label));
+        sec.appendChild(row);
+      });
+
+      return sec;
+    }
+
+    function buildTextSection(col) {
+      var sec = document.createElement("div");
+      sec.className = "vendor-popup-section";
+      var lbl = document.createElement("div");
+      lbl.className = "vendor-popup-label";
+      lbl.textContent = filterLabel(col);
+      sec.appendChild(lbl);
+
+      var state = filterState[col.field];
+
+      var textRow = document.createElement("div");
+      textRow.className = "filter-text-row";
+
+      var input = document.createElement("input");
+      input.type = "text";
+      input.className = "filter-text-input";
+      input.placeholder = "Search…";
+      input.value = state.query;
+
+      var errEl = document.createElement("div");
+      errEl.className = "filter-regex-error";
+      errEl.hidden = true;
+
+      function runFilter() {
+        var compiled = applyFilters();
+        var c = compiled[col.field];
+        if (state.regex && state.query !== "" && c && c.error) {
+          errEl.textContent = "Invalid regex: " + c.error;
+          errEl.hidden = false;
+        } else {
+          errEl.hidden = true;
+        }
+        updateFilterBadge();
+      }
+
+      input.addEventListener("input", debounce(function () {
+        state.query = input.value;
+        runFilter();
+      }, 400));
+
+      var regexLbl = document.createElement("label");
+      regexLbl.className = "filter-regex-toggle";
+      var regexCb = document.createElement("input");
+      regexCb.type = "checkbox";
+      regexCb.checked = state.regex;
+      regexCb.addEventListener("change", function () {
+        state.regex = regexCb.checked;
+        runFilter();
+      });
+      regexLbl.appendChild(regexCb);
+      regexLbl.appendChild(document.createTextNode(" regex"));
+
+      textRow.appendChild(input);
+      textRow.appendChild(regexLbl);
+      sec.appendChild(textRow);
+      sec.appendChild(errEl);
+
+      return sec;
+    }
+
+    function showFilterPopup() {
+      closeFilterPopup();
+
+      var overlay = document.createElement("div");
+      overlay.className = "xl-overlay";
+      overlay.onclick = closeFilterPopup;
+      document.body.appendChild(overlay);
+      _filterOverlay = overlay;
+
+      var pop = document.createElement("div");
+      pop.className = "xl-popup filter-popup";
+      pop.onclick = function (e) { e.stopPropagation(); };
+      _filterPopup = pop;
+
+      var head = document.createElement("div");
+      head.className = "xl-popup-head";
+      var title = document.createElement("strong");
+      title.textContent = "Filter";
+      var xBtn = document.createElement("button");
+      xBtn.type = "button"; xBtn.className = "vendor-popup-x";
+      xBtn.textContent = "×"; xBtn.onclick = closeFilterPopup;
+      head.appendChild(title); head.appendChild(xBtn);
+      pop.appendChild(head);
+
+      FILTER_COLUMNS.forEach(function (col) {
+        pop.appendChild(col.type === "checkbox" ? buildCheckboxSection(col) : buildTextSection(col));
+      });
+
+      var actions = document.createElement("div");
+      actions.className = "xl-popup-actions";
+      actions.appendChild(makePopupBtn("Clear all filters", "mini", clearAllFilters));
+      actions.appendChild(makePopupBtn("Close", "submit-btn", closeFilterPopup));
+      pop.appendChild(actions);
+
+      document.body.appendChild(pop);
+    }
+
+    filterBtnEl.addEventListener("click", showFilterPopup);
+  }
+
   /* --- delegated events ---------------------------------------------- */
 
   document.addEventListener("input", function (e) {

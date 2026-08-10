@@ -16,8 +16,8 @@ the vendor just like on the order sheet.</p>
 
   {% for r in rows %}
   <div class="order-row submitted-row" data-id="{{ r.id }}">
-    <span class="ro">{{ (r.submitted_at or '')[:10] }}</span>
-    <span class="ro">{{ r.user_email }}</span>
+    <span class="ro" data-field="submitted_at">{{ (r.submitted_at or '')[:10] }}</span>
+    <span class="ro" data-field="user_email">{{ r.user_email }}</span>
     <input data-field="description" value="{{ r.description }}">
     <span class="link-cell">
       <input data-field="link" value="{{ r.link }}" inputmode="url">
@@ -76,8 +76,10 @@ the vendor just like on the order sheet.</p>
 
 {% if rows %}
 <div class="sheet-actions">
+  <button type="button" id="filter-btn" class="mini filter-btn">Filter<span class="filter-badge" id="filter-badge" hidden>0</span></button>
   <a href="{{ url_for('export_xlsx', view='submitted') }}" class="mini export-btn">Export to Excel</a>
 </div>
+<p class="empty filtered-empty" id="filtered-empty" hidden>No orders match the current filters.</p>
 {% endif %}
 
 {% endblock %}
