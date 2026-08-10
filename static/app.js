@@ -443,7 +443,7 @@
     { field: "cost",         type: "text" },
     { field: "quantity",     type: "text" },
     { field: "order_status", type: "checkbox", label: "Order Status",
-      fixedValues: ["not ready", "submitted", "ordered", "received"] },
+      fixedValues: ["not ready", "submitted", "ordered", "received", "requires reimbursement"] },
     { field: "trackers",     type: "text" }
   ];
   var FILTER_FIELD_DISPLAY = {
@@ -928,7 +928,9 @@
     hint.className = 'vendor-popup-label';
     hint.style.marginBottom = '.7rem';
     hint.textContent = 'Choose which spreadsheet column maps to each order field. '
-                     + 'Columns with no useful match are set to “Do not import”.';
+                     + 'Columns with no useful match are set to “Do not import”. '
+                     + 'Mapping more than one column to the same field joins their values '
+                     + 'with a space, in column order.';
     pop.appendChild(hint);
 
     var tbl = document.createElement('table');
@@ -977,7 +979,10 @@
         var obj = {};
         headers.forEach(function(col) {
           var field = selects[col].value;
-          if (field) obj[field] = (raw[col] !== undefined && raw[col] !== null) ? String(raw[col]) : '';
+          if (!field) return;
+          var val = (raw[col] !== undefined && raw[col] !== null) ? String(raw[col]) : '';
+          if (!val) return;
+          obj[field] = obj[field] ? (obj[field] + ' ' + val) : val;
         });
         return obj;
       });

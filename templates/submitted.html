@@ -11,7 +11,7 @@ the vendor just like on the order sheet.</p>
   <div class="sheet-head">
     <span>Submitted</span><span>By</span><span>Description</span><span>Link</span>
     <span>Vendor</span><span>Project</span><span>Use</span><span>Cost</span>
-    <span>Qty</span><span>Status</span><span>Trackers</span><span></span>
+    <span class="qty-head">Qty</span><span>Status</span><span>Trackers</span><span></span>
   </div>
 
   {% for r in rows %}
@@ -44,11 +44,12 @@ the vendor just like on the order sheet.</p>
     <input data-field="use_note" value="{{ r.use_note }}">
     <span class="cost-cell"><span class="cost-prefix">$</span><input data-field="cost" value="{{ r.cost | fmt_cost }}" placeholder="0.00" class="cost-input"></span>
     <input data-field="quantity" type="number" min="1" value="{{ r.quantity }}" class="qty-input">
-    <select data-field="order_status" class="status-select status-{{ r.order_status or 'submitted' }}">
+    <select data-field="order_status" class="status-select status-{{ (r.order_status or 'submitted').replace(' ', '-') }}">
       <option value="not ready"  {{ 'selected' if (r.order_status or '') == 'not ready'  }}>Not ready</option>
       <option value="submitted"  {{ 'selected' if (r.order_status or 'submitted') == 'submitted'  }}>Submitted</option>
       <option value="ordered"    {{ 'selected' if (r.order_status or '') == 'ordered'    }}>Ordered</option>
       <option value="received"   {{ 'selected' if (r.order_status or '') == 'received'   }}>Received</option>
+      <option value="requires reimbursement" {{ 'selected' if (r.order_status or '') == 'requires reimbursement' }}>Requires reimbursement</option>
     </select>
     <span class="tracker-cell">
       <input class="tracker-input" type="email" placeholder="email + Enter">

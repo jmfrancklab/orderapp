@@ -75,6 +75,10 @@ main { padding: 1.2rem 1.2rem 3rem; max-width: 1500px; margin: 0 auto; }
   font-size: .72rem; text-transform: uppercase; letter-spacing: .08em;
   color: #5a6572; border-bottom: 2px solid var(--ink);
 }
+.sheet-head span {
+  display: block; padding: .4rem .5rem; border: 1px solid transparent;
+}
+.sheet-head .qty-head { text-align: center; }
 .head-hint {
   display: block; text-transform: none; letter-spacing: 0;
   font-style: normal; font-size: .68rem; color: #8a94a0; font-weight: 400;
@@ -98,7 +102,10 @@ input:focus, select:focus {
 }
 input[data-field="link"] { font-family: var(--mono); font-size: .8rem; }
 
-.ro { font-size: .85rem; padding-top: .45rem; overflow-wrap: anywhere; }
+.ro {
+  font-size: .85rem; overflow-wrap: anywhere;
+  padding: .4rem .5rem; border: 1px solid transparent;
+}
 .link-ro a { color: var(--accent); font-family: var(--mono); font-size: .78rem; }
 .chips-ro { font-family: var(--mono); font-size: .76rem; }
 
@@ -124,6 +131,7 @@ input[data-field="link"] { font-family: var(--mono); font-size: .8rem; }
 .status-select.status-submitted   { color: #b45309;       border-color: #b45309; }
 .status-select.status-ordered     { color: #1d4ed8;       border-color: #1d4ed8; }
 .status-select.status-received    { color: #15803d;       border-color: #15803d; }
+.status-select.status-requires-reimbursement { color: #7c3aed; border-color: #7c3aed; }
 
 /* export button */
 .export-btn { text-decoration: none; display: inline-block; }
