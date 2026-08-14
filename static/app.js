@@ -44,12 +44,14 @@
   function updateOrderTotals() {
     var totalEl = document.getElementById("sheet-total");
     var msgEl = document.getElementById("sheet-missing");
-    if (!totalEl && !msgEl) return;
+    var countsEl = document.getElementById("sheet-counts");
+    if (!totalEl && !msgEl && !countsEl) return;
 
     var total = 0;
     var missingQty = [];
     var missingCost = [];
     var n = 0;
+    var itemCount = 0;
 
     document.querySelectorAll(".order-row").forEach(function (row) {
       if (row.classList.contains("filtered-out")) return;
@@ -60,6 +62,7 @@
       var qty = qtyEl ? parseMoney(qtyEl.value) : null;
       if (qty === null) missingQty.push(n);
       if (cost === null) missingCost.push(n);
+      if (qty !== null) itemCount += qty;
       if (cost !== null && qty !== null) total += cost * qty;
     });
 
@@ -74,6 +77,10 @@
       msgEl.textContent = parts.length ? "missing " + parts.map(function (p, i) {
         return p.label + " → " + (i === 0 ? "row #" : "") + p.rows.join(",");
       }).join(" ") : "";
+    }
+    if (countsEl) {
+      countsEl.textContent = "Items: " + itemCount.toLocaleString() +
+        " · Unique items: " + n.toLocaleString();
     }
   }
 
@@ -476,8 +483,9 @@
 
   /* --- column filter --------------------------------------------------
      Google-Sheets-style column filter for the submitted-orders sheet.
-     Entirely DOM-based: no server round-trip, no persisted state — the
-     filter popup is only present when #filter-btn exists on the page. */
+     Filter rules are encoded as HTTP GET parameters so the current view can
+     be bookmarked or shared. The server selects the matching rows and renders
+     their initial totals; this popup only builds the next GET request. */
 
   var FILTER_COLUMNS = [
     { field: "submitted_at", type: "text" },
@@ -490,7 +498,7 @@
     { field: "cost",         type: "text" },
     { field: "quantity",     type: "text" },
     { field: "order_status", type: "checkbox", label: "Order Status",
-      fixedValues: ["not ready", "submitted", "ordered", "received", "requires reimbursement"] },
+      fixedValues: ["not ready", "submitted", "in cart", "ordered", "received", "requires reimbursement"] },
     { field: "trackers",     type: "text" }
   ];
   var FILTER_FIELD_DISPLAY = {
@@ -502,35 +510,50 @@
   var filterBtnEl = document.getElementById("filter-btn");
 
   if (filterBtnEl) {
+    var initialFilterState = {};
+    try {
+      initialFilterState = JSON.parse(filterBtnEl.dataset.filterState || "{}");
+    } catch (e) {
+      initialFilterState = {};
+    }
+    var initialFilterChoices = {};
+    try {
+      initialFilterChoices = JSON.parse(filterBtnEl.dataset.filterChoices || "{}");
+    } catch (e) {
+      initialFilterChoices = {};
+    }
     var filterState = {};
     FILTER_COLUMNS.forEach(function (col) {
+      var initial = initialFilterState[col.field] || {};
       filterState[col.field] = (col.type === "checkbox")
-        ? { selected: new Set() }
-        : { query: "", regex: false };
+        ? { selected: new Set(initial.selected || []) }
+        : { query: initial.query || "", regex: !!initial.regex };
     });
+
+    function filterUrl() {
+      var params = new URLSearchParams(window.location.search);
+      FILTER_COLUMNS.forEach(function (col) {
+        var key = "filter_" + col.field;
+        params.delete(key);
+        params.delete(key + "_regex");
+        var state = filterState[col.field];
+        if (col.type === "checkbox") {
+          state.selected.forEach(function (value) { params.append(key, value); });
+        } else if (state.query !== "") {
+          params.set(key, state.query);
+          if (state.regex) params.set(key + "_regex", "1");
+        }
+      });
+      var query = params.toString();
+      return window.location.pathname + (query ? "?" + query : "") + window.location.hash;
+    }
+
+    function applyFilterGet() {
+      window.location.assign(filterUrl());
+    }
 
     function filterLabel(col) {
       return col.label || FILTER_FIELD_DISPLAY[col.field] || col.field;
-    }
-
-    function getCellValue(row, field) {
-      if (field === "trackers") {
-        return Array.prototype.map.call(
-          row.querySelectorAll(".chip"),
-          function (c) { return c.firstChild ? c.firstChild.textContent : c.textContent; }
-        ).join(" ");
-      }
-      var el = row.querySelector('[data-field="' + field + '"]');
-      if (!el) return "";
-      if (el.tagName === "SPAN") return el.textContent;
-      return el.value;
-    }
-
-    function getCellLabel(row, field) {
-      var el = row.querySelector('[data-field="' + field + '"]');
-      if (!el || el.tagName !== "SELECT") return getCellValue(row, field);
-      var opt = el.selectedOptions[0];
-      return opt ? opt.textContent.trim() : "";
     }
 
     function collectUniqueValues(col) {
@@ -539,17 +562,7 @@
           return { value: v, label: v.charAt(0).toUpperCase() + v.slice(1) };
         });
       }
-      var seen = {};
-      var sawEmpty = false;
-      document.querySelectorAll(".order-row").forEach(function (row) {
-        var val = getCellValue(row, col.field);
-        if (val === "") { sawEmpty = true; return; }
-        seen[val] = getCellLabel(row, col.field);
-      });
-      var list = Object.keys(seen).map(function (v) { return { value: v, label: seen[v] }; });
-      list.sort(function (a, b) { return a.label.localeCompare(b.label); });
-      if (sawEmpty) list.push({ value: "", label: "(none)" });
-      return list;
+      return initialFilterChoices[col.field] || [];
     }
 
     function debounce(fn, wait) {
@@ -564,52 +577,6 @@
     function compileRegexSafe(pattern) {
       try { return { re: new RegExp(pattern, "i"), error: null }; }
       catch (e) { return { re: null, error: e.message }; }
-    }
-
-    function checkboxColumnMatches(col, row) {
-      var sel = filterState[col.field].selected;
-      if (sel.size === 0) return true;
-      return sel.has(getCellValue(row, col.field));
-    }
-
-    function rowMatchesFilters(row, compiledRegex) {
-      for (var i = 0; i < FILTER_COLUMNS.length; i++) {
-        var col = FILTER_COLUMNS[i];
-        var state = filterState[col.field];
-        if (col.type === "checkbox") {
-          if (!checkboxColumnMatches(col, row)) return false;
-        } else if (state.query !== "") {
-          var haystack = getCellValue(row, col.field) || "";
-          if (state.regex) {
-            var compiled = compiledRegex[col.field];
-            if (compiled && compiled.re && !compiled.re.test(haystack)) return false;
-          } else if (haystack.toLowerCase().indexOf(state.query.toLowerCase()) === -1) {
-            return false;
-          }
-        }
-      }
-      return true;
-    }
-
-    function applyFilters() {
-      // Compile each active regex once per pass, not once per row.
-      var compiledRegex = {};
-      FILTER_COLUMNS.forEach(function (col) {
-        var state = filterState[col.field];
-        if (col.type !== "checkbox" && state.regex && state.query !== "") {
-          compiledRegex[col.field] = compileRegexSafe(state.query);
-        }
-      });
-      var visibleCount = 0;
-      document.querySelectorAll(".order-row").forEach(function (row) {
-        var match = rowMatchesFilters(row, compiledRegex);
-        row.classList.toggle("filtered-out", !match);
-        if (match) visibleCount++;
-      });
-      var emptyMsg = document.getElementById("filtered-empty");
-      if (emptyMsg) emptyMsg.hidden = (visibleCount > 0);
-      updateOrderTotals();
-      return compiledRegex;
     }
 
     function activeFilterCount() {
@@ -641,9 +608,7 @@
         if (col.type === "checkbox") filterState[col.field].selected.clear();
         else { filterState[col.field].query = ""; filterState[col.field].regex = false; }
       });
-      applyFilters();
-      updateFilterBadge();
-      if (_filterPopup) { closeFilterPopup(); showFilterPopup(); }
+      applyFilterGet();
     }
 
     function buildCheckboxSection(col) {
@@ -662,12 +627,12 @@
       var allBtn = makePopupBtn("Select all", "", function () {
         values.forEach(function (v) { state.selected.add(v.value); });
         sec.querySelectorAll('input[type="checkbox"]').forEach(function (cb) { cb.checked = true; });
-        applyFilters(); updateFilterBadge();
+        updateFilterBadge();
       });
       var noneBtn = makePopupBtn("Clear", "", function () {
         state.selected.clear();
         sec.querySelectorAll('input[type="checkbox"]').forEach(function (cb) { cb.checked = false; });
-        applyFilters(); updateFilterBadge();
+        updateFilterBadge();
       });
       actions.appendChild(allBtn); actions.appendChild(noneBtn);
       sec.appendChild(actions);
@@ -687,7 +652,7 @@
         cb.checked = state.selected.has(v.value);
         cb.addEventListener("change", function () {
           if (cb.checked) state.selected.add(v.value); else state.selected.delete(v.value);
-          applyFilters(); updateFilterBadge();
+          updateFilterBadge();
         });
         row.appendChild(cb);
         row.appendChild(document.createTextNode(" " + v.label));
@@ -721,8 +686,8 @@
       errEl.hidden = true;
 
       function runFilter() {
-        var compiled = applyFilters();
-        var c = compiled[col.field];
+        var c = state.regex && state.query !== ""
+          ? compileRegexSafe(state.query) : null;
         if (state.regex && state.query !== "" && c && c.error) {
           errEl.textContent = "Invalid regex: " + c.error;
           errEl.hidden = false;
@@ -788,13 +753,136 @@
       var actions = document.createElement("div");
       actions.className = "xl-popup-actions";
       actions.appendChild(makePopupBtn("Clear all filters", "mini", clearAllFilters));
-      actions.appendChild(makePopupBtn("Close", "submit-btn", closeFilterPopup));
+      actions.appendChild(makePopupBtn("Cancel", "mini", closeFilterPopup));
+      actions.appendChild(makePopupBtn("Apply filters", "submit-btn", applyFilterGet));
       pop.appendChild(actions);
 
       document.body.appendChild(pop);
     }
 
     filterBtnEl.addEventListener("click", showFilterPopup);
+    updateFilterBadge();
+  }
+
+  /* --- in-cart ordering and invoice popup ---------------------------- */
+
+  var markCartOrderedBtn = document.getElementById("mark-cart-ordered");
+  if (markCartOrderedBtn) {
+    markCartOrderedBtn.addEventListener("click", function () {
+      if (!window.confirm(
+        "Mark every in-cart item on your Submitted page as ordered and create one invoice?")) return;
+      markCartOrderedBtn.disabled = true;
+      markCartOrderedBtn.textContent = "Creating invoice…";
+      fetch("/api/invoices/from-cart", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}"
+      }).then(function (r) {
+        return r.json().then(function (data) {
+          if (!r.ok) throw new Error(data.error || "could not create invoice");
+          return data;
+        });
+      }).then(function () {
+        window.location.reload();
+      }).catch(function (err) {
+        markCartOrderedBtn.disabled = false;
+        markCartOrderedBtn.textContent = "Mark all in cart as ordered";
+        window.alert(err.message);
+      });
+    });
+  }
+
+  var _invoiceOverlay = null, _invoicePopup = null;
+
+  function closeInvoicePopup() {
+    if (_invoiceOverlay) { _invoiceOverlay.remove(); _invoiceOverlay = null; }
+    if (_invoicePopup) { _invoicePopup.remove(); _invoicePopup = null; }
+  }
+
+  function invoiceField(label, value, field, editing) {
+    var row = document.createElement("div");
+    row.className = "invoice-field";
+    var name = document.createElement("span");
+    name.className = "invoice-field-label";
+    name.textContent = label;
+    row.appendChild(name);
+
+    if (editing) {
+      var input = document.createElement("input");
+      input.type = field === "nickname" ? "text" : "url";
+      input.name = field;
+      input.value = value || "";
+      if (field === "nickname") input.required = true;
+      if (field !== "nickname") input.placeholder = "https://www.dropbox.com/…";
+      row.appendChild(input);
+    } else {
+      var shown = document.createElement("span");
+      shown.className = "invoice-field-value";
+      if (field !== "nickname" && /^https?:\/\//i.test(value || "")) {
+        var link = document.createElement("a");
+        link.href = value; link.target = "_blank"; link.rel = "noopener";
+        link.textContent = value;
+        shown.appendChild(link);
+      } else {
+        shown.textContent = value || "Not added";
+        if (!value) shown.classList.add("invoice-empty");
+      }
+      row.appendChild(shown);
+    }
+    return row;
+  }
+
+  function showInvoicePopup(link, editing) {
+    closeInvoicePopup();
+    var overlay = document.createElement("div");
+    overlay.className = "xl-overlay";
+    overlay.onclick = closeInvoicePopup;
+    document.body.appendChild(overlay);
+    _invoiceOverlay = overlay;
+
+    var pop = document.createElement("div");
+    pop.className = "xl-popup invoice-popup";
+    pop.onclick = function (e) { e.stopPropagation(); };
+    _invoicePopup = pop;
+
+    var head = document.createElement("div");
+    head.className = "xl-popup-head";
+    var title = document.createElement("strong");
+    title.textContent = editing ? "Edit invoice" : "Invoice " + link.dataset.nickname;
+    var close = document.createElement("button");
+    close.type = "button"; close.className = "vendor-popup-x";
+    close.textContent = "×"; close.onclick = closeInvoicePopup;
+    head.appendChild(title); head.appendChild(close); pop.appendChild(head);
+
+    var fields = document.createElement(editing ? "form" : "div");
+    fields.className = "invoice-fields";
+    fields.appendChild(invoiceField("Nickname", link.dataset.nickname, "nickname", editing));
+    fields.appendChild(invoiceField("Invoice", link.dataset.invoiceUrl, "invoice_url", editing));
+    fields.appendChild(invoiceField("Receipt", link.dataset.receiptUrl, "receipt_url", editing));
+
+    if (editing) {
+      var actions = document.createElement("div");
+      actions.className = "xl-popup-actions";
+      actions.appendChild(makePopupBtn("Cancel", "mini", closeInvoicePopup));
+      var save = makePopupBtn("Save", "submit-btn", function () {});
+      save.type = "submit";
+      actions.appendChild(save);
+      fields.appendChild(actions);
+      fields.addEventListener("submit", function (e) {
+        e.preventDefault();
+        var nickname = fields.elements.nickname.value.trim();
+        if (!nickname) return;
+        save.disabled = true;
+        post("/api/invoices/" + link.dataset.invoiceId, "POST", {
+          nickname: nickname,
+          invoice_url: fields.elements.invoice_url.value.trim(),
+          receipt_url: fields.elements.receipt_url.value.trim()
+        }, function () { window.location.reload(); });
+      });
+    }
+    pop.appendChild(fields);
+    document.body.appendChild(pop);
+    if (editing) fields.elements.nickname.focus();
   }
 
   /* --- delegated events ---------------------------------------------- */
@@ -838,6 +926,18 @@
   });
 
   document.addEventListener("click", function (e) {
+    var invoiceName = e.target.closest(".invoice-name");
+    if (invoiceName) {
+      e.preventDefault();
+      showInvoicePopup(invoiceName, false);
+      return;
+    }
+    if (e.target.classList.contains("invoice-edit")) {
+      var invoiceLink = document.querySelector(
+        '.invoice-name[data-invoice-id="' + e.target.dataset.invoiceId + '"]');
+      if (invoiceLink) showInvoicePopup(invoiceLink, true);
+      return;
+    }
     // chip remove
     if (e.target.classList.contains("chip-x")) {
       var chip = e.target.closest(".chip");
@@ -868,7 +968,9 @@
     }
   });
 
-  updateOrderTotals();
+  // Submitted-page initial totals come from the GET response. Draft totals are
+  // still calculated here, and either page recalculates immediately after edits.
+  if (!document.querySelector(".submitted-sheet")) updateOrderTotals();
 
   /* initialise flags on load */
   document.querySelectorAll(".vendor-select").forEach(updateFlag);

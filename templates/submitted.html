@@ -47,7 +47,10 @@ the vendor just like on the order sheet.</p>
     <select data-field="order_status" class="status-select status-{{ (r.order_status or 'submitted').replace(' ', '-') }}">
       <option value="not ready"  {{ 'selected' if (r.order_status or '') == 'not ready'  }}>Not ready</option>
       <option value="submitted"  {{ 'selected' if (r.order_status or 'submitted') == 'submitted'  }}>Submitted</option>
-      <option value="ordered"    {{ 'selected' if (r.order_status or '') == 'ordered'    }}>Ordered</option>
+      <option value="in cart"    {{ 'selected' if (r.order_status or '') == 'in cart'    }}>In cart</option>
+      {% if (r.order_status or '') == 'ordered' %}
+      <option value="ordered" selected disabled>Ordered</option>
+      {% endif %}
       <option value="received"   {{ 'selected' if (r.order_status or '') == 'received'   }}>Received</option>
       <option value="requires reimbursement" {{ 'selected' if (r.order_status or '') == 'requires reimbursement' }}>Requires reimbursement</option>
     </select>
@@ -70,24 +73,52 @@ the vendor just like on the order sheet.</p>
   </div>
   {% endfor %}
 
-  {% if not rows %}
+  {% if not rows and not submitted_filters_active %}
   <p class="empty">Nothing submitted yet.</p>
+  {% elif not rows %}
+  <p class="empty">No orders match the filters in this URL.</p>
   {% endif %}
 
   {% if rows %}
   <div class="sheet-foot">
-    <span class="foot-msg" id="sheet-missing"></span>
-    <span class="foot-total" id="sheet-total"></span>
+    <span class="foot-msg" id="sheet-missing">{{ submitted_totals.missing }}</span>
+    <span class="foot-total" id="sheet-total">Total: ${{ submitted_totals.total }}</span>
+    <span class="foot-counts" id="sheet-counts">Items: {{ submitted_totals.item_count }} · Unique items: {{ submitted_totals.unique_items }}</span>
   </div>
   {% endif %}
 </div>
 
-{% if rows %}
 <div class="sheet-actions">
-  <button type="button" id="filter-btn" class="mini filter-btn">Filter<span class="filter-badge" id="filter-badge" hidden>0</span></button>
+  <button type="button" id="filter-btn" class="mini filter-btn"
+          data-filter-state="{{ submitted_filters | tojson | forceescape }}"
+          data-filter-choices="{{ submitted_filter_choices | tojson | forceescape }}">Filter<span class="filter-badge" id="filter-badge" hidden>0</span></button>
+  {% if has_submitted_orders %}
   <a href="{{ url_for('export_xlsx', view='submitted') }}" class="mini export-btn">Export to Excel</a>
+  <button type="button" id="mark-cart-ordered" class="submit-btn"
+          {% if not in_cart_count %}disabled{% endif %}>
+    Mark all in cart as ordered{% if in_cart_count %} ({{ in_cart_count }}){% endif %}
+  </button>
+  {% endif %}
 </div>
-<p class="empty filtered-empty" id="filtered-empty" hidden>No orders match the current filters.</p>
+
+{% if invoices %}
+<section class="invoice-section" aria-labelledby="invoice-heading">
+  <h2 id="invoice-heading" class="ref-section">Invoices</h2>
+  <div class="invoice-list">
+    {% for invoice in invoices %}
+    <span class="invoice-entry">
+      <a href="#invoice-{{ invoice.id }}" class="invoice-name"
+         data-invoice-id="{{ invoice.id }}"
+         data-nickname="{{ invoice.nickname }}"
+         data-invoice-url="{{ invoice.invoice_url }}"
+         data-receipt-url="{{ invoice.receipt_url }}">{{ invoice.nickname }}</a>
+      <button type="button" class="invoice-edit"
+              data-invoice-id="{{ invoice.id }}">edit</button>
+      <span class="invoice-item-count">{{ invoice.item_count }} item{{ '' if invoice.item_count == 1 else 's' }} · {{ invoice.unique_items }} unique</span>
+    </span>
+    {% endfor %}
+  </div>
+</section>
 {% endif %}
 
 {% endblock %}

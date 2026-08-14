@@ -22,7 +22,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.10.14"
+__version__ = "0.11.1"
 
 # ── Config ────────────────────────────────────────────────────────────────────
 def _load_config():
@@ -399,6 +399,14 @@ def init_db():
         name TEXT NOT NULL UNIQUE,
         notes TEXT DEFAULT ''
     );
+    CREATE TABLE IF NOT EXISTS invoices (
+        id INTEGER PRIMARY KEY,
+        nickname TEXT NOT NULL DEFAULT '',
+        invoice_url TEXT NOT NULL DEFAULT '',
+        receipt_url TEXT NOT NULL DEFAULT '',
+        created_by TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS orders (
         id INTEGER PRIMARY KEY,
         user_email TEXT NOT NULL,               -- locked after submission
@@ -411,6 +419,7 @@ def init_db():
         quantity INTEGER NOT NULL DEFAULT 1,
         status TEXT NOT NULL DEFAULT 'draft',         -- 'draft' | 'submitted'
         order_status TEXT NOT NULL DEFAULT 'submitted',-- fulfillment status
+        invoice_id INTEGER REFERENCES invoices(id) ON DELETE SET NULL,
         submitted_at TEXT                             -- locked after submission
     );
     CREATE TABLE IF NOT EXISTS trackers (
@@ -456,6 +465,7 @@ def init_db():
         "ALTER TABLE orders ADD COLUMN cost TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE orders ADD COLUMN order_status TEXT NOT NULL DEFAULT 'submitted'",
         "ALTER TABLE orders ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE orders ADD COLUMN invoice_id INTEGER REFERENCES invoices(id) ON DELETE SET NULL",
         "ALTER TABLE allowed_emails ADD COLUMN password_hash TEXT",
     ]:
         try:
@@ -588,6 +598,122 @@ def trackers_for(db, order_ids):
     return out
 
 
+SUBMITTED_TEXT_FILTERS = (
+    "submitted_at", "user_email", "description", "link", "use_note", "cost",
+    "quantity", "trackers",
+)
+SUBMITTED_CHOICE_FILTERS = ("vendor_id", "project_id", "order_status")
+
+
+def submitted_filters_from_args(args):
+    """Return the supported Submitted-page filters from HTTP GET parameters."""
+    filters = {}
+    for field in SUBMITTED_TEXT_FILTERS:
+        query = args.get(f"filter_{field}", "")
+        filters[field] = {
+            "query": query,
+            "regex": bool(query) and args.get(f"filter_{field}_regex") == "1",
+        }
+    for field in SUBMITTED_CHOICE_FILTERS:
+        filters[field] = {"selected": args.getlist(f"filter_{field}")}
+    return filters
+
+
+def submitted_filters_active(filters):
+    return any(
+        state.get("query") or state.get("selected")
+        for state in filters.values()
+    )
+
+
+def _submitted_text_value(row, field, trackers):
+    if field == "trackers":
+        return " ".join(trackers.get(row["id"], []))
+    if field == "submitted_at":
+        return (row["submitted_at"] or "")[:10]
+    if field == "cost":
+        return fmt_cost(row["cost"])
+    return str(row[field] if row[field] is not None else "")
+
+
+def filter_submitted_rows(rows, filters, trackers):
+    """Apply validated Submitted-page GET filters to visible order rows."""
+    compiled = {}
+    for field in SUBMITTED_TEXT_FILTERS:
+        state = filters[field]
+        if state["query"] and state["regex"]:
+            try:
+                compiled[field] = re.compile(state["query"], re.IGNORECASE)
+            except re.error:
+                compiled[field] = None  # Match the old UI: invalid regex filters nothing.
+
+    filtered = []
+    for row in rows:
+        matches = True
+        for field in SUBMITTED_TEXT_FILTERS:
+            state = filters[field]
+            query = state["query"]
+            if not query:
+                continue
+            value = _submitted_text_value(row, field, trackers)
+            if state["regex"]:
+                pattern = compiled.get(field)
+                if pattern is not None and not pattern.search(value):
+                    matches = False
+                    break
+            elif query.casefold() not in value.casefold():
+                matches = False
+                break
+        if not matches:
+            continue
+        for field in SUBMITTED_CHOICE_FILTERS:
+            selected = filters[field]["selected"]
+            value = str(row[field] if row[field] is not None else "")
+            if selected and value not in selected:
+                matches = False
+                break
+        if matches:
+            filtered.append(row)
+    return filtered
+
+
+def submitted_filter_choices(rows, vendors, projects):
+    labels = {
+        "vendor_id": {str(v["id"]): v["name"] for v in vendors},
+        "project_id": {str(p["id"]): p["name"] for p in projects},
+    }
+    choices = {}
+    for field in ("vendor_id", "project_id"):
+        values = {str(row[field] if row[field] is not None else "") for row in rows}
+        choices[field] = [
+            {"value": value, "label": labels[field].get(value, "(none)" if not value else value)}
+            for value in sorted(values, key=lambda value: labels[field].get(value, "").casefold())
+        ]
+    return choices
+
+
+def submitted_totals(rows):
+    total = 0.0
+    item_count = 0
+    missing_cost = []
+    for index, row in enumerate(rows, 1):
+        quantity = row["quantity"] or 0
+        item_count += quantity
+        try:
+            total += float(str(row["cost"] or "").replace(",", "")) * quantity
+        except ValueError:
+            missing_cost.append(index)
+    missing = ""
+    if missing_cost:
+        missing = "missing cost → row #" + ",".join(map(str, missing_cost))
+    return {
+        "total": f"{total:,.2f}",
+        "item_count": item_count,
+        "unique_items": len(rows),
+        "missing": missing,
+    }
+
+
 def current_user():
     return session.get("email")
 
@@ -610,6 +736,16 @@ def order_visible_to(db, order_id, email):
            LEFT JOIN trackers t ON t.order_id = o.id AND t.email = ?
            WHERE o.id = ? AND (o.user_email = ? OR t.email IS NOT NULL)""",
         (email, order_id, email)).fetchone()
+
+
+def invoice_visible_to(db, invoice_id, email):
+    """User may view/edit an invoice when one of its orders is visible to them."""
+    return db.execute(
+        """SELECT DISTINCT i.* FROM invoices i
+           JOIN orders o ON o.invoice_id = i.id
+           LEFT JOIN trackers t ON t.order_id = o.id AND t.email = ?
+           WHERE i.id = ? AND (o.user_email = ? OR t.email IS NOT NULL)""",
+        (email, invoice_id, email)).fetchone()
 
 def get_client_ip():
     return request.headers.get("X-Forwarded-For", request.remote_addr).split(",")[0].strip()
@@ -878,16 +1014,36 @@ def submit_orders():
 def submitted():
     db = get_db()
     email = current_user()
-    rows = db.execute(
+    all_rows = db.execute(
         """SELECT DISTINCT o.* FROM orders o
            LEFT JOIN trackers t ON t.order_id = o.id
            WHERE o.status = 'submitted' AND (o.user_email = ? OR t.email = ?)
            ORDER BY o.submitted_at DESC, o.id DESC""",
         (email, email)).fetchall()
+    all_trackers = trackers_for(db, [row["id"] for row in all_rows])
+    filters = submitted_filters_from_args(request.args)
+    rows = filter_submitted_rows(all_rows, filters, all_trackers)
+    vendors = fetch_vendors(db)
+    projects = fetch_projects(db)
+    invoices = db.execute(
+        """SELECT i.*, COUNT(o.id) AS unique_items,
+                  COALESCE(SUM(o.quantity), 0) AS item_count
+           FROM invoices i
+           JOIN orders o ON o.invoice_id = i.id
+           WHERE o.user_email = ? OR EXISTS (
+               SELECT 1 FROM trackers t WHERE t.order_id = o.id AND t.email = ?
+           )
+           GROUP BY i.id
+           ORDER BY i.created_at DESC, i.id DESC""",
+        (email, email)).fetchall()
     return render_template(
         "submitted.html", tab="submitted", rows=rows,
-        vendors=fetch_vendors(db), projects=fetch_projects(db),
-        trackers=trackers_for(db, [r["id"] for r in rows]))
+        vendors=vendors, projects=projects, trackers=all_trackers, invoices=invoices,
+        submitted_filters=filters,
+        submitted_filters_active=submitted_filters_active(filters),
+        submitted_filter_choices=submitted_filter_choices(all_rows, vendors, projects),
+        submitted_totals=submitted_totals(rows), has_submitted_orders=bool(all_rows),
+        in_cart_count=sum(row["order_status"] == "in cart" for row in all_rows))
 
 
 @app.route("/vendors", methods=["GET", "POST"])
@@ -1085,6 +1241,8 @@ def update_project(pid):
 # when (submitted_at). Every change is written to order_history.
 EDITABLE_FIELDS = {"description", "link", "vendor_id", "project_id", "use_note", "cost",
                    "quantity", "order_status"}
+ORDER_STATUSES = {"not ready", "submitted", "in cart", "ordered", "received",
+                  "requires reimbursement"}
 
 
 @app.route("/api/orders/<int:oid>", methods=["POST"])
@@ -1099,6 +1257,12 @@ def api_save(oid):
         return jsonify(error="not yours"), 403
 
     data = request.get_json(silent=True) or {}
+    requested_status = data.get("order_status")
+    if requested_status is not None:
+        if requested_status not in ORDER_STATUSES:
+            return jsonify(error="invalid order status"), 400
+        if requested_status == "ordered" and order["order_status"] != "ordered":
+            return jsonify(error="orders can only be marked ordered from the in-cart action"), 400
     sets, vals = [], []
     for field, value in data.items():
         if field not in EDITABLE_FIELDS:
@@ -1119,6 +1283,74 @@ def api_save(oid):
     if sets:
         vals.append(oid)
         db.execute(f"UPDATE orders SET {', '.join(sets)} WHERE id = ?", vals)
+        db.commit()
+    return jsonify(ok=True)
+
+
+@app.route("/api/invoices/from-cart", methods=["POST"])
+@login_required
+def api_invoice_from_cart():
+    """Group every visible in-cart order into an invoice and mark it ordered."""
+    db = get_db()
+    email = current_user()
+    orders = db.execute(
+        """SELECT DISTINCT o.* FROM orders o
+           LEFT JOIN trackers t ON t.order_id = o.id
+           WHERE o.status = 'submitted' AND o.order_status = 'in cart'
+             AND (o.user_email = ? OR t.email = ?)
+           ORDER BY o.id""",
+        (email, email)).fetchall()
+    if not orders:
+        return jsonify(error="no in-cart orders"), 400
+
+    cur = db.execute(
+        "INSERT INTO invoices (nickname, created_by, created_at) VALUES ('', ?, ?)",
+        (email, now_iso()))
+    invoice_id = cur.lastrowid
+    nickname = str(invoice_id)
+    db.execute("UPDATE invoices SET nickname = ? WHERE id = ?", (nickname, invoice_id))
+    log_change(db, invoice_id, "nickname", None, nickname, table_name="invoices")
+
+    for order in orders:
+        log_change(db, order["id"], "order_status", order["order_status"], "ordered")
+        log_change(db, order["id"], "invoice_id", order["invoice_id"], invoice_id)
+        db.execute(
+            "UPDATE orders SET order_status = 'ordered', invoice_id = ? WHERE id = ?",
+            (invoice_id, order["id"]))
+    log_event(db, "invoice_created",
+              f"invoice #{invoice_id} created for {len(orders)} unique item(s)")
+    db.commit()
+    return jsonify(ok=True, invoice_id=invoice_id, nickname=nickname,
+                   unique_items=len(orders),
+                   item_count=sum(order["quantity"] for order in orders))
+
+
+@app.route("/api/invoices/<int:invoice_id>", methods=["POST"])
+@login_required
+def api_save_invoice(invoice_id):
+    db = get_db()
+    invoice = invoice_visible_to(db, invoice_id, current_user())
+    if invoice is None:
+        return jsonify(error="not found"), 404
+
+    data = request.get_json(silent=True) or {}
+    allowed = {"nickname", "invoice_url", "receipt_url"}
+    sets, vals = [], []
+    for field, value in data.items():
+        if field not in allowed:
+            continue
+        value = str(value or "").strip()
+        if field == "nickname" and not value:
+            return jsonify(error="nickname is required"), 400
+        if value != invoice[field]:
+            log_change(db, invoice_id, field, invoice[field], value,
+                       table_name="invoices")
+            sets.append(f"{field} = ?")
+            vals.append(value)
+    if sets:
+        vals.append(invoice_id)
+        db.execute(f"UPDATE invoices SET {', '.join(sets)} WHERE id = ?", vals)
+        log_event(db, "invoice_updated", f"invoice #{invoice_id} updated")
         db.commit()
     return jsonify(ok=True)
 

@@ -36,7 +36,12 @@ of dependency-free vanilla JS (autosave, vendor auto-detect, tracker chips).
 - **Submitted tab** — spreadsheet view of everything you submitted or track,
   with the submitted date. Everything remains editable (autosaved) *except* the
   submission date and who submitted it — enforced server-side, not just in the
-  UI. Trackers can be added/removed here too.
+  UI. Trackers can be added/removed here too. The footer shows total cost, total
+  item quantity, and unique rows. Move rows to **In cart**, then use the page
+  action to create an invoice and mark those rows ordered; invoice and receipt
+  Dropbox links can be edited from the invoice list below the sheet. Submitted
+  filters are stored in the page's GET query string, so a filtered URL can be
+  bookmarked or sent to another user.
 - **Change history** — every field change, tracker add/remove, and submission
   is logged to the `order_history` table (who, when, field, old, new). No GUI
   for it yet; inspect with

@@ -76,8 +76,12 @@ main { padding: 1.2rem 1.2rem 3rem; max-width: 1500px; margin: 0 auto; }
 .sheet-foot { border-bottom: none; border-top: 2px solid var(--ink); font-size: .85rem; }
 .sheet-foot .foot-msg { grid-column: 1 / 6; color: var(--alert); font-size: .78rem; overflow-wrap: anywhere; }
 .sheet-foot .foot-total { grid-column: 6 / 7; font-weight: 700; white-space: nowrap; }
+.sheet-foot .foot-counts { grid-column: 7 / 9; font-weight: 600; white-space: nowrap; }
 .submitted-sheet .sheet-foot .foot-msg { grid-column: 1 / 8; }
 .submitted-sheet .sheet-foot .foot-total { grid-column: 8 / 9; }
+.submitted-sheet .sheet-foot .foot-counts {
+  grid-column: 9 / 12; font-weight: 600; white-space: nowrap;
+}
 .sheet-head {
   font-size: .72rem; text-transform: uppercase; letter-spacing: .08em;
   color: #5a6572; border-bottom: 2px solid var(--ink);
@@ -136,6 +140,7 @@ input[data-field="link"] { font-family: var(--mono); font-size: .8rem; }
 .status-select { font-size: .8rem; font-weight: 600; }
 .status-select.status-not-ready  { color: var(--alert);  border-color: var(--alert); }
 .status-select.status-submitted   { color: #b45309;       border-color: #b45309; }
+.status-select.status-in-cart     { color: #854d0e; border-color: #ca8a04; background: #fef08a; }
 .status-select.status-ordered     { color: #1d4ed8;       border-color: #1d4ed8; }
 .status-select.status-received    { color: #15803d;       border-color: #15803d; }
 .status-select.status-requires-reimbursement { color: #7c3aed; border-color: #7c3aed; }
@@ -194,6 +199,31 @@ input[data-field="link"] { font-family: var(--mono); font-size: .8rem; }
   cursor: pointer;
 }
 .submit-btn:hover { background: #0a5a58; }
+.submit-btn:disabled { background: #9aa5a1; cursor: not-allowed; opacity: .7; }
+
+/* ------------------------------------------------- invoices */
+.invoice-section { margin-top: 1.8rem; }
+.invoice-list { display: flex; flex-wrap: wrap; gap: .8rem; }
+.invoice-entry {
+  display: grid; grid-template-columns: auto; align-items: start;
+  min-width: 8rem; padding: .55rem .7rem;
+  border: 1px solid var(--rule); background: #fff;
+}
+.invoice-name { color: var(--accent); font-weight: 700; }
+.invoice-edit {
+  justify-self: start; border: 0; background: none; padding: 0;
+  color: #687582; cursor: pointer; font-size: .62rem; text-decoration: underline;
+}
+.invoice-item-count { color: #687582; font-size: .68rem; margin-top: .25rem; }
+.invoice-fields { display: grid; gap: .8rem; }
+.invoice-field { display: grid; grid-template-columns: 7rem 1fr; gap: .7rem; align-items: center; }
+.invoice-field-label {
+  color: #5a6572; font-size: .72rem; font-weight: 600;
+  letter-spacing: .06em; text-transform: uppercase;
+}
+.invoice-field-value { overflow-wrap: anywhere; }
+.invoice-field-value a { color: var(--accent); }
+.invoice-empty { color: #8a94a0; font-style: italic; }
 
 /* ------------------------------------------------- reference tables */
 .table-wrap { overflow-x: auto; }
@@ -260,6 +290,7 @@ input[data-field="link"] { font-family: var(--mono); font-size: .8rem; }
 .badge-orders         { background: var(--accent-soft); color: var(--accent); }
 .badge-allowed-emails { background: #dbeafe; color: #1d4ed8; }
 .badge-vendors        { background: #dcfce7; color: #15803d; }
+.badge-invoices       { background: #fef08a; color: #854d0e; }
 .badge-blocked-ips    { background: #fee2e2; color: #dc2626; }
 
 /* ------------------------------------------------- history table */
@@ -441,15 +472,13 @@ input[data-field="link"] { font-family: var(--mono); font-size: .8rem; }
 .filter-regex-toggle input[type="checkbox"] { width: auto; }
 .filter-regex-error { color: var(--alert); font-size: .74rem; margin-top: .3rem; }
 
-.order-row.filtered-out { display: none; }
-
 /* ------------------------------------------------- small screens */
 @media (max-width: 900px) {
   .sheet-head { display: none; }
   .order-row { grid-template-columns: 1fr 1fr; }
   .submitted-row { grid-template-columns: 1fr 1fr; }
   .sheet-foot { grid-template-columns: 1fr; }
-  .sheet-foot .foot-msg, .sheet-foot .foot-total { grid-column: 1; }
+  .sheet-foot .foot-msg, .sheet-foot .foot-total, .sheet-foot .foot-counts { grid-column: 1; }
   .sheet-foot .foot-total { text-align: right; }
 }
 
