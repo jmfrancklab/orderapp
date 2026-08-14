@@ -82,8 +82,10 @@ the vendor just like on the order sheet.</p>
   {% if rows %}
   <div class="sheet-foot">
     <span class="foot-msg" id="sheet-missing">{{ submitted_totals.missing }}</span>
-    <span class="foot-total" id="sheet-total">Total: ${{ submitted_totals.total }}</span>
-    <span class="foot-counts" id="sheet-counts">Items: {{ submitted_totals.item_count }} · Unique items: {{ submitted_totals.unique_items }}</span>
+    <span class="foot-summary">
+      <span class="foot-total" id="sheet-total">Total: ${{ submitted_totals.total }}</span>
+      <span class="foot-counts" id="sheet-counts">Items: {{ submitted_totals.item_count }} · Unique items: {{ submitted_totals.unique_items }}</span>
+    </span>
   </div>
   {% endif %}
 </div>

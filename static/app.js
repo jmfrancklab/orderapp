@@ -649,9 +649,15 @@
         row.className = "filter-check" + (v.value === "" ? " filter-check-empty" : "");
         var cb = document.createElement("input");
         cb.type = "checkbox";
+        cb.dataset.filterValue = v.value;
         cb.checked = state.selected.has(v.value);
         cb.addEventListener("change", function () {
           if (cb.checked) state.selected.add(v.value); else state.selected.delete(v.value);
+          if (col.field === "order_status" && v.value === "submitted" && cb.checked) {
+            state.selected.add("in cart");
+            var inCart = sec.querySelector('input[data-filter-value="in cart"]');
+            if (inCart) inCart.checked = true;
+          }
           updateFilterBadge();
         });
         row.appendChild(cb);
