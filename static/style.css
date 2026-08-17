@@ -24,8 +24,8 @@ body {
 
 /* ------------------------------------------------- top bar / tabs */
 .topbar {
-  display: flex; align-items: baseline; gap: 2rem; flex-wrap: wrap;
-  padding: .7rem 1.2rem;
+  display: flex; align-items: flex-end; gap: 2rem; flex-wrap: wrap;
+  padding: .7rem 1.2rem 0;
   border-bottom: 2px solid var(--ink);
   background: #fff;
 }
@@ -34,19 +34,24 @@ body {
   font-weight: 400; letter-spacing: .3em; font-size: .7rem;
   color: var(--accent); margin-left: .5em; text-transform: uppercase;
 }
-.tabs { display: flex; gap: .25rem; }
+.tabs { display: flex; align-items: flex-end; gap: .25rem; }
 .tabs a {
   padding: .35rem .9rem; text-decoration: none; color: var(--ink);
-  border: 1px solid transparent; border-bottom: none; font-size: .9rem;
+  border: 2px solid transparent; border-bottom: 0; font-size: .9rem;
 }
 .tabs a.active {
   border-color: var(--ink);
   background: var(--paper);
-  position: relative; top: 2px;   /* fuses tab into the sheet below */
+  position: relative; z-index: 1; margin-bottom: -2px;
+  padding-bottom: calc(.35rem + 2px); /* cover the rule beneath the active tab */
   font-weight: 600;
 }
 .tabs a:hover:not(.active) { color: var(--accent); }
-.who { margin-left: auto; font-size: .8rem; color: #5a6572; }
+.accountbar {
+  display: flex; justify-content: flex-end;
+  padding: .45rem 1.2rem 0;
+}
+.who { font-size: .8rem; color: #5a6572; }
 .who a { color: var(--accent); }
 .save-state { margin-left: .8em; font-family: var(--mono); font-size: .72rem; }
 .app-version { margin-left: .4em; font-family: var(--mono); font-size: .65rem; color: #9aa5b1; }
@@ -136,7 +141,8 @@ input[data-field="link"] { font-family: var(--mono); font-size: .8rem; }
 
 /* order status dropdown */
 .status-select { font-size: .8rem; font-weight: 600; }
-.status-select.status-not-ready  { color: var(--alert);  border-color: var(--alert); }
+.status-select.status-not-ready,
+.status-select.status-needs-work { color: var(--alert);  border-color: var(--alert); }
 .status-select.status-submitted   { color: #b45309;       border-color: #b45309; }
 .status-select.status-in-cart     { color: #854d0e; border-color: #ca8a04; background: #fef08a; }
 .status-select.status-ordered     { color: #1d4ed8;       border-color: #1d4ed8; }

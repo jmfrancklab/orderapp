@@ -19,12 +19,14 @@
     <a href="{{ url_for('history') }}"   class="{{ 'active' if tab=='history' }}">History</a>
     <a href="{{ url_for('event_log') }}" class="{{ 'active' if tab=='log' }}">Log</a>
   </nav>
+</header>
+<div class="accountbar">
   <span class="who">
     {{ session['email'] }} · <a href="{{ url_for('logout') }}">sign out</a>
     <span id="save-state" class="save-state" aria-live="polite"></span>
     <span class="app-version">v{{ app_version }}</span>
   </span>
-</header>
+</div>
 <main>
 {% block content %}{% endblock %}
 </main>
