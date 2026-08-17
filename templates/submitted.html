@@ -1,11 +1,13 @@
 {% extends "base.html" %}
 {% block title %}Submitted{% endblock %}
-{% block content %}
-
+{% block page_note %}
 <p class="explain">Every submitted order you placed or are tracking. Everything
 stays editable — and edits are autosaved and logged — except the submission date
 and who submitted it. A Dropbox or SharePoint quote link pasted here is read for
 the vendor just like on the order sheet.</p>
+{% endblock %}
+
+{% block content %}
 
 {% macro invoice_cell(invoice) %}
   {% if invoice %}

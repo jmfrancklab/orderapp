@@ -47,9 +47,14 @@ body {
   font-weight: 600;
 }
 .tabs a:hover:not(.active) { color: var(--accent); }
+.page-meta {
+  display: flex; align-items: flex-start; gap: 1.5rem;
+  max-width: 1500px; margin: 0 auto; padding: .75rem 1.2rem 0;
+}
+.page-note { flex: 1 1 auto; min-width: 0; }
+.page-note .explain { max-width: none; margin-bottom: 0; }
 .accountbar {
-  display: flex; justify-content: flex-end;
-  padding: .45rem 1.2rem 0;
+  flex: 0 0 auto; margin-left: auto; padding-top: .1rem;
 }
 .who { font-size: .8rem; color: #5a6572; }
 .who a { color: var(--accent); }
@@ -480,6 +485,9 @@ input[data-field="link"] { font-family: var(--mono); font-size: .8rem; }
 
 /* ------------------------------------------------- small screens */
 @media (max-width: 900px) {
+  .page-meta { flex-wrap: wrap; }
+  .page-note { flex-basis: 100%; }
+  .accountbar { order: -1; }
   .sheet-head { display: none; }
   .order-row { grid-template-columns: 1fr 1fr; }
   .submitted-row { grid-template-columns: 1fr 1fr; }
