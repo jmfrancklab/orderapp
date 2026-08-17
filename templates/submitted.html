@@ -7,11 +7,27 @@ stays editable — and edits are autosaved and logged — except the submission 
 and who submitted it. A Dropbox or SharePoint quote link pasted here is read for
 the vendor just like on the order sheet.</p>
 
+{% macro invoice_cell(invoice) %}
+  {% if invoice %}
+  <span class="invoice-cell">
+    <a href="#invoice-{{ invoice.id }}" class="invoice-name"
+       data-invoice-id="{{ invoice.id }}"
+       data-nickname="{{ invoice.nickname }}"
+       data-invoice-url="{{ invoice.invoice_url }}"
+       data-receipt-url="{{ invoice.receipt_url }}">{{ invoice.nickname }}</a>
+    <button type="button" class="invoice-edit"
+            data-invoice-id="{{ invoice.id }}">edit</button>
+  </span>
+  {% else %}
+  <span class="invoice-cell invoice-empty">—</span>
+  {% endif %}
+{% endmacro %}
+
 <div class="sheet submitted-sheet">
   <div class="sheet-head">
     <span>Submitted</span><span>By</span><span>Description</span><span>Link</span>
     <span>Vendor</span><span>Project</span><span>Use</span><span>Cost</span>
-    <span class="qty-head">Qty</span><span>Status</span><span>Trackers</span><span></span>
+    <span class="qty-head">Qty</span><span>Status</span><span>Invoice</span><span>Trackers</span><span></span>
   </div>
 
   {% for r in rows %}
@@ -44,7 +60,8 @@ the vendor just like on the order sheet.</p>
     <input data-field="use_note" value="{{ r.use_note }}">
     <span class="cost-cell"><span class="cost-prefix">$</span><input data-field="cost" value="{{ r.cost | fmt_cost }}" placeholder="0.00" class="cost-input"></span>
     <input data-field="quantity" type="number" min="1" value="{{ r.quantity }}" class="qty-input">
-    <select data-field="order_status" class="status-select status-{{ (r.order_status or 'submitted').replace(' ', '-') }}">
+    <select data-field="order_status"
+            class="status-select status-{{ (r.order_status or 'submitted').replace(' ', '-') }}">
       <option value="not ready"  {{ 'selected' if (r.order_status or '') == 'not ready'  }}>Not ready</option>
       <option value="submitted"  {{ 'selected' if (r.order_status or 'submitted') == 'submitted'  }}>Submitted</option>
       <option value="in cart"    {{ 'selected' if (r.order_status or '') == 'in cart'    }}>In cart</option>
@@ -54,6 +71,7 @@ the vendor just like on the order sheet.</p>
       <option value="received"   {{ 'selected' if (r.order_status or '') == 'received'   }}>Received</option>
       <option value="requires reimbursement" {{ 'selected' if (r.order_status or '') == 'requires reimbursement' }}>Requires reimbursement</option>
     </select>
+    {{ invoice_cell(invoice_by_id.get(r.invoice_id)) }}
     <span class="tracker-cell">
       <input class="tracker-input" type="email" placeholder="email + Enter">
       <span class="chips">
@@ -97,30 +115,11 @@ the vendor just like on the order sheet.</p>
   {% if has_submitted_orders %}
   <a href="{{ url_for('export_xlsx', view='submitted') }}" class="mini export-btn">Export to Excel</a>
   <button type="button" id="mark-cart-ordered" class="submit-btn"
+          data-in-cart-count="{{ in_cart_count }}"
           {% if not in_cart_count %}disabled{% endif %}>
     Mark all in cart as ordered{% if in_cart_count %} ({{ in_cart_count }}){% endif %}
   </button>
   {% endif %}
 </div>
-
-{% if invoices %}
-<section class="invoice-section" aria-labelledby="invoice-heading">
-  <h2 id="invoice-heading" class="ref-section">Invoices</h2>
-  <div class="invoice-list">
-    {% for invoice in invoices %}
-    <span class="invoice-entry">
-      <a href="#invoice-{{ invoice.id }}" class="invoice-name"
-         data-invoice-id="{{ invoice.id }}"
-         data-nickname="{{ invoice.nickname }}"
-         data-invoice-url="{{ invoice.invoice_url }}"
-         data-receipt-url="{{ invoice.receipt_url }}">{{ invoice.nickname }}</a>
-      <button type="button" class="invoice-edit"
-              data-invoice-id="{{ invoice.id }}">edit</button>
-      <span class="invoice-item-count">{{ invoice.item_count }} item{{ '' if invoice.item_count == 1 else 's' }} · {{ invoice.unique_items }} unique</span>
-    </span>
-    {% endfor %}
-  </div>
-</section>
-{% endif %}
 
 {% endblock %}

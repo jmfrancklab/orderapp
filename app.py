@@ -22,7 +22,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.11.3"
+__version__ = "0.12.1"
 
 # ── Config ────────────────────────────────────────────────────────────────────
 def _load_config():
@@ -587,6 +587,30 @@ def fetch_projects(db):
     return db.execute("SELECT * FROM projects ORDER BY name COLLATE NOCASE").fetchall()
 
 
+def fetch_visible_invoices(db, email):
+    return db.execute(
+        """SELECT i.*, COUNT(o.id) AS unique_items,
+                  COALESCE(SUM(o.quantity), 0) AS item_count
+           FROM invoices i
+           JOIN orders o ON o.invoice_id = i.id
+           WHERE o.user_email = ? OR EXISTS (
+               SELECT 1 FROM trackers t WHERE t.order_id = o.id AND t.email = ?
+           )
+           GROUP BY i.id
+           ORDER BY i.created_at DESC, i.id DESC""",
+        (email, email)).fetchall()
+
+
+def visible_in_cart_count(db, email):
+    row = db.execute(
+        """SELECT COUNT(DISTINCT o.id) AS n FROM orders o
+           LEFT JOIN trackers t ON t.order_id = o.id
+           WHERE o.status = 'submitted' AND o.order_status = 'in cart'
+             AND (o.user_email = ? OR t.email = ?)""",
+        (email, email)).fetchone()
+    return row["n"]
+
+
 def trackers_for(db, order_ids):
     out = {oid: [] for oid in order_ids}
     if order_ids:
@@ -602,7 +626,7 @@ SUBMITTED_TEXT_FILTERS = (
     "submitted_at", "user_email", "description", "link", "use_note", "cost",
     "quantity", "trackers",
 )
-SUBMITTED_CHOICE_FILTERS = ("vendor_id", "project_id", "order_status")
+SUBMITTED_CHOICE_FILTERS = ("vendor_id", "project_id", "order_status", "invoice_id")
 
 
 def submitted_filters_from_args(args):
@@ -677,14 +701,28 @@ def filter_submitted_rows(rows, filters, trackers):
     return filtered
 
 
-def submitted_filter_choices(rows, vendors, projects):
+def submitted_filter_choices(rows, vendors, projects, invoices, filters, trackers):
     labels = {
         "vendor_id": {str(v["id"]): v["name"] for v in vendors},
         "project_id": {str(p["id"]): p["name"] for p in projects},
+        "invoice_id": {str(i["id"]): i["nickname"] for i in invoices},
+        "order_status": {
+            "not ready": "Not ready", "submitted": "Submitted",
+            "in cart": "In cart", "ordered": "Ordered", "received": "Received",
+            "requires reimbursement": "Requires reimbursement",
+        },
     }
     choices = {}
-    for field in ("vendor_id", "project_id"):
-        values = {str(row[field] if row[field] is not None else "") for row in rows}
+    for field in SUBMITTED_CHOICE_FILTERS:
+        # Facet against every active rule except this field's own selection.
+        # This keeps alternatives selectable while removing choices that cannot
+        # match the rest of the current filtered view.
+        facet_filters = {
+            key: dict(value) for key, value in filters.items()
+        }
+        facet_filters[field]["selected"] = []
+        facet_rows = filter_submitted_rows(rows, facet_filters, trackers)
+        values = {str(row[field] if row[field] is not None else "") for row in facet_rows}
         choices[field] = [
             {"value": value, "label": labels[field].get(value, "(none)" if not value else value)}
             for value in sorted(values, key=lambda value: labels[field].get(value, "").casefold())
@@ -1025,25 +1063,26 @@ def submitted():
     rows = filter_submitted_rows(all_rows, filters, all_trackers)
     vendors = fetch_vendors(db)
     projects = fetch_projects(db)
-    invoices = db.execute(
-        """SELECT i.*, COUNT(o.id) AS unique_items,
-                  COALESCE(SUM(o.quantity), 0) AS item_count
-           FROM invoices i
-           JOIN orders o ON o.invoice_id = i.id
-           WHERE o.user_email = ? OR EXISTS (
-               SELECT 1 FROM trackers t WHERE t.order_id = o.id AND t.email = ?
-           )
-           GROUP BY i.id
-           ORDER BY i.created_at DESC, i.id DESC""",
-        (email, email)).fetchall()
+    invoices = fetch_visible_invoices(db, email)
+    invoice_by_id = {invoice["id"]: invoice for invoice in invoices}
     return render_template(
         "submitted.html", tab="submitted", rows=rows,
         vendors=vendors, projects=projects, trackers=all_trackers, invoices=invoices,
         submitted_filters=filters,
         submitted_filters_active=submitted_filters_active(filters),
-        submitted_filter_choices=submitted_filter_choices(all_rows, vendors, projects),
+        submitted_filter_choices=submitted_filter_choices(
+            all_rows, vendors, projects, invoices, filters, all_trackers),
         submitted_totals=submitted_totals(rows), has_submitted_orders=bool(all_rows),
-        in_cart_count=sum(row["order_status"] == "in cart" for row in all_rows))
+        in_cart_count=visible_in_cart_count(db, email),
+        invoice_by_id=invoice_by_id)
+
+
+@app.route("/invoices")
+@login_required
+def invoices():
+    return render_template(
+        "invoices.html", tab="invoices",
+        invoices=fetch_visible_invoices(get_db(), current_user()))
 
 
 @app.route("/vendors", methods=["GET", "POST"])
@@ -1284,7 +1323,10 @@ def api_save(oid):
         vals.append(oid)
         db.execute(f"UPDATE orders SET {', '.join(sets)} WHERE id = ?", vals)
         db.commit()
-    return jsonify(ok=True)
+    response = {"ok": True}
+    if requested_status is not None:
+        response["in_cart_count"] = visible_in_cart_count(db, email)
+    return jsonify(response)
 
 
 @app.route("/api/invoices/from-cart", methods=["POST"])
@@ -1704,6 +1746,7 @@ def export_xlsx(view):
     if view == "submitted":
         vendor_map  = {v["id"]: v["name"] for v in fetch_vendors(db)}
         project_map = {p["id"]: p["name"] for p in fetch_projects(db)}
+        invoice_map = {i["id"]: i["nickname"] for i in fetch_visible_invoices(db, email)}
         rows = db.execute(
             """SELECT DISTINCT o.* FROM orders o
                LEFT JOIN trackers t ON t.order_id = o.id
@@ -1712,7 +1755,7 @@ def export_xlsx(view):
             (email, email)).fetchall()
         headers = [("ID", 5), ("Submitted", 12), ("By", 24), ("Description", 30),
                    ("Link", 42), ("Vendor", 20), ("Project", 18), ("Use", 22),
-                   ("Cost ($)", 12), ("Order Status", 14)]
+                   ("Cost ($)", 12), ("Order Status", 14), ("Invoice", 18)]
         def _rows():
             for r in rows:
                 yield (r["id"], (r["submitted_at"] or "")[:10], r["user_email"],
@@ -1720,7 +1763,8 @@ def export_xlsx(view):
                        vendor_map.get(r["vendor_id"], ""),
                        project_map.get(r["project_id"], ""),
                        r["use_note"], _cost_val(r["cost"]),
-                       r["order_status"] or "submitted")
+                       r["order_status"] or "submitted",
+                       invoice_map.get(r["invoice_id"], ""))
         wb = _make_workbook("Submitted Orders", headers, _rows())
         return _xlsx_response(wb, "submitted_orders.xlsx")
 

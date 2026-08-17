@@ -84,13 +84,13 @@
     }
   }
 
-  function saveField(input) {
+  function saveField(input, onOk) {
     var row = rowOf(input);
     if (!row) return;
     var field = input.dataset.field;
     var body = {};
     body[field] = input.value;
-    post("/api/orders/" + row.dataset.id, "POST", body);
+    post("/api/orders/" + row.dataset.id, "POST", body, onOk);
   }
 
   function debounceSave(input) {
@@ -497,8 +497,8 @@
     { field: "use_note",     type: "text" },
     { field: "cost",         type: "text" },
     { field: "quantity",     type: "text" },
-    { field: "order_status", type: "checkbox", label: "Order Status",
-      fixedValues: ["not ready", "submitted", "in cart", "ordered", "received", "requires reimbursement"] },
+    { field: "order_status", type: "checkbox", label: "Order Status" },
+    { field: "invoice_id",   type: "checkbox", label: "Invoice" },
     { field: "trackers",     type: "text" }
   ];
   var FILTER_FIELD_DISPLAY = {
@@ -773,6 +773,14 @@
   /* --- in-cart ordering and invoice popup ---------------------------- */
 
   var markCartOrderedBtn = document.getElementById("mark-cart-ordered");
+  function setInCartCount(count) {
+    if (!markCartOrderedBtn) return;
+    count = Math.max(0, count || 0);
+    markCartOrderedBtn.dataset.inCartCount = String(count);
+    markCartOrderedBtn.disabled = count === 0;
+    markCartOrderedBtn.textContent = "Mark all in cart as ordered" +
+      (count ? " (" + count + ")" : "");
+  }
   if (markCartOrderedBtn) {
     markCartOrderedBtn.addEventListener("click", function () {
       if (!window.confirm(
@@ -908,7 +916,13 @@
   document.addEventListener("change", function (e) {
     var t = e.target;
     if (t.matches("select[data-field]")) {
-      saveField(t);
+      if (t.classList.contains("status-select")) {
+        saveField(t, function (data) {
+          setInCartCount(data.in_cart_count);
+        });
+      } else {
+        saveField(t);
+      }
       if (t.classList.contains("vendor-select")) updateFlag(t);
       if (t.classList.contains("status-select")) updateStatusClass(t);
     } else if (t.matches('input[data-field="link"]')) {

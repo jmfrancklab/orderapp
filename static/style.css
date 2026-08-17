@@ -69,7 +69,7 @@ main { padding: 1.2rem 1.2rem 3rem; max-width: 1500px; margin: 0 auto; }
   border-bottom: 1px solid var(--rule);
 }
 .submitted-sheet .sheet-head, .submitted-row, .submitted-sheet .sheet-foot {
-  grid-template-columns: 5.5rem 1fr 1.4fr 1.4fr 1.1fr 1fr 1.1fr 5.5rem 3rem 7rem 1.2fr 2.2rem;
+  grid-template-columns: 5.5rem 1fr 1.4fr 1.4fr 1.1fr 1fr 1.1fr 5.5rem 3rem 7rem 6rem 1.2fr 2.2rem;
 }
 
 /* totals row at the foot of an order sheet */
@@ -208,6 +208,8 @@ input[data-field="link"] { font-family: var(--mono); font-size: .8rem; }
   border: 1px solid var(--rule); background: #fff;
 }
 .invoice-name { color: var(--accent); font-weight: 700; }
+.invoice-cell { display: grid; justify-items: start; align-content: center; min-width: 0; }
+.invoice-cell .invoice-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .invoice-edit {
   justify-self: start; border: 0; background: none; padding: 0;
   color: #687582; cursor: pointer; font-size: .62rem; text-decoration: underline;

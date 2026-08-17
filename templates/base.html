@@ -12,6 +12,7 @@
   <nav class="tabs">
     <a href="{{ url_for('orders') }}"    class="{{ 'active' if tab=='orders' }}">New order</a>
     <a href="{{ url_for('submitted') }}" class="{{ 'active' if tab=='submitted' }}">Submitted</a>
+    <a href="{{ url_for('invoices') }}"  class="{{ 'active' if tab=='invoices' }}">Invoices</a>
     <a href="{{ url_for('vendors') }}"   class="{{ 'active' if tab=='vendors' }}">Vendors</a>
     <a href="{{ url_for('projects') }}"  class="{{ 'active' if tab=='projects' }}">Projects</a>
     <a href="{{ url_for('users') }}"     class="{{ 'active' if tab=='users' }}">Users</a>

@@ -39,9 +39,11 @@ of dependency-free vanilla JS (autosave, vendor auto-detect, tracker chips).
   UI. Trackers can be added/removed here too. The footer shows total cost, total
   item quantity, and unique rows. Move rows to **In cart**, then use the page
   action to create an invoice and mark those rows ordered; invoice and receipt
-  Dropbox links can be edited from the invoice list below the sheet. Submitted
-  filters are stored in the page's GET query string, so a filtered URL can be
-  bookmarked or sent to another user.
+  Dropbox links can be opened and edited from each row's Invoice column.
+  Submitted filters are stored in the page's GET query string, so a filtered
+  URL can be bookmarked or sent to another user.
+- **Invoices tab** — lists every visible invoice with its files and item counts;
+  each invoice links back to a Submitted view filtered to its associated rows.
 - **Change history** — every field change, tracker add/remove, and submission
   is logged to the `order_history` table (who, when, field, old, new). No GUI
   for it yet; inspect with
