@@ -70,7 +70,10 @@ main { padding: 1.2rem 1.2rem 3rem; max-width: 1500px; margin: 0 auto; }
 .explain a { color: var(--accent); }
 
 /* ------------------------------------------------- order sheet */
-.sheet { border-top: 1px solid var(--rule); }
+.sheet {
+  border-top: 1px solid var(--rule);
+  container: order-sheet / inline-size;
+}
 .sheet-head, .order-row, .sheet-foot {
   display: grid;
   grid-template-columns: 1.4fr 1.4fr 1.1fr 1fr 1.2fr 5.5rem 3rem 1.3fr 2.2rem;
@@ -81,6 +84,7 @@ main { padding: 1.2rem 1.2rem 3rem; max-width: 1500px; margin: 0 auto; }
 .submitted-sheet .sheet-head, .submitted-row, .submitted-sheet .sheet-foot {
   grid-template-columns: 5.5rem 1fr 1.4fr 1.4fr 1.1fr 1fr 1.1fr 5.5rem 3rem 7rem 6rem 1.2fr 2.2rem;
 }
+.row-line { display: contents; }
 
 /* totals row at the foot of an order sheet */
 .sheet-foot { border-bottom: none; border-top: 2px solid var(--ink); font-size: .85rem; }
@@ -483,14 +487,78 @@ input[data-field="link"] { font-family: var(--mono); font-size: .8rem; }
 .filter-regex-toggle input[type="checkbox"] { width: auto; }
 .filter-regex-error { color: var(--alert); font-size: .74rem; margin-top: .3rem; }
 
+/* ------------------------------------------------- responsive order sheets
+   At the point useful columns would become too narrow, split every logical
+   row into two aligned grid lines.  The same row-line wrappers are used by
+   the header, so the headings wrap at exactly the same columns as the data. */
+@container order-sheet (max-width: 76rem) {
+  .submitted-sheet .sheet-head,
+  .submitted-sheet .submitted-row { display: block; }
+
+  .submitted-sheet .row-line {
+    display: grid; gap: .6rem; align-items: center;
+  }
+  .submitted-sheet .row-line-primary {
+    grid-template-columns:
+      5.5rem minmax(8rem, 1fr) minmax(11rem, 1.4fr) minmax(5rem, .65fr)
+      minmax(8rem, 1fr) minmax(8rem, 1fr) minmax(9rem, 1.1fr);
+  }
+  .submitted-sheet .row-line-secondary {
+    grid-template-columns:
+      5.5rem 3rem minmax(7rem, 1fr) 6rem minmax(12rem, 1.8fr) 2.2rem;
+  }
+}
+
+@container order-sheet (max-width: 64rem) {
+  .sheet:not(.submitted-sheet) .sheet-head,
+  .sheet:not(.submitted-sheet) .order-row { display: block; }
+
+  .sheet:not(.submitted-sheet) .row-line {
+    display: grid; gap: .6rem; align-items: center;
+  }
+  .sheet:not(.submitted-sheet) .row-line-primary {
+    grid-template-columns:
+      minmax(11rem, 1.4fr) minmax(5rem, .7fr) minmax(8rem, 1fr)
+      minmax(8rem, 1fr) minmax(10rem, 1.2fr);
+  }
+  .sheet:not(.submitted-sheet) .row-line-secondary {
+    grid-template-columns: 5.5rem 3rem minmax(12rem, 1fr) 2.2rem;
+  }
+}
+
+@container order-sheet (max-width: 76rem) {
+  .submitted-sheet .row-line-secondary {
+    position: relative; margin-top: .5rem; padding: .5rem 0 0 1.9rem;
+    border-top: 1px dashed var(--rule);
+  }
+  .submitted-sheet .row-line-secondary::before {
+    content: "\2937"; position: absolute; left: .3rem; top: .55rem;
+    color: #7b8794; font-size: 1rem; line-height: 1;
+  }
+}
+
+@container order-sheet (max-width: 64rem) {
+  .sheet:not(.submitted-sheet) .row-line-secondary {
+    position: relative; margin-top: .5rem; padding: .5rem 0 0 1.9rem;
+    border-top: 1px dashed var(--rule);
+  }
+  .sheet:not(.submitted-sheet) .row-line-secondary::before {
+    content: "\2937"; position: absolute; left: .3rem; top: .55rem;
+    color: #7b8794; font-size: 1rem; line-height: 1;
+  }
+}
+
 /* ------------------------------------------------- small screens */
 @media (max-width: 900px) {
   .page-meta { flex-wrap: wrap; }
   .page-note { flex-basis: 100%; }
   .accountbar { order: -1; }
-  .sheet-head { display: none; }
-  .order-row { grid-template-columns: 1fr 1fr; }
-  .submitted-row { grid-template-columns: 1fr 1fr; }
+  .sheet-head, .order-row, .submitted-row { display: block; }
+  .submitted-sheet .row-line,
+  .sheet:not(.submitted-sheet) .row-line {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: .6rem; align-items: center;
+  }
   .sheet-foot { grid-template-columns: 1fr; }
   .sheet-foot .foot-msg, .sheet-foot .foot-summary { grid-column: 1; }
 }

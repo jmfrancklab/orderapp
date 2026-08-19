@@ -33,46 +33,54 @@ immediately and will still be here next time you sign in.</p>
 
 <div class="sheet">
   <div class="sheet-head">
-    <span>Description <em class="head-hint">a short name others will recognize</em></span>
-    <span>Link <em class="head-hint">purchase URL, or Dropbox / SharePoint link to a quote PDF</em></span>
-    <span>Vendor <em class="head-hint">auto-filled from the link or quote</em></span>
-    <span>Project <em class="head-hint">official grant or funding category</em></span>
-    <span>Use <em class="head-hint">hardware / compute / chemical / … then detail</em></span>
-    <span>Cost <em class="head-hint">auto-filled from link</em></span>
-    <span class="qty-head">Qty</span>
-    <span>Trackers <em class="head-hint">others tracking this order — also grants them login access</em></span>
-    <span></span>
+    <div class="row-line row-line-primary">
+      <span>Description <em class="head-hint">a short name others will recognize</em></span>
+      <span>Link <em class="head-hint">purchase URL, or Dropbox / SharePoint link to a quote PDF</em></span>
+      <span>Vendor <em class="head-hint">auto-filled from the link or quote</em></span>
+      <span>Project <em class="head-hint">official grant or funding category</em></span>
+      <span>Use <em class="head-hint">hardware / compute / chemical / … then detail</em></span>
+    </div>
+    <div class="row-line row-line-secondary">
+      <span>Cost <em class="head-hint">auto-filled from link</em></span>
+      <span class="qty-head">Qty</span>
+      <span>Trackers <em class="head-hint">others tracking this order — also grants them login access</em></span>
+      <span></span>
+    </div>
   </div>
 
   {% for d in drafts %}
   <div class="order-row" data-id="{{ d.id }}">
-    <input data-field="description" value="{{ d.description }}" placeholder="What is it?">
-    <span class="link-cell">
-      <input data-field="link" value="{{ d.link }}" placeholder="https://…" inputmode="url">
-      <span class="row-note" aria-live="polite"></span>
-    </span>
-    <span class="vendor-cell">{{ vendor_select(d.vendor_id) }}</span>
-    <select data-field="project_id">
-      <option value=""></option>
-      {% for p in projects %}
-      <option value="{{ p.id }}" {{ 'selected' if d.project_id == p.id }}>{{ p.name }}</option>
-      {% endfor %}
-    </select>
-    <input data-field="use_note" value="{{ d.use_note }}" placeholder="What's it for?">
-    <span class="cost-cell"><span class="cost-prefix">$</span><input data-field="cost" value="{{ d.cost | fmt_cost }}" placeholder="0.00" class="cost-input"></span>
-    <input data-field="quantity" type="number" min="1" value="{{ d.quantity }}" class="qty-input">
-    <span class="tracker-cell">
-      <input class="tracker-input" type="email" placeholder="email + Enter">
-      <span class="chips">
-        {% for t in trackers[d.id] %}
-        <span class="chip">{{ t }}<button type="button" class="chip-x" data-email="{{ t }}">×</button></span>
-        {% endfor %}
+    <div class="row-line row-line-primary">
+      <input data-field="description" value="{{ d.description }}" placeholder="What is it?">
+      <span class="link-cell">
+        <input data-field="link" value="{{ d.link }}" placeholder="https://…" inputmode="url">
+        <span class="row-note" aria-live="polite"></span>
       </span>
-    </span>
-    <form method="post" action="{{ url_for('delete_row', oid=d.id) }}"
-          class="row-del">
-      <button type="submit" title="Remove this row">🗑</button>
-    </form>
+      <span class="vendor-cell">{{ vendor_select(d.vendor_id) }}</span>
+      <select data-field="project_id">
+        <option value=""></option>
+        {% for p in projects %}
+        <option value="{{ p.id }}" {{ 'selected' if d.project_id == p.id }}>{{ p.name }}</option>
+        {% endfor %}
+      </select>
+      <input data-field="use_note" value="{{ d.use_note }}" placeholder="What's it for?">
+    </div>
+    <div class="row-line row-line-secondary">
+      <span class="cost-cell"><span class="cost-prefix">$</span><input data-field="cost" value="{{ d.cost | fmt_cost }}" placeholder="0.00" class="cost-input"></span>
+      <input data-field="quantity" type="number" min="1" value="{{ d.quantity }}" class="qty-input">
+      <span class="tracker-cell">
+        <input class="tracker-input" type="email" placeholder="email + Enter">
+        <span class="chips">
+          {% for t in trackers[d.id] %}
+          <span class="chip">{{ t }}<button type="button" class="chip-x" data-email="{{ t }}">×</button></span>
+          {% endfor %}
+        </span>
+      </span>
+      <form method="post" action="{{ url_for('delete_row', oid=d.id) }}"
+            class="row-del">
+        <button type="submit" title="Remove this row">🗑</button>
+      </form>
+    </div>
   </div>
   {% endfor %}
 

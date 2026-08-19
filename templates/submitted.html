@@ -27,69 +27,79 @@ the vendor just like on the order sheet.</p>
 
 <div class="sheet submitted-sheet">
   <div class="sheet-head">
-    <span>Submitted</span><span>By</span><span>Description</span><span>Link</span>
-    <span>Vendor</span><span>Project</span><span>Use</span><span>Cost</span>
-    <span class="qty-head">Qty</span><span>Status</span><span>Invoice</span><span>Trackers</span><span></span>
+    <div class="row-line row-line-primary">
+      <span>Submitted</span><span>By</span><span>Description</span><span>Link</span>
+      <span>Vendor</span><span>Project</span><span>Use</span>
+    </div>
+    <div class="row-line row-line-secondary">
+      <span>Cost</span><span class="qty-head">Qty</span><span>Status</span>
+      <span>Invoice</span><span>Trackers</span><span></span>
+    </div>
   </div>
 
   {% for r in rows %}
   <div class="order-row submitted-row" data-id="{{ r.id }}">
-    <span class="ro" data-field="submitted_at">{{ (r.submitted_at or '')[:10] }}</span>
-    <span class="ro" data-field="user_email">{{ r.user_email }}</span>
-    <input data-field="description" value="{{ r.description }}">
-    <span class="link-cell">
-      <input data-field="link" value="{{ r.link }}" inputmode="url">
-      {% if r.link %}<a class="link-out" href="{{ r.link }}" target="_blank" rel="noopener">open ↗</a>{% endif %}
-      <span class="row-note" aria-live="polite"></span>
-    </span>
-    <span class="vendor-cell">
-      <select data-field="vendor_id" class="vendor-select">
+    <div class="row-line row-line-primary">
+      <span class="ro" data-field="submitted_at">{{ (r.submitted_at or '')[:10] }}</span>
+      <span class="ro" data-field="user_email">{{ r.user_email }}</span>
+      <input data-field="description" value="{{ r.description }}">
+      <span class="link-cell">
+        <input data-field="link" value="{{ r.link }}" inputmode="url">
+        <a class="link-out" href="{{ r.link }}" target="_blank" rel="noopener"
+           {{ 'hidden' if not r.link }}>open ↗</a>
+        <span class="row-note" aria-live="polite"></span>
+      </span>
+      <span class="vendor-cell">
+        <select data-field="vendor_id" class="vendor-select">
+          <option value=""></option>
+          {% for v in vendors %}
+          <option value="{{ v.id }}" data-domain="{{ v.domain }}"
+                  data-incomplete="{{ 1 if v.incomplete else 0 }}"
+                  {{ 'selected' if r.vendor_id == v.id }}>{{ v.name }}</option>
+          {% endfor %}
+        </select>
+        <span class="flag" title="Vendor record incomplete — see Vendors tab">?</span>
+      </span>
+      <select data-field="project_id">
         <option value=""></option>
-        {% for v in vendors %}
-        <option value="{{ v.id }}" data-domain="{{ v.domain }}"
-                data-incomplete="{{ 1 if v.incomplete else 0 }}"
-                {{ 'selected' if r.vendor_id == v.id }}>{{ v.name }}</option>
+        {% for p in projects %}
+        <option value="{{ p.id }}" {{ 'selected' if r.project_id == p.id }}>{{ p.name }}</option>
         {% endfor %}
       </select>
-      <span class="flag" title="Vendor record incomplete — see Vendors tab">?</span>
-    </span>
-    <select data-field="project_id">
-      <option value=""></option>
-      {% for p in projects %}
-      <option value="{{ p.id }}" {{ 'selected' if r.project_id == p.id }}>{{ p.name }}</option>
-      {% endfor %}
-    </select>
-    <input data-field="use_note" value="{{ r.use_note }}">
-    <span class="cost-cell"><span class="cost-prefix">$</span><input data-field="cost" value="{{ r.cost | fmt_cost }}" placeholder="0.00" class="cost-input"></span>
-    <input data-field="quantity" type="number" min="1" value="{{ r.quantity }}" class="qty-input">
-    <select data-field="order_status"
-            class="status-select status-{{ (r.order_status or 'submitted').replace(' ', '-') }}">
-      <option value="not ready"  {{ 'selected' if (r.order_status or '') == 'not ready'  }}>Not ready</option>
-      <option value="submitted"  {{ 'selected' if (r.order_status or 'submitted') == 'submitted'  }}>Submitted</option>
-      <option value="in cart"    {{ 'selected' if (r.order_status or '') == 'in cart'    }}>In cart</option>
-      {% if (r.order_status or '') == 'ordered' %}
-      <option value="ordered" selected disabled>Ordered</option>
-      {% endif %}
-      <option value="received"   {{ 'selected' if (r.order_status or '') == 'received'   }}>Received</option>
-      <option value="requires reimbursement" {{ 'selected' if (r.order_status or '') == 'requires reimbursement' }}>Requires reimbursement</option>
-    </select>
-    {{ invoice_cell(invoice_by_id.get(r.invoice_id)) }}
-    <span class="tracker-cell">
-      <input class="tracker-input" type="email" placeholder="email + Enter">
-      <span class="chips">
-        {% for t in trackers[r.id] %}
-        <span class="chip">{{ t }}<button type="button" class="chip-x" data-email="{{ t }}">×</button></span>
-        {% endfor %}
+      <input data-field="use_note" value="{{ r.use_note }}">
+    </div>
+    <div class="row-line row-line-secondary">
+      <span class="cost-cell"><span class="cost-prefix">$</span><input data-field="cost" value="{{ r.cost | fmt_cost }}" placeholder="0.00" class="cost-input"></span>
+      <input data-field="quantity" type="number" min="1" value="{{ r.quantity }}" class="qty-input">
+      <select data-field="order_status"
+              class="status-select status-{{ (r.order_status or 'submitted').replace(' ', '-') }}">
+        <option value="not ready"  {{ 'selected' if (r.order_status or '') == 'not ready'  }}>Not ready</option>
+        <option value="submitted"  {{ 'selected' if (r.order_status or 'submitted') == 'submitted'  }}>Submitted</option>
+        <option value="in cart"    {{ 'selected' if (r.order_status or '') == 'in cart'    }}>In cart</option>
+        {% if (r.order_status or '') == 'ordered' %}
+        <option value="ordered" selected disabled>Ordered</option>
+        {% endif %}
+        <option value="received"   {{ 'selected' if (r.order_status or '') == 'received'   }}>Received</option>
+        <option value="requires reimbursement" {{ 'selected' if (r.order_status or '') == 'requires reimbursement' }}>Requires reimbursement</option>
+      </select>
+      {{ invoice_cell(invoice_by_id.get(r.invoice_id)) }}
+      <span class="tracker-cell">
+        <input class="tracker-input" type="email" placeholder="email + Enter">
+        <span class="chips">
+          {% for t in trackers[r.id] %}
+          <span class="chip">{{ t }}<button type="button" class="chip-x" data-email="{{ t }}">×</button></span>
+          {% endfor %}
+        </span>
       </span>
-    </span>
-    <span class="row-del">
-      <button type="button" class="del-btn" title="Delete this record">🗑</button>
-      <span class="del-confirm" hidden>
-        <span class="del-confirm-msg">Permanently delete?</span>
-        <button type="button" class="del-yes mini vdel">Delete</button>
-        <button type="button" class="del-no mini">Cancel</button>
+      <span class="row-del">
+        <button type="button" class="del-btn" title="Delete this record">🗑</button>
+        <span class="del-confirm" hidden>
+          <span class="del-confirm-msg">Permanently delete?</span>
+          <button type="button" class="del-yes mini vdel">Delete</button>
+          <button type="button" class="del-no mini">Cancel</button>
+        </span>
       </span>
-    </span>
+    </div>
   </div>
   {% endfor %}
 

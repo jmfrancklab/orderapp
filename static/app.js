@@ -101,25 +101,13 @@
     timers[key] = setTimeout(function () { saveField(input); }, 400);
   }
 
-  function syncOpenLink(input) {
+  function updateOpenLinkVisibility(input) {
     var row = rowOf(input);
     if (!row || !row.classList.contains("submitted-row")) return;
     var cell = input.closest(".link-cell");
     if (!cell) return;
-    var value = input.value.trim();
     var link = cell.querySelector(".link-out");
-    if (!link && value) {
-      link = document.createElement("a");
-      link.className = "link-out";
-      link.target = "_blank";
-      link.rel = "noopener";
-      link.textContent = "open ↗";
-      input.insertAdjacentElement("afterend", link);
-    }
-    if (link) {
-      link.setAttribute("href", value);
-      link.hidden = !value;
-    }
+    if (link) link.hidden = !input.value.trim();
   }
 
   /* --- vendor match popup -------------------------------------------- */
@@ -925,8 +913,24 @@
   document.addEventListener("input", function (e) {
     if (!e.target.matches("[data-field]")) return;
     debounceSave(e.target);
-    if (e.target.matches('[data-field="link"]')) syncOpenLink(e.target);
+    if (e.target.matches('[data-field="link"]')) updateOpenLinkVisibility(e.target);
     if (e.target.matches('[data-field="cost"], [data-field="quantity"]')) updateOrderTotals();
+  });
+
+  /* Read the live URL field at click time.  The autosave debounce and the
+     anchor's server-rendered href may both still contain the previous value. */
+  document.addEventListener("click", function (e) {
+    var link = e.target.closest(".link-out");
+    if (!link) return;
+    var cell = link.closest(".link-cell");
+    var input = cell && cell.querySelector('input[data-field="link"]');
+    if (!input) return;
+    var value = input.value.trim();
+    if (!value) {
+      e.preventDefault();
+      return;
+    }
+    link.setAttribute("href", value);
   });
 
   function updateStatusClass(sel) {
