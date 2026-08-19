@@ -1,13 +1,6 @@
 {% extends "base.html" %}
 {% block title %}New order{% endblock %}
-{% block content %}
-
-<div class="bookmarklet-bar">
-  <a class="bookmarklet-link" href="{{ bookmarklet }}">📋 ACERT Capture</a>
-  <span class="bookmarklet-hint">← drag to your bookmarks bar, then click it on any
-  product page to capture the price, description, and vendor automatically</span>
-</div>
-
+{% block page_note %}
 <p class="explain">Fill one row per item. The <strong>link</strong> is either the
 purchase page (the <strong>vendor</strong> is then determined automatically from
 the URL) <em>or</em>, if you have a quote instead, a Dropbox or SharePoint/OneDrive
@@ -16,6 +9,15 @@ A red <span class="flag-demo">?</span> next to a vendor means its record is
 missing information (website, phone, or tax-exemption filing) — fix it on the
 <a href="{{ url_for('vendors') }}">Vendors</a> tab. Everything you type is saved
 immediately and will still be here next time you sign in.</p>
+{% endblock %}
+
+{% block content %}
+
+<div class="bookmarklet-bar">
+  <a class="bookmarklet-link" href="{{ bookmarklet }}">📋 ACERT Capture</a>
+  <span class="bookmarklet-hint">← drag to your bookmarks bar, then click it on any
+  product page to capture the price, description, and vendor automatically</span>
+</div>
 
 {% macro vendor_select(sel_id) %}
   <select data-field="vendor_id" class="vendor-select">

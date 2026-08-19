@@ -1,10 +1,12 @@
 {% extends "base.html" %}
 {% block title %}Invoices{% endblock %}
-{% block content %}
-
+{% block page_note %}
 <p class="explain">Invoices created when in-cart orders are marked ordered.
 Click an invoice name to view its stored fields, use the small edit link to
 change them, or open its submitted orders as a filtered view.</p>
+{% endblock %}
+
+{% block content %}
 
 {% if invoices %}
 <div class="table-wrap">

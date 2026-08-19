@@ -1,9 +1,11 @@
 {% extends "base.html" %}
 {% block title %}History{% endblock %}
-{% block content %}
-
+{% block page_note %}
 <p class="explain">Every field change, tracker add/remove, and submission is logged
 here. Showing the 300 most recent entries, newest first.</p>
+{% endblock %}
+
+{% block content %}
 
 {% if rows %}
 <div class="table-wrap">

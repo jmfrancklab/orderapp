@@ -1,8 +1,10 @@
 {% extends "base.html" %}
 {% block title %}Projects{% endblock %}
-{% block content %}
-
+{% block page_note %}
 <p class="explain">Projects feed the project dropdown on the order sheet.</p>
+{% endblock %}
+
+{% block content %}
 
 {% for p in projects %}
 <form id="p{{ p.id }}" method="post" action="{{ url_for('update_project', pid=p.id) }}"></form>

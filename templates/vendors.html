@@ -1,12 +1,14 @@
 {% extends "base.html" %}
 {% block title %}Vendors{% endblock %}
-{% block content %}
-
+{% block page_note %}
 <p class="explain">Vendors here feed the vendor dropdown on the order sheet. The
 website is also what lets the order sheet auto-detect the vendor from a pasted
 link. A vendor with a missing website, phone, or unfiled tax exemption shows a red
 <span class="flag-demo">?</span> on the order sheet. The <strong>Save</strong>
 button appears only after you edit a row.</p>
+{% endblock %}
+
+{% block content %}
 
 {% for v in vendors %}
 <form id="v{{ v.id }}" method="post" action="{{ url_for('update_vendor', vid=v.id) }}"></form>
