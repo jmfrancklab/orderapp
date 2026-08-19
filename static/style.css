@@ -82,7 +82,7 @@ main { padding: 1.2rem 1.2rem 3rem; max-width: 1500px; margin: 0 auto; }
   border-bottom: 1px solid var(--rule);
 }
 .submitted-sheet .sheet-head, .submitted-row, .submitted-sheet .sheet-foot {
-  grid-template-columns: 7rem 1fr 1.4fr 1.4fr 1.1fr 1fr 1.1fr 5.5rem 3.5rem 7rem 6rem 1.2fr 2.2rem;
+  grid-template-columns: 7rem 1fr 1.4fr 1.4fr 1.1fr 1fr 1.1fr 5.5rem 3.5rem 12rem 6rem 1.2fr 2.2rem;
 }
 .row-line { display: contents; }
 
@@ -547,7 +547,7 @@ input[data-field="link"] { font-family: var(--mono); font-size: .8rem; }
   }
   .submitted-sheet .row-line-secondary {
     grid-template-columns:
-      5.5rem 3.5rem minmax(7rem, 1fr) 6rem minmax(12rem, 1.8fr) 2.2rem;
+      5.5rem 3.5rem 12rem 6rem minmax(12rem, 1fr) 2.2rem;
   }
 }
 
@@ -574,8 +574,9 @@ input[data-field="link"] { font-family: var(--mono); font-size: .8rem; }
     border-top: 1px dashed var(--rule);
   }
   .submitted-sheet .row-line-secondary::before {
-    content: "\2937"; position: absolute; left: .3rem; top: .55rem;
-    color: #7b8794; font-size: 1rem; line-height: 1;
+    content: "\2937"; position: absolute; left: .05rem; top: .5rem; bottom: 0;
+    display: flex; align-items: center; justify-content: center; width: 1.55rem;
+    color: #7b8794; font-size: 1.65rem; line-height: 1;
   }
 }
 
@@ -585,8 +586,9 @@ input[data-field="link"] { font-family: var(--mono); font-size: .8rem; }
     border-top: 1px dashed var(--rule);
   }
   .sheet:not(.submitted-sheet) .row-line-secondary::before {
-    content: "\2937"; position: absolute; left: .3rem; top: .55rem;
-    color: #7b8794; font-size: 1rem; line-height: 1;
+    content: "\2937"; position: absolute; left: .05rem; top: .5rem; bottom: 0;
+    display: flex; align-items: center; justify-content: center; width: 1.55rem;
+    color: #7b8794; font-size: 1.65rem; line-height: 1;
   }
 }
 
