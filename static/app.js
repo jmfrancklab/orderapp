@@ -101,6 +101,27 @@
     timers[key] = setTimeout(function () { saveField(input); }, 400);
   }
 
+  function syncOpenLink(input) {
+    var row = rowOf(input);
+    if (!row || !row.classList.contains("submitted-row")) return;
+    var cell = input.closest(".link-cell");
+    if (!cell) return;
+    var value = input.value.trim();
+    var link = cell.querySelector(".link-out");
+    if (!link && value) {
+      link = document.createElement("a");
+      link.className = "link-out";
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.textContent = "open ↗";
+      input.insertAdjacentElement("afterend", link);
+    }
+    if (link) {
+      link.setAttribute("href", value);
+      link.hidden = !value;
+    }
+  }
+
   /* --- vendor match popup -------------------------------------------- */
 
   var _vendorPopup = null;
@@ -904,6 +925,7 @@
   document.addEventListener("input", function (e) {
     if (!e.target.matches("[data-field]")) return;
     debounceSave(e.target);
+    if (e.target.matches('[data-field="link"]')) syncOpenLink(e.target);
     if (e.target.matches('[data-field="cost"], [data-field="quantity"]')) updateOrderTotals();
   });
 

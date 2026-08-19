@@ -22,7 +22,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.12.4"
+__version__ = "0.12.5"
 
 # ── Config ────────────────────────────────────────────────────────────────────
 def _load_config():
@@ -71,10 +71,14 @@ def _normalise_cost(raw):
 _BOOKMARKLET = (
     r"(function(){"
     r"var url=window.location.href;"
+    # Canonical and Open Graph URLs are cleaner product links, but commonly
+    # omit query parameters used for authentication or access.  Only prefer
+    # them when the address in the browser has no query string to preserve.
+    r"if(!window.location.search){"
     r"var c=document.querySelector('link[rel=\"canonical\"]');"
     r"if(c&&c.href)url=c.href;"
     r"else{var o=document.querySelector('meta[property=\"og:url\"]');"
-    r"if(o&&o.content)url=o.content;}"
+    r"if(o&&o.content)url=o.content;}}"
     r"var price=null,desc=null,vname=null,addr=null,phone=null,website=null;"
     r"[].forEach.call(document.querySelectorAll('[type=\"application/ld+json\"]'),function(s){"
     r"try{var d=JSON.parse(s.textContent);"

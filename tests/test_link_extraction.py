@@ -16,6 +16,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import quotes
+from app import _BOOKMARKLET
 
 FIXTURE_DIR = os.path.join(os.path.dirname(__file__), "fixtures")
 
@@ -23,6 +24,13 @@ FIXTURE_DIR = os.path.join(os.path.dirname(__file__), "fixtures")
 def read_fixture(name):
     with open(os.path.join(FIXTURE_DIR, name), encoding="utf-8") as f:
         return f.read()
+
+
+def test_bookmarklet_keeps_browser_url_when_it_has_query_parameters():
+    """Access/authentication parameters must win over a cleaner canonical URL."""
+    guard = _BOOKMARKLET.index("if(!window.location.search)")
+    canonical_lookup = _BOOKMARKLET.index("link[rel=\\\"canonical\\\"]")
+    assert guard < canonical_lookup
 
 
 # ── Test 1: vendor detection + contact info from homepage HTML ────────────────

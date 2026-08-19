@@ -179,7 +179,8 @@ class TestBackfillFromCatalog:
 
 class TestBookmarkletCapture:
     CAPTURE = {
-        "url": "https://www.mouser.com/ProductDetail/Analog-Devices/DC2645A",
+        "url": ("https://www.mouser.com/ProductDetail/Analog-Devices/DC2645A"
+                "?auth=secret&account=lab"),
         "price": "49.59",
         "description": "DC2645A — LTC2664 Demo Board",
         "vendor_name": "Mouser Electronics",

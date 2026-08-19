@@ -47,6 +47,10 @@ def invoice_client(tmp_path, monkeypatch):
     ]
     conn.execute("UPDATE orders SET vendor_id=? WHERE id IN (1,2,3)", (mouser_id,))
     conn.execute("UPDATE orders SET vendor_id=? WHERE description='digikey done'", (digikey_id,))
+    conn.execute(
+        "UPDATE orders SET link=? WHERE description='cart one'",
+        ("https://example.com/product?auth=secret&account=lab",),
+    )
     conn.commit()
     order_ids = [r[0] for r in conn.execute("SELECT id FROM orders ORDER BY id")]
     conn.close()
@@ -149,6 +153,16 @@ def test_invoice_fields_can_be_edited_and_rendered(invoice_client):
     assert f'data-id="{order_ids[0]}"'.encode() in filtered.data
     assert f'data-id="{order_ids[1]}"'.encode() in filtered.data
     assert f'data-id="{order_ids[2]}"'.encode() not in filtered.data
+
+
+def test_submitted_open_link_keeps_all_query_parameters(invoice_client):
+    client, _, _ = invoice_client
+    page = client.get("/submitted")
+    match = re.search(rb'class="link-out" href="([^"]+)"', page.data)
+    assert match is not None
+    assert html.unescape(match.group(1).decode()) == (
+        "https://example.com/product?auth=secret&account=lab"
+    )
 
 
 def test_second_invoice_creation_requires_in_cart_orders(invoice_client):
