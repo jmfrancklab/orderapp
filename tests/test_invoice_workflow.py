@@ -51,6 +51,15 @@ def invoice_client(tmp_path, monkeypatch):
         "UPDATE orders SET link=? WHERE description='cart one'",
         ("https://example.com/product?auth=secret&account=lab",),
     )
+    conn.executemany(
+        "INSERT INTO trackers (order_id, email) VALUES (?,?)",
+        [
+            (1, "alpha@lab.org"),
+            (1, "beta@lab.org"),
+            (2, "alpha@lab.org"),
+            (4, "alpha@lab.org"),
+        ],
+    )
     conn.commit()
     order_ids = [r[0] for r in conn.execute("SELECT id FROM orders ORDER BY id")]
     conn.close()
@@ -139,7 +148,7 @@ def test_invoice_fields_can_be_edited_and_rendered(invoice_client):
 
     page = client.get("/submitted")
     assert page.status_code == 200
-    assert b"<span>Invoice</span>" in page.data
+    assert b'data-column-field="invoice_id"' in page.data
     assert b"Mouser August" in page.data
     assert b'data-invoice-url="https://www.dropbox.com/invoice.pdf"' in page.data
 
@@ -188,6 +197,104 @@ def test_submitted_get_query_is_rendered_as_filter_state(invoice_client):
     assert f'data-id="{order_ids[2]}"'.encode() not in page.data
     assert b"Items: 5" in page.data
     assert b"Unique items: 2" in page.data
+
+
+def test_submitted_defaults_to_owned_or_currently_tracked_rows(invoice_client):
+    client, _, order_ids = invoice_client
+    page = client.get("/submitted")
+    assert f'data-id="{order_ids[0]}"'.encode() in page.data
+    assert f'data-id="{order_ids[3]}"'.encode() not in page.data
+    match = re.search(rb'data-filter-state="([^"]+)"', page.data)
+    state = json.loads(html.unescape(match.group(1).decode()))
+    assert state["trackers"] == {
+        "selected": ["buyer@lab.org"], "mode": "or", "scope": "default"
+    }
+
+
+def test_tracker_all_shows_every_submitted_order(invoice_client):
+    client, _, order_ids = invoice_client
+    page = client.get("/submitted?tracker=all")
+    for order_id in order_ids:
+        assert f'data-id="{order_id}"'.encode() in page.data
+    assert b'data-in-cart-count="3"' in page.data
+
+
+def test_visible_submitted_order_remains_editable_for_non_owner(invoice_client):
+    client, db_path, order_ids = invoice_client
+    response = client.post(
+        f"/api/orders/{order_ids[3]}", json={"description": "edited collaboratively"}
+    )
+    assert response.status_code == 200
+    conn = sqlite3.connect(db_path)
+    description = conn.execute(
+        "SELECT description FROM orders WHERE id=?", (order_ids[3],)
+    ).fetchone()[0]
+    conn.close()
+    assert description == "edited collaboratively"
+
+
+def test_submitted_order_creator_cannot_be_changed(invoice_client):
+    client, db_path, order_ids = invoice_client
+    response = client.post(
+        f"/api/orders/{order_ids[3]}", json={"user_email": "buyer@lab.org"}
+    )
+    assert response.status_code == 200
+    conn = sqlite3.connect(db_path)
+    creator = conn.execute(
+        "SELECT user_email FROM orders WHERE id=?", (order_ids[3],)
+    ).fetchone()[0]
+    conn.close()
+    assert creator == "someone@else.org"
+
+
+def test_visible_non_owner_order_can_be_marked_ordered(invoice_client):
+    client, db_path, order_ids = invoice_client
+    response = client.post(
+        "/api/invoices/from-cart", json={"order_ids": [order_ids[3]]}
+    )
+    assert response.status_code == 200
+    conn = sqlite3.connect(db_path)
+    status, invoice_id = conn.execute(
+        "SELECT order_status, invoice_id FROM orders WHERE id=?", (order_ids[3],)
+    ).fetchone()
+    conn.close()
+    assert status == "ordered"
+    assert invoice_id == response.get_json()["invoice_id"]
+
+
+def test_tracker_or_and_filters(invoice_client):
+    client, _, order_ids = invoice_client
+    either = client.get("/submitted?tracker=alpha%40lab.org&tracker=beta%40lab.org")
+    either_ids = [int(value) for value in re.findall(rb'class="order-row submitted-row" data-id="(\d+)"', either.data)]
+    assert either_ids == [order_ids[3], order_ids[1], order_ids[0]]
+
+    both = client.get(
+        "/submitted?tracker=alpha%40lab.org&tracker=beta%40lab.org&tracker_mode=and"
+    )
+    both_ids = [int(value) for value in re.findall(rb'class="order-row submitted-row" data-id="(\d+)"', both.data)]
+    assert both_ids == [order_ids[0]]
+
+
+def test_multi_column_sort_order_and_state(invoice_client):
+    client, _, order_ids = invoice_client
+    page = client.get("/submitted?sort=vendor_id:asc&sort=description:desc")
+    rendered_ids = [int(value) for value in re.findall(
+        rb'class="order-row submitted-row" data-id="(\d+)"', page.data)]
+    assert rendered_ids == [order_ids[4], order_ids[2], order_ids[1], order_ids[0]]
+    match = re.search(rb'data-sort-state="([^"]+)"', page.data)
+    state = json.loads(html.unescape(match.group(1).decode()))
+    assert state == [
+        {"field": "vendor_id", "direction": "asc"},
+        {"field": "description", "direction": "desc"},
+    ]
+
+
+def test_each_submitted_header_has_its_own_filter_and_sort_controls(invoice_client):
+    client, _, _ = invoice_client
+    page = client.get("/submitted")
+    assert page.data.count(b'class="column-filter"') == 12
+    assert page.data.count(b'class="column-sort"') == 24
+    assert b'id="filter-btn"' not in page.data
 
 
 def test_unknown_get_parameters_are_not_treated_as_filters(invoice_client):

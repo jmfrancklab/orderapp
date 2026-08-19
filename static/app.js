@@ -490,11 +490,8 @@
     cell.querySelector(".chips").appendChild(chip);
   }
 
-  /* --- column filter --------------------------------------------------
-     Google-Sheets-style column filter for the submitted-orders sheet.
-     Filter rules are encoded as HTTP GET parameters so the current view can
-     be bookmarked or shared. The server selects the matching rows and renders
-     their initial totals; this popup only builds the next GET request. */
+  /* --- submitted column filters + sorting -----------------------------
+     Both are encoded in GET parameters, so views remain bookmarkable. */
 
   var FILTER_COLUMNS = [
     { field: "submitted_at", type: "text" },
@@ -508,7 +505,7 @@
     { field: "quantity",     type: "text" },
     { field: "order_status", type: "checkbox", label: "Order Status" },
     { field: "invoice_id",   type: "checkbox", label: "Invoice" },
-    { field: "trackers",     type: "text" }
+    { field: "trackers",     type: "tracker", label: "Trackers" }
   ];
   var FILTER_FIELD_DISPLAY = {
     submitted_at: "Submitted", user_email: "By", description: "Description",
@@ -516,32 +513,64 @@
     trackers: "Trackers"
   };
 
-  var filterBtnEl = document.getElementById("filter-btn");
+  var submittedSheet = document.getElementById("submitted-sheet");
 
-  if (filterBtnEl) {
+  if (submittedSheet) {
     var initialFilterState = {};
     try {
-      initialFilterState = JSON.parse(filterBtnEl.dataset.filterState || "{}");
+      initialFilterState = JSON.parse(submittedSheet.dataset.filterState || "{}");
     } catch (e) {
       initialFilterState = {};
     }
     var initialFilterChoices = {};
     try {
-      initialFilterChoices = JSON.parse(filterBtnEl.dataset.filterChoices || "{}");
+      initialFilterChoices = JSON.parse(submittedSheet.dataset.filterChoices || "{}");
     } catch (e) {
       initialFilterChoices = {};
     }
+    var sortState = [];
+    try {
+      sortState = JSON.parse(submittedSheet.dataset.sortState || "[]");
+    } catch (e) {
+      sortState = [];
+    }
+    var currentUser = (submittedSheet.dataset.currentUser || "").toLowerCase();
     var filterState = {};
     FILTER_COLUMNS.forEach(function (col) {
       var initial = initialFilterState[col.field] || {};
-      filterState[col.field] = (col.type === "checkbox")
-        ? { selected: new Set(initial.selected || []) }
-        : { query: initial.query || "", regex: !!initial.regex };
+      if (col.type === "checkbox") {
+        filterState[col.field] = { selected: new Set(initial.selected || []) };
+      } else if (col.type === "tracker") {
+        filterState[col.field] = {
+          selected: new Set(initial.selected || []),
+          mode: initial.mode === "and" ? "and" : "or",
+          scope: initial.scope || "default"
+        };
+      } else {
+        filterState[col.field] = { query: initial.query || "", regex: !!initial.regex };
+      }
     });
 
-    function filterUrl() {
+    function pageUrl() {
       var params = new URLSearchParams(window.location.search);
       FILTER_COLUMNS.forEach(function (col) {
+        if (col.type === "tracker") {
+          params.delete("tracker");
+          params.delete("tracker_mode");
+          params.delete("filter_trackers");
+          params.delete("filter_trackers_regex");
+          var trackerState = filterState.trackers;
+          var selectedTrackers = Array.from(trackerState.selected);
+          var isDefault = selectedTrackers.length === 1 &&
+            selectedTrackers[0].toLowerCase() === currentUser && trackerState.mode === "or";
+          if (!selectedTrackers.length || trackerState.scope === "all") {
+            params.set("tracker", "all");
+          } else if (!isDefault) {
+            selectedTrackers.forEach(function (email) { params.append("tracker", email); });
+            if (trackerState.mode === "and") params.set("tracker_mode", "and");
+          }
+          return;
+        }
         var key = "filter_" + col.field;
         params.delete(key);
         params.delete(key + "_regex");
@@ -553,12 +582,16 @@
           if (state.regex) params.set(key + "_regex", "1");
         }
       });
+      params.delete("sort");
+      sortState.forEach(function (spec) {
+        params.append("sort", spec.field + ":" + spec.direction);
+      });
       var query = params.toString();
       return window.location.pathname + (query ? "?" + query : "") + window.location.hash;
     }
 
-    function applyFilterGet() {
-      window.location.assign(filterUrl());
+    function applyGet() {
+      window.location.assign(pageUrl());
     }
 
     function filterLabel(col) {
@@ -574,35 +607,46 @@
       return initialFilterChoices[col.field] || [];
     }
 
-    function debounce(fn, wait) {
-      var t = null;
-      return function () {
-        var args = arguments;
-        clearTimeout(t);
-        t = setTimeout(function () { fn.apply(null, args); }, wait);
-      };
-    }
-
     function compileRegexSafe(pattern) {
       try { return { re: new RegExp(pattern, "i"), error: null }; }
       catch (e) { return { re: null, error: e.message }; }
     }
 
-    function activeFilterCount() {
-      var n = 0;
-      FILTER_COLUMNS.forEach(function (col) {
-        var s = filterState[col.field];
-        if (col.type === "checkbox") { if (s.selected.size > 0) n++; }
-        else if (s.query !== "") n++;
-      });
-      return n;
+    function filterIsActive(col) {
+      var state = filterState[col.field];
+      if (col.type === "checkbox") return state.selected.size > 0;
+      if (col.type === "tracker") return state.scope !== "all" && state.selected.size > 0;
+      return state.query !== "";
     }
 
-    function updateFilterBadge() {
-      var badge = document.getElementById("filter-badge");
-      var n = activeFilterCount();
-      if (badge) { badge.hidden = (n === 0); badge.textContent = String(n); }
-      filterBtnEl.classList.toggle("active", n > 0);
+    function updateHeaderControls() {
+      FILTER_COLUMNS.forEach(function (col) {
+        var button = submittedSheet.querySelector(
+          '.column-filter[data-filter-field="' + col.field + '"]');
+        if (button) button.classList.toggle("active", filterIsActive(col));
+      });
+
+      submittedSheet.querySelectorAll(".column-sort").forEach(function (button) {
+        button.classList.remove("active");
+      });
+      submittedSheet.querySelectorAll(".sort-priority").forEach(function (button) {
+        button.hidden = true;
+        button.textContent = "";
+      });
+      sortState.forEach(function (spec, index) {
+        var arrow = submittedSheet.querySelector(
+          '.column-sort[data-sort-field="' + spec.field + '"]' +
+          '[data-sort-dir="' + spec.direction + '"]');
+        var priority = submittedSheet.querySelector(
+          '.sort-priority[data-sort-priority-field="' + spec.field + '"]');
+        if (arrow) arrow.classList.add("active");
+        if (priority) {
+          priority.hidden = false;
+          priority.textContent = String(index + 1);
+          priority.setAttribute("aria-label", "Sort priority " + (index + 1) +
+            "; click to promote it one level");
+        }
+      });
     }
 
     var _filterOverlay = null, _filterPopup = null;
@@ -612,15 +656,22 @@
       if (_filterPopup)   { _filterPopup.remove();   _filterPopup = null; }
     }
 
-    function clearAllFilters() {
-      FILTER_COLUMNS.forEach(function (col) {
-        if (col.type === "checkbox") filterState[col.field].selected.clear();
-        else { filterState[col.field].query = ""; filterState[col.field].regex = false; }
-      });
-      applyFilterGet();
+    function copyState(col) {
+      var state = filterState[col.field];
+      if (col.type === "checkbox") return { selected: new Set(state.selected) };
+      if (col.type === "tracker") return {
+        selected: new Set(state.selected), mode: state.mode, scope: state.scope
+      };
+      return { query: state.query, regex: state.regex };
     }
 
-    function buildCheckboxSection(col) {
+    function clearedState(col) {
+      if (col.type === "checkbox") return { selected: new Set() };
+      if (col.type === "tracker") return { selected: new Set(), mode: "or", scope: "all" };
+      return { query: "", regex: false };
+    }
+
+    function buildCheckboxSection(col, state) {
       var sec = document.createElement("div");
       sec.className = "vendor-popup-section";
       var lbl = document.createElement("div");
@@ -629,19 +680,15 @@
       sec.appendChild(lbl);
 
       var values = collectUniqueValues(col);
-      var state = filterState[col.field];
-
       var actions = document.createElement("div");
       actions.className = "filter-section-actions";
       var allBtn = makePopupBtn("Select all", "", function () {
         values.forEach(function (v) { state.selected.add(v.value); });
         sec.querySelectorAll('input[type="checkbox"]').forEach(function (cb) { cb.checked = true; });
-        updateFilterBadge();
       });
       var noneBtn = makePopupBtn("Clear", "", function () {
         state.selected.clear();
         sec.querySelectorAll('input[type="checkbox"]').forEach(function (cb) { cb.checked = false; });
-        updateFilterBadge();
       });
       actions.appendChild(allBtn); actions.appendChild(noneBtn);
       sec.appendChild(actions);
@@ -667,25 +714,36 @@
             var inCart = sec.querySelector('input[data-filter-value="in cart"]');
             if (inCart) inCart.checked = true;
           }
-          updateFilterBadge();
         });
         row.appendChild(cb);
         row.appendChild(document.createTextNode(" " + v.label));
         sec.appendChild(row);
       });
 
+      if (col.type === "tracker") {
+        var andLabel = document.createElement("label");
+        andLabel.className = "filter-regex-toggle tracker-and-toggle";
+        var andCheckbox = document.createElement("input");
+        andCheckbox.type = "checkbox";
+        andCheckbox.checked = state.mode === "and";
+        andCheckbox.addEventListener("change", function () {
+          state.mode = andCheckbox.checked ? "and" : "or";
+        });
+        andLabel.appendChild(andCheckbox);
+        andLabel.appendChild(document.createTextNode(" require every selected tracker (AND)"));
+        sec.appendChild(andLabel);
+      }
+
       return sec;
     }
 
-    function buildTextSection(col) {
+    function buildTextSection(col, state) {
       var sec = document.createElement("div");
       sec.className = "vendor-popup-section";
       var lbl = document.createElement("div");
       lbl.className = "vendor-popup-label";
       lbl.textContent = filterLabel(col);
       sec.appendChild(lbl);
-
-      var state = filterState[col.field];
 
       var textRow = document.createElement("div");
       textRow.className = "filter-text-row";
@@ -709,13 +767,12 @@
         } else {
           errEl.hidden = true;
         }
-        updateFilterBadge();
       }
 
-      input.addEventListener("input", debounce(function () {
+      input.addEventListener("input", function () {
         state.query = input.value;
         runFilter();
-      }, 400));
+      });
 
       var regexLbl = document.createElement("label");
       regexLbl.className = "filter-regex-toggle";
@@ -737,8 +794,9 @@
       return sec;
     }
 
-    function showFilterPopup() {
+    function showFilterPopup(col) {
       closeFilterPopup();
+      var workingState = copyState(col);
 
       var overlay = document.createElement("div");
       overlay.className = "xl-overlay";
@@ -754,29 +812,78 @@
       var head = document.createElement("div");
       head.className = "xl-popup-head";
       var title = document.createElement("strong");
-      title.textContent = "Filter";
+      title.textContent = "Filter · " + filterLabel(col);
       var xBtn = document.createElement("button");
       xBtn.type = "button"; xBtn.className = "vendor-popup-x";
       xBtn.textContent = "×"; xBtn.onclick = closeFilterPopup;
       head.appendChild(title); head.appendChild(xBtn);
       pop.appendChild(head);
 
-      FILTER_COLUMNS.forEach(function (col) {
-        pop.appendChild(col.type === "checkbox" ? buildCheckboxSection(col) : buildTextSection(col));
-      });
+      pop.appendChild(col.type === "text"
+        ? buildTextSection(col, workingState)
+        : buildCheckboxSection(col, workingState));
 
       var actions = document.createElement("div");
       actions.className = "xl-popup-actions";
-      actions.appendChild(makePopupBtn("Clear all filters", "mini", clearAllFilters));
+      actions.appendChild(makePopupBtn("Clear this filter", "mini", function () {
+        filterState[col.field] = clearedState(col);
+        applyGet();
+      }));
       actions.appendChild(makePopupBtn("Cancel", "mini", closeFilterPopup));
-      actions.appendChild(makePopupBtn("Apply filters", "submit-btn", applyFilterGet));
+      actions.appendChild(makePopupBtn("Apply", "submit-btn", function () {
+        if (col.type === "tracker") {
+          workingState.scope = workingState.selected.size ? "selected" : "all";
+        }
+        filterState[col.field] = workingState;
+        applyGet();
+      }));
       pop.appendChild(actions);
 
       document.body.appendChild(pop);
+      var firstInput = pop.querySelector('input[type="text"]');
+      if (firstInput) firstInput.focus();
     }
 
-    filterBtnEl.addEventListener("click", showFilterPopup);
-    updateFilterBadge();
+    submittedSheet.addEventListener("click", function (e) {
+      var filterButton = e.target.closest(".column-filter");
+      if (filterButton) {
+        var filterField = filterButton.dataset.filterField;
+        var col = FILTER_COLUMNS.find(function (item) { return item.field === filterField; });
+        if (col) showFilterPopup(col);
+        return;
+      }
+
+      var sortButton = e.target.closest(".column-sort");
+      if (sortButton) {
+        var field = sortButton.dataset.sortField;
+        var direction = sortButton.dataset.sortDir;
+        var index = sortState.findIndex(function (item) { return item.field === field; });
+        if (index >= 0 && sortState[index].direction === direction) {
+          sortState.splice(index, 1);
+        } else if (index >= 0) {
+          sortState[index].direction = direction;
+        } else {
+          sortState.push({ field: field, direction: direction });
+        }
+        applyGet();
+        return;
+      }
+
+      var priorityButton = e.target.closest(".sort-priority");
+      if (priorityButton) {
+        var priorityField = priorityButton.dataset.sortPriorityField;
+        var priorityIndex = sortState.findIndex(function (item) {
+          return item.field === priorityField;
+        });
+        if (priorityIndex > 0) {
+          var promoted = sortState[priorityIndex];
+          sortState[priorityIndex] = sortState[priorityIndex - 1];
+          sortState[priorityIndex - 1] = promoted;
+          applyGet();
+        }
+      }
+    });
+    updateHeaderControls();
   }
 
   /* --- in-cart ordering and invoice popup ---------------------------- */
@@ -784,8 +891,14 @@
   var markCartOrderedBtn = document.getElementById("mark-cart-ordered");
   function setInCartCount(count) {
     if (!markCartOrderedBtn) return;
-    count = Math.max(0, count || 0);
+    var ids = [];
+    document.querySelectorAll(".submitted-row").forEach(function (row) {
+      var status = row.querySelector('.status-select[data-field="order_status"]');
+      if (status && status.value === "in cart") ids.push(parseInt(row.dataset.id, 10));
+    });
+    count = ids.length;
     markCartOrderedBtn.dataset.inCartCount = String(count);
+    markCartOrderedBtn.dataset.inCartIds = JSON.stringify(ids);
     markCartOrderedBtn.disabled = count === 0;
     markCartOrderedBtn.textContent = "Mark all in cart as ordered" +
       (count ? " (" + count + ")" : "");
@@ -799,7 +912,9 @@
       fetch("/api/invoices/from-cart", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: "{}"
+        body: JSON.stringify({
+          order_ids: JSON.parse(markCartOrderedBtn.dataset.inCartIds || "[]")
+        })
       }).then(function (r) {
         return r.json().then(function (data) {
           if (!r.ok) throw new Error(data.error || "could not create invoice");

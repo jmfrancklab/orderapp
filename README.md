@@ -33,15 +33,16 @@ of dependency-free vanilla JS (autosave, vendor auto-detect, tracker chips).
   missing website, phone, or the tax-exemption-filed checkbox.
 - **Trackers** — type an email in the row, press Enter, it becomes a removable
   chip; those people see the order on their own Submitted tab.
-- **Submitted tab** — spreadsheet view of everything you submitted or track,
-  with the submitted date. Everything remains editable (autosaved) *except* the
-  submission date and who submitted it — enforced server-side, not just in the
-  UI. Trackers can be added/removed here too. The footer shows total cost, total
-  item quantity, and unique rows. Move rows to **In cart**, then use the page
-  action to create an invoice and mark those rows ordered; invoice and receipt
-  Dropbox links can be opened and edited from each row's Invoice column.
-  Submitted filters are stored in the page's GET query string, so a filtered
-  URL can be bookmarked or sent to another user.
+- **Submitted tab** — spreadsheet view defaulting to everything you submitted
+  or track, with a tracker-filter option to show all submitted orders. Visible
+  submitted rows are collaborative and editable (autosaved) *except* for the
+  immutable submission date and creator. Each header has its own GET-backed
+  filter plus ascending/descending controls for prioritized multi-column sorts;
+  tracker selections support OR and AND matching. These URLs can be bookmarked
+  or shared. The footer shows total cost, total item quantity, and unique rows.
+  Move rows to **In cart**, then use the page action to create an invoice and
+  mark those rows ordered; invoice and receipt Dropbox links can be opened and
+  edited from each row's Invoice column.
 - **Invoices tab** — lists every visible invoice with its files and item counts;
   each invoice links back to a Submitted view filtered to its associated rows.
 - **Change history** — every field change, tracker add/remove, and submission

@@ -9,6 +9,7 @@ import re
 import sqlite3
 import tomllib
 from datetime import datetime, timedelta, timezone
+from functools import cmp_to_key
 from urllib.parse import urlparse
 
 from flask import (Flask, g, jsonify, redirect, render_template, request,
@@ -22,7 +23,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.12.6"
+__version__ = "0.12.7"
 
 # ── Config ────────────────────────────────────────────────────────────────────
 def _load_config():
@@ -601,6 +602,12 @@ def fetch_visible_invoices(db, email):
         (email, email)).fetchall()
 
 
+def fetch_all_invoices(db):
+    return db.execute(
+        "SELECT * FROM invoices ORDER BY created_at DESC, id DESC"
+    ).fetchall()
+
+
 def visible_in_cart_count(db, email):
     row = db.execute(
         """SELECT COUNT(DISTINCT o.id) AS n FROM orders o
@@ -624,12 +631,13 @@ def trackers_for(db, order_ids):
 
 SUBMITTED_TEXT_FILTERS = (
     "submitted_at", "user_email", "description", "link", "use_note", "cost",
-    "quantity", "trackers",
+    "quantity",
 )
 SUBMITTED_CHOICE_FILTERS = ("vendor_id", "project_id", "order_status", "invoice_id")
+SUBMITTED_SORT_FIELDS = SUBMITTED_TEXT_FILTERS + SUBMITTED_CHOICE_FILTERS + ("trackers",)
 
 
-def submitted_filters_from_args(args):
+def submitted_filters_from_args(args, email):
     """Return the supported Submitted-page filters from HTTP GET parameters."""
     filters = {}
     for field in SUBMITTED_TEXT_FILTERS:
@@ -640,14 +648,40 @@ def submitted_filters_from_args(args):
         }
     for field in SUBMITTED_CHOICE_FILTERS:
         filters[field] = {"selected": args.getlist(f"filter_{field}")}
+    tracker_args = [value.strip().lower() for value in args.getlist("tracker") if value.strip()]
+    if not tracker_args:
+        filters["trackers"] = {
+            "selected": [email], "mode": "or", "scope": "default",
+        }
+    elif "all" in tracker_args:
+        filters["trackers"] = {
+            "selected": [], "mode": "or", "scope": "all",
+        }
+    else:
+        filters["trackers"] = {
+            "selected": list(dict.fromkeys(tracker_args)),
+            "mode": "and" if args.get("tracker_mode") == "and" else "or",
+            "scope": "selected",
+        }
     return filters
 
 
+def submitted_sorts_from_args(args):
+    """Parse ordered, unique ``sort=field:direction`` GET parameters."""
+    sorts = []
+    seen = set()
+    for raw in args.getlist("sort"):
+        field, separator, direction = raw.partition(":")
+        if (not separator or field not in SUBMITTED_SORT_FIELDS
+                or direction not in ("asc", "desc") or field in seen):
+            continue
+        sorts.append({"field": field, "direction": direction})
+        seen.add(field)
+    return sorts
+
+
 def submitted_filters_active(filters):
-    return any(
-        state.get("query") or state.get("selected")
-        for state in filters.values()
-    )
+    return any(state.get("query") or state.get("selected") for state in filters.values())
 
 
 def _submitted_text_value(row, field, trackers):
@@ -660,8 +694,26 @@ def _submitted_text_value(row, field, trackers):
     return str(row[field] if row[field] is not None else "")
 
 
-def filter_submitted_rows(rows, filters, trackers):
-    """Apply validated Submitted-page GET filters to visible order rows."""
+def _tracker_filter_matches(row, tracker_state, trackers, current_email):
+    if tracker_state.get("scope") == "all":
+        return True
+    selected = tracker_state.get("selected", [])
+    if not selected:
+        return True
+    row_trackers = {value.casefold() for value in trackers.get(row["id"], [])}
+    current = current_email.casefold()
+    owner = (row["user_email"] or "").casefold()
+    matches = []
+    for email in selected:
+        normalized = email.casefold()
+        matches.append(
+            normalized in row_trackers or (normalized == current and owner == current)
+        )
+    return all(matches) if tracker_state.get("mode") == "and" else any(matches)
+
+
+def filter_submitted_rows(rows, filters, trackers, current_email):
+    """Apply validated Submitted-page GET filters to all submitted rows."""
     compiled = {}
     for field in SUBMITTED_TEXT_FILTERS:
         state = filters[field]
@@ -673,6 +725,8 @@ def filter_submitted_rows(rows, filters, trackers):
 
     filtered = []
     for row in rows:
+        if not _tracker_filter_matches(row, filters["trackers"], trackers, current_email):
+            continue
         matches = True
         for field in SUBMITTED_TEXT_FILTERS:
             state = filters[field]
@@ -701,7 +755,8 @@ def filter_submitted_rows(rows, filters, trackers):
     return filtered
 
 
-def submitted_filter_choices(rows, vendors, projects, invoices, filters, trackers):
+def submitted_filter_choices(rows, vendors, projects, invoices, filters, trackers,
+                             current_email):
     labels = {
         "vendor_id": {str(v["id"]): v["name"] for v in vendors},
         "project_id": {str(p["id"]): p["name"] for p in projects},
@@ -721,13 +776,66 @@ def submitted_filter_choices(rows, vendors, projects, invoices, filters, tracker
             key: dict(value) for key, value in filters.items()
         }
         facet_filters[field]["selected"] = []
-        facet_rows = filter_submitted_rows(rows, facet_filters, trackers)
+        facet_rows = filter_submitted_rows(rows, facet_filters, trackers, current_email)
         values = {str(row[field] if row[field] is not None else "") for row in facet_rows}
         choices[field] = [
             {"value": value, "label": labels[field].get(value, "(none)" if not value else value)}
             for value in sorted(values, key=lambda value: labels[field].get(value, "").casefold())
         ]
+    tracker_filters = {key: dict(value) for key, value in filters.items()}
+    tracker_filters["trackers"] = {"selected": [], "mode": "or", "scope": "all"}
+    tracker_rows = filter_submitted_rows(rows, tracker_filters, trackers, current_email)
+    tracker_emails = {current_email}
+    for row in tracker_rows:
+        tracker_emails.update(trackers.get(row["id"], []))
+    choices["trackers"] = [
+        {
+            "value": email,
+            "label": (f"{email} (me: submitted or tracking)"
+                      if email.casefold() == current_email.casefold() else email),
+        }
+        for email in sorted(tracker_emails, key=str.casefold)
+    ]
     return choices
+
+
+def sort_submitted_rows(rows, sorts, trackers, vendors, projects, invoices):
+    """Apply stable, ordered multi-column sorting from validated GET state."""
+    if not sorts:
+        return list(rows)
+    labels = {
+        "vendor_id": {v["id"]: v["name"] for v in vendors},
+        "project_id": {p["id"]: p["name"] for p in projects},
+        "invoice_id": {i["id"]: i["nickname"] for i in invoices},
+    }
+
+    def value(row, field):
+        raw = row[field] if field != "trackers" else "\0".join(trackers.get(row["id"], []))
+        if field in labels:
+            raw = labels[field].get(raw, "")
+        if field == "cost":
+            try:
+                return False, float(str(raw or "").replace(",", ""))
+            except ValueError:
+                return True, 0.0
+        if field == "quantity":
+            return raw is None, int(raw or 0)
+        text = str(raw or "")
+        return not bool(text), text.casefold()
+
+    def compare(left, right):
+        for spec in sorts:
+            left_missing, left_value = value(left, spec["field"])
+            right_missing, right_value = value(right, spec["field"])
+            if left_missing != right_missing:
+                return 1 if left_missing else -1
+            if left_value == right_value:
+                continue
+            result = -1 if left_value < right_value else 1
+            return result if spec["direction"] == "asc" else -result
+        return right["id"] - left["id"]
+
+    return sorted(rows, key=cmp_to_key(compare))
 
 
 def submitted_totals(rows):
@@ -768,21 +876,23 @@ def login_required(view):
 
 
 def order_visible_to(db, order_id, email):
-    """User may touch an order if they created it or track it."""
+    """Submitted orders are collaborative; drafts remain owner-only."""
     return db.execute(
         """SELECT o.* FROM orders o
            LEFT JOIN trackers t ON t.order_id = o.id AND t.email = ?
-           WHERE o.id = ? AND (o.user_email = ? OR t.email IS NOT NULL)""",
+           WHERE o.id = ?
+             AND (o.status = 'submitted' OR o.user_email = ? OR t.email IS NOT NULL)""",
         (email, order_id, email)).fetchone()
 
 
 def invoice_visible_to(db, invoice_id, email):
-    """User may view/edit an invoice when one of its orders is visible to them."""
+    """Invoices attached to collaborative submitted orders are editable."""
     return db.execute(
         """SELECT DISTINCT i.* FROM invoices i
            JOIN orders o ON o.invoice_id = i.id
            LEFT JOIN trackers t ON t.order_id = o.id AND t.email = ?
-           WHERE i.id = ? AND (o.user_email = ? OR t.email IS NOT NULL)""",
+           WHERE i.id = ?
+             AND (o.status = 'submitted' OR o.user_email = ? OR t.email IS NOT NULL)""",
         (email, invoice_id, email)).fetchone()
 
 def get_client_ip():
@@ -1053,28 +1163,34 @@ def submitted():
     db = get_db()
     email = current_user()
     all_rows = db.execute(
-        """SELECT DISTINCT o.* FROM orders o
-           LEFT JOIN trackers t ON t.order_id = o.id
-           WHERE o.status = 'submitted' AND (o.user_email = ? OR t.email = ?)
-           ORDER BY o.submitted_at DESC, o.id DESC""",
-        (email, email)).fetchall()
+        """SELECT o.* FROM orders o
+           WHERE o.status = 'submitted'
+           ORDER BY o.submitted_at DESC, o.id DESC"""
+    ).fetchall()
     all_trackers = trackers_for(db, [row["id"] for row in all_rows])
-    filters = submitted_filters_from_args(request.args)
-    rows = filter_submitted_rows(all_rows, filters, all_trackers)
+    filters = submitted_filters_from_args(request.args, email)
+    sorts = submitted_sorts_from_args(request.args)
     vendors = fetch_vendors(db)
     projects = fetch_projects(db)
-    invoices = fetch_visible_invoices(db, email)
+    invoices = fetch_all_invoices(db)
+    rows = filter_submitted_rows(all_rows, filters, all_trackers, email)
+    rows = sort_submitted_rows(
+        rows, sorts, all_trackers, vendors, projects, invoices)
+    in_cart_order_ids = [
+        row["id"] for row in rows if row["order_status"] == "in cart"
+    ]
     invoice_by_id = {invoice["id"]: invoice for invoice in invoices}
     return render_template(
         "submitted.html", tab="submitted", rows=rows,
         vendors=vendors, projects=projects, trackers=all_trackers, invoices=invoices,
         submitted_filters=filters,
+        submitted_sorts=sorts,
         submitted_filters_active=submitted_filters_active(filters),
         submitted_filter_choices=submitted_filter_choices(
-            all_rows, vendors, projects, invoices, filters, all_trackers),
+            all_rows, vendors, projects, invoices, filters, all_trackers, email),
         submitted_totals=submitted_totals(rows), has_submitted_orders=bool(all_rows),
-        in_cart_count=visible_in_cart_count(db, email),
-        invoice_by_id=invoice_by_id)
+        in_cart_count=len(in_cart_order_ids), in_cart_order_ids=in_cart_order_ids,
+        invoice_by_id=invoice_by_id, current_email=email)
 
 
 @app.route("/invoices")
@@ -1335,13 +1451,29 @@ def api_invoice_from_cart():
     """Group every visible in-cart order into an invoice and mark it ordered."""
     db = get_db()
     email = current_user()
-    orders = db.execute(
-        """SELECT DISTINCT o.* FROM orders o
-           LEFT JOIN trackers t ON t.order_id = o.id
-           WHERE o.status = 'submitted' AND o.order_status = 'in cart'
-             AND (o.user_email = ? OR t.email = ?)
-           ORDER BY o.id""",
-        (email, email)).fetchall()
+    requested_ids = (request.get_json(silent=True) or {}).get("order_ids")
+    if isinstance(requested_ids, list):
+        try:
+            requested_ids = list(dict.fromkeys(int(value) for value in requested_ids))
+        except (TypeError, ValueError):
+            return jsonify(error="invalid order IDs"), 400
+        if requested_ids:
+            marks = ",".join("?" * len(requested_ids))
+            orders = db.execute(
+                f"""SELECT o.* FROM orders o
+                     WHERE o.status = 'submitted' AND o.order_status = 'in cart'
+                       AND o.id IN ({marks}) ORDER BY o.id""",
+                requested_ids).fetchall()
+        else:
+            orders = []
+    else:
+        orders = db.execute(
+            """SELECT DISTINCT o.* FROM orders o
+               LEFT JOIN trackers t ON t.order_id = o.id
+               WHERE o.status = 'submitted' AND o.order_status = 'in cart'
+                 AND (o.user_email = ? OR t.email = ?)
+               ORDER BY o.id""",
+            (email, email)).fetchall()
     if not orders:
         return jsonify(error="no in-cart orders"), 400
 
