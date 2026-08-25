@@ -23,7 +23,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.12.8"
+__version__ = "0.12.9"
 
 # ── Config ────────────────────────────────────────────────────────────────────
 def _load_config():
@@ -1495,6 +1495,7 @@ def api_invoice_from_cart():
               f"invoice #{invoice_id} created for {len(orders)} unique item(s)")
     db.commit()
     return jsonify(ok=True, invoice_id=invoice_id, nickname=nickname,
+                   invoice_url="", receipt_url="",
                    unique_items=len(orders),
                    item_count=sum(order["quantity"] for order in orders))
 

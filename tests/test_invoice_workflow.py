@@ -104,6 +104,8 @@ def test_from_cart_creates_invoice_and_orders_visible_rows(invoice_client):
     assert data["unique_items"] == 2
     assert data["item_count"] == 5
     assert data["nickname"] == str(data["invoice_id"])
+    assert data["invoice_url"] == ""
+    assert data["receipt_url"] == ""
 
     conn = sqlite3.connect(db_path)
     invoice = conn.execute(

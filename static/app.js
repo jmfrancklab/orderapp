@@ -920,8 +920,13 @@
           if (!r.ok) throw new Error(data.error || "could not create invoice");
           return data;
         });
-      }).then(function () {
-        window.location.reload();
+      }).then(function (data) {
+        showInvoicePopup({
+          id: data.invoice_id,
+          nickname: data.nickname,
+          invoiceUrl: data.invoice_url || "",
+          receiptUrl: data.receipt_url || ""
+        }, true, function () { window.location.reload(); });
       }).catch(function (err) {
         markCartOrderedBtn.disabled = false;
         markCartOrderedBtn.textContent = "Mark all in cart as ordered";
@@ -930,11 +935,14 @@
     });
   }
 
-  var _invoiceOverlay = null, _invoicePopup = null;
+  var _invoiceOverlay = null, _invoicePopup = null, _invoiceAfterClose = null;
 
   function closeInvoicePopup() {
     if (_invoiceOverlay) { _invoiceOverlay.remove(); _invoiceOverlay = null; }
     if (_invoicePopup) { _invoicePopup.remove(); _invoicePopup = null; }
+    var afterClose = _invoiceAfterClose;
+    _invoiceAfterClose = null;
+    if (afterClose) afterClose();
   }
 
   function invoiceField(label, value, field, editing) {
@@ -970,8 +978,18 @@
     return row;
   }
 
-  function showInvoicePopup(link, editing) {
+  function invoiceDataFromLink(link) {
+    return {
+      id: link.dataset.invoiceId,
+      nickname: link.dataset.nickname,
+      invoiceUrl: link.dataset.invoiceUrl,
+      receiptUrl: link.dataset.receiptUrl
+    };
+  }
+
+  function showInvoicePopup(invoice, editing, afterClose) {
     closeInvoicePopup();
+    _invoiceAfterClose = afterClose || null;
     var overlay = document.createElement("div");
     overlay.className = "xl-overlay";
     overlay.onclick = closeInvoicePopup;
@@ -986,7 +1004,7 @@
     var head = document.createElement("div");
     head.className = "xl-popup-head";
     var title = document.createElement("strong");
-    title.textContent = editing ? "Edit invoice" : "Invoice " + link.dataset.nickname;
+    title.textContent = editing ? "Edit invoice" : "Invoice " + invoice.nickname;
     var close = document.createElement("button");
     close.type = "button"; close.className = "vendor-popup-x";
     close.textContent = "×"; close.onclick = closeInvoicePopup;
@@ -994,9 +1012,9 @@
 
     var fields = document.createElement(editing ? "form" : "div");
     fields.className = "invoice-fields";
-    fields.appendChild(invoiceField("Nickname", link.dataset.nickname, "nickname", editing));
-    fields.appendChild(invoiceField("Invoice", link.dataset.invoiceUrl, "invoice_url", editing));
-    fields.appendChild(invoiceField("Receipt", link.dataset.receiptUrl, "receipt_url", editing));
+    fields.appendChild(invoiceField("Nickname", invoice.nickname, "nickname", editing));
+    fields.appendChild(invoiceField("Invoice", invoice.invoiceUrl, "invoice_url", editing));
+    fields.appendChild(invoiceField("Receipt", invoice.receiptUrl, "receipt_url", editing));
 
     if (editing) {
       var actions = document.createElement("div");
@@ -1011,7 +1029,7 @@
         var nickname = fields.elements.nickname.value.trim();
         if (!nickname) return;
         save.disabled = true;
-        post("/api/invoices/" + link.dataset.invoiceId, "POST", {
+        post("/api/invoices/" + invoice.id, "POST", {
           nickname: nickname,
           invoice_url: fields.elements.invoice_url.value.trim(),
           receipt_url: fields.elements.receipt_url.value.trim()
@@ -1090,13 +1108,13 @@
     var invoiceName = e.target.closest(".invoice-name");
     if (invoiceName) {
       e.preventDefault();
-      showInvoicePopup(invoiceName, false);
+      showInvoicePopup(invoiceDataFromLink(invoiceName), false);
       return;
     }
     if (e.target.classList.contains("invoice-edit")) {
       var invoiceLink = document.querySelector(
         '.invoice-name[data-invoice-id="' + e.target.dataset.invoiceId + '"]');
-      if (invoiceLink) showInvoicePopup(invoiceLink, true);
+      if (invoiceLink) showInvoicePopup(invoiceDataFromLink(invoiceLink), true);
       return;
     }
     // chip remove
