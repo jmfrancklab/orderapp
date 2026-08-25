@@ -49,7 +49,7 @@ body {
 .tabs a:hover:not(.active) { color: var(--accent); }
 .page-meta {
   display: flex; align-items: flex-start; gap: 1.5rem;
-  max-width: 1500px; margin: 0 auto; padding: .75rem 1.2rem 0;
+  width: 100%; margin: 0 auto; padding: .75rem 1.2rem 0;
 }
 .page-note { flex: 1 1 auto; min-width: 0; }
 .page-note .explain { max-width: none; margin-bottom: 0; }
@@ -61,7 +61,7 @@ body {
 .save-state { margin-left: .8em; font-family: var(--mono); font-size: .72rem; }
 .app-version { margin-left: .4em; font-family: var(--mono); font-size: .65rem; color: #9aa5b1; }
 
-main { padding: 1.2rem 1.2rem 3rem; max-width: 1500px; margin: 0 auto; }
+main { width: 100%; padding: 1.2rem 1.2rem 3rem; margin: 0 auto; }
 
 .explain {
   font-size: .82rem; color: #4b5563; max-width: 70em;
@@ -76,13 +76,19 @@ main { padding: 1.2rem 1.2rem 3rem; max-width: 1500px; margin: 0 auto; }
 }
 .sheet-head, .order-row, .sheet-foot {
   display: grid;
-  grid-template-columns: 1.4fr 1.4fr 1.1fr 1fr 1.2fr 5.5rem 3rem 1.3fr 2.2rem;
+  grid-template-columns:
+    minmax(0, 1.4fr) minmax(0, 1.4fr) minmax(0, 1.1fr)
+    minmax(0, 1fr) minmax(0, 1.2fr) 5.5rem 3rem
+    minmax(0, 1.3fr) 2.2rem;
   gap: .6rem; align-items: center;
   padding: .45rem .2rem;
   border-bottom: 1px solid var(--rule);
 }
 .submitted-sheet .sheet-head, .submitted-row, .submitted-sheet .sheet-foot {
-  grid-template-columns: 7rem 1fr 1.4fr 1.4fr 1.1fr 1fr 1.1fr 5.5rem 3.5rem 12rem 6rem 1.2fr 2.2rem;
+  grid-template-columns:
+    7rem minmax(0, 1fr) minmax(0, 1.4fr) minmax(0, 1.4fr)
+    minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1.1fr)
+    5.5rem 3.5rem 12rem 6rem minmax(0, 1.2fr) 2.2rem;
 }
 .row-line { display: contents; }
 
