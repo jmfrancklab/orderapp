@@ -76,9 +76,47 @@ def test_schema_contains_invoice_relationship(invoice_client):
     conn = sqlite3.connect(db_path)
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     order_columns = {r[1] for r in conn.execute("PRAGMA table_info(orders)")}
+    invoice_columns = {
+        row[1]: row for row in conn.execute("PRAGMA table_info(invoices)")
+    }
     conn.close()
     assert "invoices" in tables
     assert "invoice_id" in order_columns
+    assert "reimbursement_status" in invoice_columns
+    assert invoice_columns["reimbursement_status"][3] == 1
+    assert invoice_columns["reimbursement_status"][4] == "'madhur cc'"
+
+
+def test_existing_invoices_migrate_to_madhur_cc_default(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "pre-reimbursement.db")
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """CREATE TABLE invoices (
+               id INTEGER PRIMARY KEY,
+               nickname TEXT NOT NULL DEFAULT '',
+               invoice_url TEXT NOT NULL DEFAULT '',
+               receipt_url TEXT NOT NULL DEFAULT '',
+               created_by TEXT NOT NULL,
+               created_at TEXT NOT NULL
+           )"""
+    )
+    conn.execute(
+        "INSERT INTO invoices (nickname, created_by, created_at) VALUES (?, ?, ?)",
+        ("Legacy invoice", "buyer@lab.org", "2026-01-01"),
+    )
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(app_module, "DB_PATH", db_path)
+    app_module.init_db()
+
+    conn = sqlite3.connect(db_path)
+    status = conn.execute(
+        "SELECT reimbursement_status FROM invoices WHERE nickname = ?",
+        ("Legacy invoice",),
+    ).fetchone()[0]
+    conn.close()
+    assert status == "madhur cc"
 
 
 def test_ordered_cannot_be_selected_directly(invoice_client):
@@ -106,10 +144,12 @@ def test_from_cart_creates_invoice_and_orders_visible_rows(invoice_client):
     assert data["nickname"] == str(data["invoice_id"])
     assert data["invoice_url"] == ""
     assert data["receipt_url"] == ""
+    assert data["reimbursement_status"] == "madhur cc"
 
     conn = sqlite3.connect(db_path)
     invoice = conn.execute(
-        "SELECT nickname, invoice_url, receipt_url FROM invoices WHERE id=?",
+        "SELECT nickname, invoice_url, receipt_url, reimbursement_status "
+        "FROM invoices WHERE id=?",
         (data["invoice_id"],),
     ).fetchone()
     orders = conn.execute(
@@ -117,7 +157,7 @@ def test_from_cart_creates_invoice_and_orders_visible_rows(invoice_client):
     ).fetchall()
     conn.close()
 
-    assert invoice == (str(data["invoice_id"]), "", "")
+    assert invoice == (str(data["invoice_id"]), "", "", "madhur cc")
     assert orders[0][1:] == ("ordered", data["invoice_id"])
     assert orders[1][1:] == ("ordered", data["invoice_id"])
     assert orders[2][1:] == ("submitted", None)
@@ -133,30 +173,39 @@ def test_invoice_fields_can_be_edited_and_rendered(invoice_client):
             "nickname": "Mouser August",
             "invoice_url": "https://www.dropbox.com/invoice.pdf",
             "receipt_url": "https://www.dropbox.com/receipt.pdf",
+            "reimbursement_status": "reimbursed",
         },
     )
     assert response.status_code == 200
 
     conn = sqlite3.connect(db_path)
     invoice = conn.execute(
-        "SELECT nickname, invoice_url, receipt_url FROM invoices"
+        "SELECT nickname, invoice_url, receipt_url, reimbursement_status FROM invoices"
+    ).fetchone()
+    reimbursement_history = conn.execute(
+        "SELECT old_value, new_value, table_name FROM order_history "
+        "WHERE field = 'reimbursement_status'"
     ).fetchone()
     conn.close()
     assert invoice == (
         "Mouser August",
         "https://www.dropbox.com/invoice.pdf",
         "https://www.dropbox.com/receipt.pdf",
+        "reimbursed",
     )
+    assert reimbursement_history == ("madhur cc", "reimbursed", "invoices")
 
     page = client.get("/submitted")
     assert page.status_code == 200
     assert b'data-column-field="invoice_id"' in page.data
     assert b"Mouser August" in page.data
     assert b'data-invoice-url="https://www.dropbox.com/invoice.pdf"' in page.data
+    assert b'data-reimbursement-status="reimbursed"' in page.data
 
     invoice_page = client.get("/invoices")
     assert invoice_page.status_code == 200
     assert b"Mouser August" in invoice_page.data
+    assert b"Reimbursed" in invoice_page.data
     expected_filter = f"/submitted?filter_invoice_id={created['invoice_id']}".encode()
     assert expected_filter in invoice_page.data
 
@@ -164,6 +213,65 @@ def test_invoice_fields_can_be_edited_and_rendered(invoice_client):
     assert f'data-id="{order_ids[0]}"'.encode() in filtered.data
     assert f'data-id="{order_ids[1]}"'.encode() in filtered.data
     assert f'data-id="{order_ids[2]}"'.encode() not in filtered.data
+
+
+@pytest.mark.parametrize(
+    "status", ["requires reimbursement", "reimbursed", "madhur cc"]
+)
+def test_invoice_accepts_each_reimbursement_status(invoice_client, status):
+    client, db_path, _ = invoice_client
+    created = client.post("/api/invoices/from-cart", json={}).get_json()
+    response = client.post(
+        f"/api/invoices/{created['invoice_id']}",
+        json={"reimbursement_status": status},
+    )
+    assert response.status_code == 200
+
+    conn = sqlite3.connect(db_path)
+    stored = conn.execute(
+        "SELECT reimbursement_status FROM invoices WHERE id = ?",
+        (created["invoice_id"],),
+    ).fetchone()[0]
+    conn.close()
+    assert stored == status
+
+
+def test_invoice_rejects_unknown_reimbursement_status(invoice_client):
+    client, db_path, _ = invoice_client
+    created = client.post("/api/invoices/from-cart", json={}).get_json()
+    response = client.post(
+        f"/api/invoices/{created['invoice_id']}",
+        json={"reimbursement_status": "cash"},
+    )
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "invalid reimbursement status"
+
+    conn = sqlite3.connect(db_path)
+    stored = conn.execute(
+        "SELECT reimbursement_status FROM invoices WHERE id = ?",
+        (created["invoice_id"],),
+    ).fetchone()[0]
+    conn.close()
+    assert stored == "madhur cc"
+
+
+def test_legacy_order_requires_reimbursement_status_remains_available(invoice_client):
+    client, db_path, order_ids = invoice_client
+    response = client.post(
+        f"/api/orders/{order_ids[2]}",
+        json={"order_status": "requires reimbursement"},
+    )
+    assert response.status_code == 200
+
+    conn = sqlite3.connect(db_path)
+    stored = conn.execute(
+        "SELECT order_status FROM orders WHERE id = ?", (order_ids[2],)
+    ).fetchone()[0]
+    conn.close()
+    assert stored == "requires reimbursement"
+
+    page = client.get("/submitted")
+    assert b'<option value="requires reimbursement" selected>' in page.data
 
 
 def test_submitted_open_link_keeps_all_query_parameters(invoice_client):

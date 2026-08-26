@@ -42,7 +42,8 @@ of dependency-free vanilla JS (autosave, vendor auto-detect, tracker chips).
   or shared. The footer shows total cost, total item quantity, and unique rows.
   Move rows to **In cart**, then use the page action to create an invoice and
   mark those rows ordered; invoice and receipt Dropbox links can be opened and
-  edited from each row's Invoice column.
+  edited from each row's Invoice column. Each invoice also has a reimbursement
+  status: **Requires reimbursement**, **Reimbursed**, or **Madhur CC**.
 - **Invoices tab** — lists every visible invoice with its files and item counts;
   each invoice links back to a Submitted view filtered to its associated rows.
 - **Change history** — every field change, tracker add/remove, and submission

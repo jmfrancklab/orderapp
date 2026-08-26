@@ -1112,7 +1112,8 @@
           id: data.invoice_id,
           nickname: data.nickname,
           invoiceUrl: data.invoice_url || "",
-          receiptUrl: data.receipt_url || ""
+          receiptUrl: data.receipt_url || "",
+          reimbursementStatus: data.reimbursement_status || "madhur cc"
         }, true, function () { window.location.reload(); });
       }).catch(function (err) {
         markCartOrderedBtn.disabled = false;
@@ -1165,12 +1166,43 @@
     return row;
   }
 
+  function invoiceReimbursementField(value, editing) {
+    var row = document.createElement("div");
+    row.className = "invoice-field";
+    var name = document.createElement("span");
+    name.className = "invoice-field-label";
+    name.textContent = "Reimbursement";
+    row.appendChild(name);
+
+    var choices = INVOICE_REIMBURSEMENT_CHOICES || [];
+    if (editing) {
+      var select = document.createElement("select");
+      select.name = "reimbursement_status";
+      choices.forEach(function (choice) {
+        var option = document.createElement("option");
+        option.value = choice[0];
+        option.textContent = choice[1];
+        option.selected = choice[0] === value;
+        select.appendChild(option);
+      });
+      row.appendChild(select);
+    } else {
+      var shown = document.createElement("span");
+      shown.className = "invoice-field-value";
+      var match = choices.find(function (choice) { return choice[0] === value; });
+      shown.textContent = match ? match[1] : value;
+      row.appendChild(shown);
+    }
+    return row;
+  }
+
   function invoiceDataFromLink(link) {
     return {
       id: link.dataset.invoiceId,
       nickname: link.dataset.nickname,
       invoiceUrl: link.dataset.invoiceUrl,
-      receiptUrl: link.dataset.receiptUrl
+      receiptUrl: link.dataset.receiptUrl,
+      reimbursementStatus: link.dataset.reimbursementStatus
     };
   }
 
@@ -1202,6 +1234,7 @@
     fields.appendChild(invoiceField("Nickname", invoice.nickname, "nickname", editing));
     fields.appendChild(invoiceField("Invoice", invoice.invoiceUrl, "invoice_url", editing));
     fields.appendChild(invoiceField("Receipt", invoice.receiptUrl, "receipt_url", editing));
+    fields.appendChild(invoiceReimbursementField(invoice.reimbursementStatus, editing));
 
     if (editing) {
       var actions = document.createElement("div");
@@ -1219,7 +1252,8 @@
         post("/api/invoices/" + invoice.id, "POST", {
           nickname: nickname,
           invoice_url: fields.elements.invoice_url.value.trim(),
-          receipt_url: fields.elements.receipt_url.value.trim()
+          receipt_url: fields.elements.receipt_url.value.trim(),
+          reimbursement_status: fields.elements.reimbursement_status.value
         }, function () { window.location.reload(); });
       });
     }

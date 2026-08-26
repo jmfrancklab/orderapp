@@ -40,7 +40,8 @@ who submitted it. Filter and multi-level sort controls are in each column header
        data-invoice-id="{{ invoice.id }}"
        data-nickname="{{ invoice.nickname }}"
        data-invoice-url="{{ invoice.invoice_url }}"
-       data-receipt-url="{{ invoice.receipt_url }}">{{ invoice.nickname }}</a>
+       data-receipt-url="{{ invoice.receipt_url }}"
+       data-reimbursement-status="{{ invoice.reimbursement_status }}">{{ invoice.nickname }}</a>
     <button type="button" class="invoice-edit"
             data-invoice-id="{{ invoice.id }}">edit</button>
   </span>

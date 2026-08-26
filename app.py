@@ -23,7 +23,17 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.13.0"
+__version__ = "0.13.1"
+
+INVOICE_REIMBURSEMENT_DEFAULT = "madhur cc"
+INVOICE_REIMBURSEMENT_CHOICES = (
+    ("requires reimbursement", "Requires reimbursement"),
+    ("reimbursed", "Reimbursed"),
+    ("madhur cc", "Madhur CC"),
+)
+INVOICE_REIMBURSEMENT_STATUSES = {
+    value for value, _label in INVOICE_REIMBURSEMENT_CHOICES
+}
 
 # ── Config ────────────────────────────────────────────────────────────────────
 def _load_config():
@@ -310,6 +320,8 @@ def inject_globals():
     return {"app_version": __version__,
             "ms_auth": _CONFIG.get("auth_provider") == "microsoft",
             "quote_storage_domains": quote_domains,
+            "invoice_reimbursement_choices": INVOICE_REIMBURSEMENT_CHOICES,
+            "invoice_reimbursement_labels": dict(INVOICE_REIMBURSEMENT_CHOICES),
             "bookmarklet": bookmarklet}
 
 
@@ -433,6 +445,7 @@ def init_db():
         nickname TEXT NOT NULL DEFAULT '',
         invoice_url TEXT NOT NULL DEFAULT '',
         receipt_url TEXT NOT NULL DEFAULT '',
+        reimbursement_status TEXT NOT NULL DEFAULT 'madhur cc',
         created_by TEXT NOT NULL,
         created_at TEXT NOT NULL
     );
@@ -495,6 +508,7 @@ def init_db():
         "ALTER TABLE orders ADD COLUMN order_status TEXT NOT NULL DEFAULT 'submitted'",
         "ALTER TABLE orders ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1",
         "ALTER TABLE orders ADD COLUMN invoice_id INTEGER REFERENCES invoices(id) ON DELETE SET NULL",
+        "ALTER TABLE invoices ADD COLUMN reimbursement_status TEXT NOT NULL DEFAULT 'madhur cc'",
         "ALTER TABLE allowed_emails ADD COLUMN password_hash TEXT",
     ]:
         try:
@@ -1640,6 +1654,7 @@ def api_invoice_from_cart():
     db.commit()
     return jsonify(ok=True, invoice_id=invoice_id, nickname=nickname,
                    invoice_url="", receipt_url="",
+                   reimbursement_status=INVOICE_REIMBURSEMENT_DEFAULT,
                    unique_items=len(orders),
                    item_count=sum(order["quantity"] for order in orders))
 
@@ -1653,7 +1668,13 @@ def api_save_invoice(invoice_id):
         return jsonify(error="not found"), 404
 
     data = request.get_json(silent=True) or {}
-    allowed = {"nickname", "invoice_url", "receipt_url"}
+    allowed = {
+        "nickname", "invoice_url", "receipt_url", "reimbursement_status"
+    }
+    if "reimbursement_status" in data:
+        reimbursement_status = str(data["reimbursement_status"] or "").strip()
+        if reimbursement_status not in INVOICE_REIMBURSEMENT_STATUSES:
+            return jsonify(error="invalid reimbursement status"), 400
     sets, vals = [], []
     for field, value in data.items():
         if field not in allowed:
