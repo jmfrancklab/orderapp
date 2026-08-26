@@ -24,11 +24,11 @@ with an email that isn't on the allowlist. All changes are recorded in
       <td class="ro">{{ e.email }}</td>
       <td class="ro">{{ e.added_by }}</td>
       <td class="ro">{{ e.added_at }}</td>
-      <td>
-        <form method="post" action="{{ url_for('remove_user', uid=e.id) }}"
-              onsubmit="return confirm('Remove {{ e.email }} from the allowlist?')">
-          <button type="submit" class="mini">Remove</button>
-        </form>
+      <td class="ref-row-actions">
+        <button type="button" class="mini vdel reference-delete"
+                data-entity="users" data-record-id="{{ e.id }}"
+                data-label="{{ e.email }}" title="Delete allowed user"
+                aria-label="Delete allowed user {{ e.email }}">🗑</button>
       </td>
     </tr>
     {% endfor %}

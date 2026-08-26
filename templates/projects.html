@@ -19,7 +19,13 @@
     <tr>
       <td><input form="p{{ p.id }}" name="name" value="{{ p.name }}" required></td>
       <td><input form="p{{ p.id }}" name="notes" value="{{ p.notes }}"></td>
-      <td><button form="p{{ p.id }}" type="submit" class="mini">Save</button></td>
+      <td class="ref-row-actions">
+        <button form="p{{ p.id }}" type="submit" class="mini">Save</button>
+        <button type="button" class="mini vdel reference-delete"
+                data-entity="projects" data-record-id="{{ p.id }}"
+                data-label="{{ p.name }}" title="Delete project"
+                aria-label="Delete project {{ p.name }}">🗑</button>
+      </td>
     </tr>
     {% endfor %}
     <tr class="new-row">

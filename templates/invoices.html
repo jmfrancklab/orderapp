@@ -15,7 +15,7 @@ change them, or open its submitted orders as a filtered view.</p>
       <tr>
         <th>Invoice</th><th>Created</th><th>Created by</th><th>Items</th>
         <th>Invoice file</th><th>Receipt file</th><th>Reimbursement</th>
-        <th>Submitted orders</th>
+        <th>Submitted orders</th><th></th>
       </tr>
     </thead>
     <tbody>
@@ -41,6 +41,12 @@ change them, or open its submitted orders as a filtered view.</p>
         <td>{% if invoice.receipt_url %}<a href="{{ invoice.receipt_url }}" target="_blank" rel="noopener">open ↗</a>{% else %}—{% endif %}</td>
         <td>{{ invoice_reimbursement_labels.get(invoice.reimbursement_status, invoice.reimbursement_status) }}</td>
         <td><a href="{{ url_for('submitted', filter_invoice_id=invoice.id) }}">view orders →</a></td>
+        <td class="ref-row-actions">
+          <button type="button" class="mini vdel reference-delete"
+                  data-entity="invoices" data-record-id="{{ invoice.id }}"
+                  data-label="{{ invoice.nickname }}" title="Delete invoice"
+                  aria-label="Delete invoice {{ invoice.nickname }}">🗑</button>
+        </td>
       </tr>
       {% endfor %}
     </tbody>

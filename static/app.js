@@ -1586,4 +1586,206 @@
     });
   }
 
+  /* --- guarded deletion for reference-data tabs --------------------- */
+
+  var _referenceDeletePopup = null;
+  var _referenceDeleteOverlay = null;
+
+  function closeReferenceDeletePopup() {
+    if (_referenceDeletePopup) {
+      _referenceDeletePopup.remove();
+      _referenceDeletePopup = null;
+    }
+    if (_referenceDeleteOverlay) {
+      _referenceDeleteOverlay.remove();
+      _referenceDeleteOverlay = null;
+    }
+  }
+
+  function referenceDeletePopup(titleText) {
+    closeReferenceDeletePopup();
+
+    var overlay = document.createElement("div");
+    overlay.className = "xl-overlay";
+    overlay.onclick = closeReferenceDeletePopup;
+    document.body.appendChild(overlay);
+    _referenceDeleteOverlay = overlay;
+
+    var popup = document.createElement("div");
+    popup.className = "xl-popup reference-delete-popup";
+    popup.setAttribute("role", "dialog");
+    popup.setAttribute("aria-modal", "true");
+    popup.onclick = function (event) { event.stopPropagation(); };
+    _referenceDeletePopup = popup;
+
+    var head = document.createElement("div");
+    head.className = "xl-popup-head";
+    var title = document.createElement("strong");
+    title.textContent = titleText;
+    var close = document.createElement("button");
+    close.type = "button";
+    close.className = "vendor-popup-x";
+    close.textContent = "×";
+    close.setAttribute("aria-label", "Close");
+    close.onclick = closeReferenceDeletePopup;
+    head.appendChild(title);
+    head.appendChild(close);
+    popup.appendChild(head);
+    document.body.appendChild(popup);
+    return popup;
+  }
+
+  function referenceDeleteActions(popup) {
+    var actions = document.createElement("div");
+    actions.className = "xl-popup-actions";
+    popup.appendChild(actions);
+    return actions;
+  }
+
+  function showReferenceDeleteError(message) {
+    var popup = referenceDeletePopup("Could not check references");
+    var detail = document.createElement("p");
+    detail.className = "reference-delete-error";
+    detail.textContent = message || "The reference check failed. Nothing was deleted.";
+    popup.appendChild(detail);
+    referenceDeleteActions(popup).appendChild(
+      makePopupBtn("Close", "mini", closeReferenceDeletePopup));
+  }
+
+  function showReferenceDeleteBlocked(data) {
+    var count = data.reference_count || data.references.length;
+    var popup = referenceDeletePopup(
+      "Can’t delete " + data.singular + " “" + data.record.label + "”");
+    var intro = document.createElement("p");
+    intro.className = "reference-delete-error";
+    intro.textContent = count + " order row" + (count === 1 ? " references" : "s reference") +
+      " this " + data.singular + ". Update or delete those orders first.";
+    popup.appendChild(intro);
+
+    var wrap = document.createElement("div");
+    wrap.className = "reference-delete-table-wrap";
+    var table = document.createElement("table");
+    table.className = "delete-reference-table";
+    var headers = ["Order", "Stage", "By", "Description", "Fulfillment"];
+    if (data.entity === "users") headers.push("Relationship");
+    var thead = document.createElement("thead");
+    var headRow = document.createElement("tr");
+    headers.forEach(function (label) {
+      var th = document.createElement("th");
+      th.textContent = label;
+      headRow.appendChild(th);
+    });
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+
+    var tbody = document.createElement("tbody");
+    data.references.forEach(function (reference) {
+      var row = document.createElement("tr");
+      var idCell = document.createElement("td");
+      if (reference.stage === "Submitted") {
+        var link = document.createElement("a");
+        link.href = data.submitted_url;
+        link.textContent = "#" + reference.id;
+        idCell.appendChild(link);
+      } else {
+        idCell.textContent = "#" + reference.id;
+      }
+      row.appendChild(idCell);
+      [reference.stage, reference.user_email, reference.description || "—",
+       reference.order_status || "—"].forEach(function (value) {
+        var td = document.createElement("td");
+        td.textContent = value;
+        row.appendChild(td);
+      });
+      if (data.entity === "users") {
+        var relationship = document.createElement("td");
+        relationship.textContent = reference.relationship;
+        row.appendChild(relationship);
+      }
+      tbody.appendChild(row);
+    });
+    table.appendChild(tbody);
+    wrap.appendChild(table);
+    popup.appendChild(wrap);
+
+    var actions = referenceDeleteActions(popup);
+    var submittedReferences = data.references.some(function (reference) {
+      return reference.stage === "Submitted";
+    });
+    if (submittedReferences) {
+      var view = document.createElement("a");
+      view.className = "mini reference-delete-view";
+      view.href = data.submitted_url;
+      view.textContent = "View submitted orders";
+      actions.appendChild(view);
+    }
+    actions.appendChild(makePopupBtn("Close", "mini", closeReferenceDeletePopup));
+  }
+
+  function showReferenceDeleteConfirm(data) {
+    var popup = referenceDeletePopup(
+      "Delete " + data.singular + " “" + data.record.label + "”?");
+    var intro = document.createElement("p");
+    intro.className = "reference-delete-confirmation";
+    intro.textContent = "No orders reference this record. This deletion is permanent.";
+    popup.appendChild(intro);
+    var actions = referenceDeleteActions(popup);
+    actions.appendChild(makePopupBtn("Cancel", "mini", closeReferenceDeletePopup));
+    var remove = makePopupBtn("Delete", "submit-btn danger-btn", function () {
+      remove.disabled = true;
+      remove.textContent = "Checking again…";
+      fetch("/api/reference-records/" + encodeURIComponent(data.entity) + "/" +
+            encodeURIComponent(data.record.id), { method: "DELETE" })
+        .then(function (response) {
+          return response.json().then(function (body) {
+            return { response: response, body: body };
+          });
+        })
+        .then(function (result) {
+          if (result.response.status === 409) {
+            showReferenceDeleteBlocked(result.body);
+            return;
+          }
+          if (!result.response.ok) {
+            throw new Error(result.body.error || "Deletion failed");
+          }
+          window.location.reload();
+        })
+        .catch(function (error) {
+          showReferenceDeleteError(error.message);
+        });
+    });
+    actions.appendChild(remove);
+  }
+
+  document.addEventListener("click", function (event) {
+    var button = event.target.closest(".reference-delete");
+    if (!button) return;
+    button.disabled = true;
+    var entity = button.dataset.entity;
+    var recordId = button.dataset.recordId;
+    fetch("/api/reference-records/" + encodeURIComponent(entity) + "/" +
+          encodeURIComponent(recordId) + "/references")
+      .then(function (response) {
+        return response.json().then(function (body) {
+          if (!response.ok) throw new Error(body.error || "Reference check failed");
+          return body;
+        });
+      })
+      .then(function (data) {
+        if (data.can_delete) showReferenceDeleteConfirm(data);
+        else showReferenceDeleteBlocked(data);
+      })
+      .catch(function (error) {
+        showReferenceDeleteError(error.message);
+      })
+      .finally(function () { button.disabled = false; });
+  });
+
+  document.addEventListener("keydown", function (event) {
+    if (event.key === "Escape" && _referenceDeletePopup) {
+      closeReferenceDeletePopup();
+    }
+  });
+
 })();

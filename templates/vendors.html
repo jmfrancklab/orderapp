@@ -37,11 +37,10 @@ button appears only after you edit a row.</p>
       </td>
       <td class="vrow-actions">
         <button form="v{{ v.id }}" type="submit" class="mini vsave">Save</button>
-        <form method="post" action="{{ url_for('delete_vendor', vid=v.id) }}"
-              style="display:inline"
-              onsubmit="return confirm('Delete vendor "{{ v.name }}"? Orders referencing it will have no vendor set.')">
-          <button type="submit" class="mini vdel" title="Delete vendor">🗑</button>
-        </form>
+        <button type="button" class="mini vdel reference-delete"
+                data-entity="vendors" data-record-id="{{ v.id }}"
+                data-label="{{ v.name }}" title="Delete vendor"
+                aria-label="Delete vendor {{ v.name }}">🗑</button>
       </td>
     </tr>
     {% endfor %}

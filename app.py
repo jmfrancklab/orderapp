@@ -23,7 +23,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.14.0"
+__version__ = "0.15.0"
 
 INVOICE_REIMBURSEMENT_DEFAULT = "madhur cc"
 INVOICE_REIMBURSEMENT_CHOICES = (
@@ -637,18 +637,164 @@ def fetch_projects(db):
     return db.execute("SELECT * FROM projects ORDER BY name COLLATE NOCASE").fetchall()
 
 
+# Records managed on the reference-data tabs.  These identifiers never come
+# directly from a request; API input is first looked up in this allowlist.
+REFERENCE_DELETE_CONFIG = {
+    "vendors": {
+        "table": "vendors", "label_field": "name", "singular": "vendor",
+        "order_field": "vendor_id",
+    },
+    "projects": {
+        "table": "projects", "label_field": "name", "singular": "project",
+        "order_field": "project_id",
+    },
+    "invoices": {
+        "table": "invoices", "label_field": "nickname", "singular": "invoice",
+        "order_field": "invoice_id",
+    },
+    "users": {
+        "table": "allowed_emails", "label_field": "email", "singular": "user",
+        "order_field": None,
+    },
+}
+
+
+def reference_record(db, entity, record_id):
+    """Return the configured reference record, or ``None`` if it is absent."""
+    config = REFERENCE_DELETE_CONFIG.get(entity)
+    if config is None:
+        return None
+    return db.execute(
+        f"SELECT id, {config['label_field']} AS label "
+        f"FROM {config['table']} WHERE id = ?",
+        (record_id,),
+    ).fetchone()
+
+
+def orders_referencing_record(db, entity, record):
+    """Return every order that prevents a reference record from being deleted."""
+    config = REFERENCE_DELETE_CONFIG[entity]
+    if entity == "users":
+        rows = db.execute(
+            """SELECT o.*,
+                      CASE
+                        WHEN o.user_email = ? AND EXISTS (
+                          SELECT 1 FROM trackers t
+                          WHERE t.order_id = o.id AND t.email = ?
+                        ) THEN 'Submitter and tracker'
+                        WHEN o.user_email = ? THEN 'Submitter'
+                        ELSE 'Tracker'
+                      END AS reference_role
+                 FROM orders o
+                WHERE o.user_email = ? OR EXISTS (
+                  SELECT 1 FROM trackers t
+                  WHERE t.order_id = o.id AND t.email = ?
+                )
+                ORDER BY o.id DESC""",
+            (record["label"], record["label"], record["label"],
+             record["label"], record["label"]),
+        ).fetchall()
+    else:
+        rows = db.execute(
+            f"""SELECT o.*, 'Order field' AS reference_role
+                  FROM orders o
+                 WHERE o.{config['order_field']} = ?
+                 ORDER BY o.id DESC""",
+            (record["id"],),
+        ).fetchall()
+    return rows
+
+
+def reference_check_payload(db, entity, record_id):
+    """Build the JSON-safe deletion check shown by the browser popup."""
+    config = REFERENCE_DELETE_CONFIG.get(entity)
+    if config is None:
+        return None
+    record = reference_record(db, entity, record_id)
+    if record is None:
+        return None
+    rows = orders_referencing_record(db, entity, record)
+    references = []
+    for row in rows:
+        references.append({
+            "id": row["id"],
+            "stage": "Draft" if row["status"] == "draft" else "Submitted",
+            "submitted_at": (row["submitted_at"] or "")[:10],
+            "user_email": row["user_email"],
+            "description": row["description"] or "",
+            "order_status": row["order_status"] or "",
+            "relationship": (
+                config["order_field"] if entity != "users"
+                else row["reference_role"]
+            ),
+        })
+    filter_args = {"tracker": "all"}
+    if entity == "users":
+        filter_args["filter_user_email"] = record["label"]
+    else:
+        filter_args[f"filter_{config['order_field']}"] = record["id"]
+    return {
+        "entity": entity,
+        "singular": config["singular"],
+        "record": {"id": record["id"], "label": record["label"]},
+        "can_delete": not references,
+        "reference_count": len(references),
+        "references": references,
+        "submitted_url": url_for("submitted", **filter_args),
+    }
+
+
+def delete_unreferenced_record(db, entity, record_id):
+    """Atomically recheck and delete a reference record.
+
+    The immediate transaction prevents an order from acquiring this reference
+    between the check and the delete.
+    """
+    config = REFERENCE_DELETE_CONFIG.get(entity)
+    if config is None:
+        return "unknown", None
+    db.execute("BEGIN IMMEDIATE")
+    record = reference_record(db, entity, record_id)
+    if record is None:
+        db.rollback()
+        return "missing", None
+    if orders_referencing_record(db, entity, record):
+        payload = reference_check_payload(db, entity, record_id)
+        db.rollback()
+        return "referenced", payload
+
+    log_change(
+        db, record["id"], config["label_field"], record["label"], None,
+        table_name=config["table"],
+    )
+    log_event(
+        db, f"{config['singular']}_deleted",
+        f"{config['singular']} {record['label']!r} deleted",
+    )
+    db.execute(f"DELETE FROM {config['table']} WHERE id = ?", (record_id,))
+    db.commit()
+    return "deleted", {
+        "ok": True, "entity": entity, "id": record_id, "label": record["label"]
+    }
+
+
 def fetch_visible_invoices(db, email):
     return db.execute(
         """SELECT i.*, COUNT(o.id) AS unique_items,
                   COALESCE(SUM(o.quantity), 0) AS item_count
            FROM invoices i
-           JOIN orders o ON o.invoice_id = i.id
-           WHERE o.user_email = ? OR EXISTS (
-               SELECT 1 FROM trackers t WHERE t.order_id = o.id AND t.email = ?
+           LEFT JOIN orders o ON o.invoice_id = i.id
+           WHERE i.created_by = ? OR EXISTS (
+               SELECT 1 FROM orders visible_order
+               WHERE visible_order.invoice_id = i.id
+                 AND (visible_order.user_email = ? OR EXISTS (
+                     SELECT 1 FROM trackers t
+                     WHERE t.order_id = visible_order.id AND t.email = ?
+                 ))
            )
            GROUP BY i.id
            ORDER BY i.created_at DESC, i.id DESC""",
-        (email, email)).fetchall()
+        (email, email, email)).fetchall()
 
 
 def fetch_all_invoices(db):
@@ -1315,12 +1461,9 @@ def users():
 @login_required
 def remove_user(uid):
     db = get_db()
-    row = db.execute("SELECT email FROM allowed_emails WHERE id = ?", (uid,)).fetchone()
-    if row:
-        log_change(db, 0, "email", row["email"], None, table_name="allowed_emails")
-        log_event(db, "user_removed", f"removed {row['email']!r}")
-        db.execute("DELETE FROM allowed_emails WHERE id = ?", (uid,))
-        db.commit()
+    # Keep this legacy form endpoint guarded too.  The current UI uses the JSON
+    # endpoint below so it can display the blocking rows.
+    delete_unreferenced_record(db, "users", uid)
     return redirect(url_for("users"))
 
 
@@ -1343,11 +1486,9 @@ def unblock_ip(bid):
 @login_required
 def delete_vendor(vid):
     db = get_db()
-    v = db.execute("SELECT * FROM vendors WHERE id = ?", (vid,)).fetchone()
-    if v:
-        log_change(db, 0, "name", v["name"], None, table_name="vendors")
-        db.execute("DELETE FROM vendors WHERE id = ?", (vid,))
-        db.commit()
+    # Keep this legacy form endpoint guarded too.  The current UI uses the JSON
+    # endpoint below so it can display the blocking rows.
+    delete_unreferenced_record(db, "vendors", vid)
     return redirect(url_for("vendors"))
 
 
@@ -1441,6 +1582,40 @@ def update_project(pid):
                 request.form.get("notes", "").strip(), pid))
     db.commit()
     return redirect(url_for("projects"))
+
+
+@app.route(
+    "/api/reference-records/<string:entity>/<int:record_id>/references",
+    methods=["GET"],
+)
+@login_required
+def api_reference_record_references(entity, record_id):
+    """Report the order rows that would prevent deleting a reference record."""
+    if entity not in REFERENCE_DELETE_CONFIG:
+        return jsonify(error="unknown reference type"), 404
+    payload = reference_check_payload(get_db(), entity, record_id)
+    if payload is None:
+        return jsonify(error="not found"), 404
+    return jsonify(payload)
+
+
+@app.route(
+    "/api/reference-records/<string:entity>/<int:record_id>",
+    methods=["DELETE"],
+)
+@login_required
+def api_delete_reference_record(entity, record_id):
+    """Delete only when an atomic recheck finds no referencing orders."""
+    if entity not in REFERENCE_DELETE_CONFIG:
+        return jsonify(error="unknown reference type"), 404
+    outcome, payload = delete_unreferenced_record(
+        get_db(), entity, record_id
+    )
+    if outcome == "missing":
+        return jsonify(error="not found"), 404
+    if outcome == "referenced":
+        return jsonify(payload), 409
+    return jsonify(payload)
 
 # ------------------------------------------------------------------ autosave API
 
