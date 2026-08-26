@@ -158,6 +158,17 @@ main { width: 100%; padding: 1.2rem 1.2rem 3rem; margin: 0 auto; }
 }
 .row-note.err { color: var(--alert); }
 .order-row:nth-child(even) { background: #fdfdfc; }
+.submitted-row { position: relative; }
+.submitted-row .row-select {
+  position: absolute; z-index: 2; left: .45rem; top: .82rem;
+  width: 1.05rem; height: 1.05rem; margin: 0; accent-color: var(--accent);
+  cursor: pointer;
+}
+.submitted-sheet.selection-enabled .submitted-row .row-line-primary > :first-child {
+  padding-left: 2rem;
+}
+.submitted-row.selected,
+.submitted-row.selected:nth-child(even) { background: var(--accent-soft); }
 
 input, select {
   width: 100%; padding: .4rem .5rem;
@@ -244,6 +255,11 @@ input[data-field="link"] { font-family: var(--mono); font-size: .8rem; }
   display: flex; align-items: center; gap: 1rem; margin-top: .9rem;
   flex-wrap: wrap;
 }
+.selection-toggle {
+  display: inline-flex; align-items: center; gap: .45rem;
+  font-size: .88rem; font-weight: 600; cursor: pointer;
+}
+.selection-toggle input { width: 1.05rem; height: 1.05rem; margin: 0; cursor: pointer; }
 .add-btn {
   width: 2.4rem; height: 2.4rem; border-radius: 50%;
   border: 2px solid var(--ink); background: #fff;
@@ -496,6 +512,18 @@ input[data-field="link"] { font-family: var(--mono); font-size: .8rem; }
 .xl-popup select { width: 100%; font-size: .84rem; }
 .xl-popup-actions { display: flex; gap: .5rem; padding-top: 1rem; flex-wrap: wrap; }
 .import-btn { cursor: pointer; }
+
+/* ------------------------------------------------- bulk order changes */
+.bulk-change-popup { width: min(520px, 94vw); }
+.bulk-change-hint { margin: -.35rem 0 1rem; color: #5a6572; font-size: .84rem; }
+.bulk-change-form { display: grid; gap: .85rem; }
+.bulk-field { display: grid; grid-template-columns: 7rem minmax(0, 1fr); gap: .7rem; align-items: center; }
+.bulk-field-label {
+  font-size: .72rem; text-transform: uppercase; letter-spacing: .08em;
+  color: #5a6572; font-weight: 600;
+}
+.bulk-change-error { min-height: 1.3em; color: var(--alert); font-size: .82rem; }
+.bulk-change-form .xl-popup-actions { padding-top: .15rem; justify-content: flex-end; }
 
 /* ------------------------------------------------- column filter popup */
 .filter-btn { position: relative; }

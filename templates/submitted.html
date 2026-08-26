@@ -76,6 +76,8 @@ who submitted it. Filter and multi-level sort controls are in each column header
 
   {% for r in rows %}
   <div class="order-row submitted-row" data-id="{{ r.id }}">
+    <input type="checkbox" class="row-select" value="{{ r.id }}"
+           aria-label="Select {{ r.description or ('order ' ~ r.id) }}" hidden>
     <div class="row-line row-line-primary">
       <span class="ro" data-field="submitted_at">{{ (r.submitted_at or '')[:10] }}</span>
       <span class="ro" data-field="user_email">{{ r.user_email }}</span>
@@ -158,6 +160,15 @@ who submitted it. Filter and multi-level sort controls are in each column header
 </div>
 
 <div class="sheet-actions">
+  {% if rows %}
+  <label class="selection-toggle" for="selection-mode">
+    <input type="checkbox" id="selection-mode">
+    <span>Select items</span>
+  </label>
+  <button type="button" id="change-selected" class="submit-btn" hidden>
+    Change selected
+  </button>
+  {% endif %}
   {% if has_submitted_orders %}
   <a href="{{ url_for('export_xlsx', view='submitted') }}" class="mini export-btn">Export to Excel</a>
   <button type="button" id="mark-cart-ordered" class="submit-btn"

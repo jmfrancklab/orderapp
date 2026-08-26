@@ -886,6 +886,193 @@
     updateHeaderControls();
   }
 
+  /* --- submitted-row bulk selection ---------------------------------- */
+
+  var selectionMode = document.getElementById("selection-mode");
+  var changeSelectedBtn = document.getElementById("change-selected");
+  var _bulkOverlay = null, _bulkPopup = null;
+
+  function selectedOrderIds() {
+    return Array.from(document.querySelectorAll(".row-select:checked")).map(
+      function (checkbox) { return parseInt(checkbox.value, 10); }
+    );
+  }
+
+  function updateSelectionControls() {
+    if (!changeSelectedBtn) return;
+    var count = selectedOrderIds().length;
+    changeSelectedBtn.hidden = count === 0;
+    changeSelectedBtn.textContent = "Change selected" + (count ? " (" + count + ")" : "");
+  }
+
+  function closeBulkPopup() {
+    if (_bulkOverlay) { _bulkOverlay.remove(); _bulkOverlay = null; }
+    if (_bulkPopup) { _bulkPopup.remove(); _bulkPopup = null; }
+  }
+
+  function bulkField(labelText, control) {
+    var label = document.createElement("label");
+    label.className = "bulk-field";
+    var text = document.createElement("span");
+    text.className = "bulk-field-label";
+    text.textContent = labelText;
+    label.appendChild(text);
+    label.appendChild(control);
+    return label;
+  }
+
+  function bulkOption(value, label) {
+    var option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    return option;
+  }
+
+  function showBulkPopup() {
+    var orderIds = selectedOrderIds();
+    if (!orderIds.length) return;
+    closeBulkPopup();
+
+    var overlay = document.createElement("div");
+    overlay.className = "xl-overlay";
+    overlay.onclick = closeBulkPopup;
+    document.body.appendChild(overlay);
+    _bulkOverlay = overlay;
+
+    var pop = document.createElement("div");
+    pop.className = "xl-popup bulk-change-popup";
+    pop.onclick = function (e) { e.stopPropagation(); };
+    _bulkPopup = pop;
+
+    var head = document.createElement("div");
+    head.className = "xl-popup-head";
+    var title = document.createElement("strong");
+    title.textContent = "Change " + orderIds.length + " selected item" +
+      (orderIds.length === 1 ? "" : "s");
+    var close = document.createElement("button");
+    close.type = "button"; close.className = "vendor-popup-x";
+    close.textContent = "\u00d7"; close.onclick = closeBulkPopup;
+    head.appendChild(title); head.appendChild(close); pop.appendChild(head);
+
+    var hint = document.createElement("p");
+    hint.className = "bulk-change-hint";
+    hint.textContent = "Choose one or more changes. Unchanged fields will be left alone.";
+    pop.appendChild(hint);
+
+    var form = document.createElement("form");
+    form.className = "bulk-change-form";
+
+    var project = document.createElement("select");
+    project.name = "project_id";
+    project.appendChild(bulkOption("__unchanged__", "Do not change"));
+    project.appendChild(bulkOption("", "No project"));
+    var sourceProject = document.querySelector(
+      '.submitted-row select[data-field="project_id"]');
+    if (sourceProject) {
+      Array.from(sourceProject.options).forEach(function (sourceOption) {
+        if (!sourceOption.value) return;
+        project.appendChild(bulkOption(sourceOption.value, sourceOption.textContent));
+      });
+    }
+    form.appendChild(bulkField("Project", project));
+
+    var status = document.createElement("select");
+    status.name = "order_status";
+    status.appendChild(bulkOption("", "Do not change"));
+    [
+      ["not ready", "Not ready"],
+      ["submitted", "Submitted"],
+      ["in cart", "In cart"],
+      ["received", "Received"],
+      ["requires reimbursement", "Requires reimbursement"]
+    ].forEach(function (choice) {
+      status.appendChild(bulkOption(choice[0], choice[1]));
+    });
+    form.appendChild(bulkField("Status", status));
+
+    var tracker = document.createElement("input");
+    tracker.name = "tracker_email";
+    tracker.type = "email";
+    tracker.placeholder = "email@example.org (leave blank for no change)";
+    form.appendChild(bulkField("Add tracker", tracker));
+
+    var error = document.createElement("div");
+    error.className = "bulk-change-error";
+    error.setAttribute("role", "alert");
+    form.appendChild(error);
+
+    var actions = document.createElement("div");
+    actions.className = "xl-popup-actions";
+    actions.appendChild(makePopupBtn("Cancel", "mini", closeBulkPopup));
+    var apply = makePopupBtn("Apply changes", "submit-btn", function () {});
+    apply.type = "submit";
+    actions.appendChild(apply);
+    form.appendChild(actions);
+
+    form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      error.textContent = "";
+      var body = { order_ids: orderIds };
+      if (project.value !== "__unchanged__") body.project_id = project.value || null;
+      if (status.value) body.order_status = status.value;
+      if (tracker.value.trim()) body.tracker_email = tracker.value.trim();
+      if (Object.keys(body).length === 1) {
+        error.textContent = "Choose at least one change.";
+        return;
+      }
+      if (!tracker.checkValidity()) {
+        error.textContent = "Enter a valid tracker email.";
+        tracker.focus();
+        return;
+      }
+
+      apply.disabled = true;
+      apply.textContent = "Applying\u2026";
+      fetch("/api/orders/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      }).then(function (response) {
+        return response.json().then(function (data) {
+          if (!response.ok) throw new Error(data.error || "could not apply changes");
+          return data;
+        });
+      }).then(function () {
+        window.location.reload();
+      }).catch(function (err) {
+        error.textContent = err.message;
+        apply.disabled = false;
+        apply.textContent = "Apply changes";
+      });
+    });
+
+    pop.appendChild(form);
+    document.body.appendChild(pop);
+    project.focus();
+  }
+
+  if (selectionMode) {
+    selectionMode.addEventListener("change", function () {
+      var enabled = selectionMode.checked;
+      submittedSheet.classList.toggle("selection-enabled", enabled);
+      document.querySelectorAll(".row-select").forEach(function (checkbox) {
+        checkbox.hidden = !enabled;
+        if (!enabled) {
+          checkbox.checked = false;
+          checkbox.closest(".submitted-row").classList.remove("selected");
+        }
+      });
+      updateSelectionControls();
+    });
+    document.querySelectorAll(".row-select").forEach(function (checkbox) {
+      checkbox.addEventListener("change", function () {
+        checkbox.closest(".submitted-row").classList.toggle("selected", checkbox.checked);
+        updateSelectionControls();
+      });
+    });
+  }
+  if (changeSelectedBtn) changeSelectedBtn.addEventListener("click", showBulkPopup);
+
   /* --- in-cart ordering and invoice popup ---------------------------- */
 
   var markCartOrderedBtn = document.getElementById("mark-cart-ordered");

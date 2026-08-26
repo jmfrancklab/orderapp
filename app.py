@@ -23,7 +23,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.12.9"
+__version__ = "0.13.0"
 
 # ── Config ────────────────────────────────────────────────────────────────────
 def _load_config():
@@ -1426,6 +1426,122 @@ EDITABLE_FIELDS = {"description", "link", "vendor_id", "project_id", "use_note",
                    "quantity", "order_status"}
 ORDER_STATUSES = {"not ready", "submitted", "in cart", "ordered", "received",
                   "requires reimbursement"}
+
+
+@app.route("/api/orders/bulk", methods=["POST"])
+@login_required
+def api_bulk_update_orders():
+    """Apply supported Submitted-sheet changes to several orders atomically."""
+    db = get_db()
+    data = request.get_json(silent=True) or {}
+    raw_ids = data.get("order_ids")
+    if not isinstance(raw_ids, list) or not raw_ids:
+        return jsonify(error="select at least one order"), 400
+    if len(raw_ids) > 500:
+        return jsonify(error="select between 1 and 500 orders"), 400
+    parsed_ids = []
+    for value in raw_ids:
+        if isinstance(value, bool):
+            return jsonify(error="invalid order IDs"), 400
+        if isinstance(value, int):
+            parsed = value
+        elif isinstance(value, str) and re.fullmatch(r"[1-9]\d*", value.strip()):
+            parsed = int(value)
+        else:
+            return jsonify(error="invalid order IDs"), 400
+        if parsed < 1:
+            return jsonify(error="invalid order IDs"), 400
+        parsed_ids.append(parsed)
+    order_ids = list(dict.fromkeys(parsed_ids))
+    if not order_ids:
+        return jsonify(error="select between 1 and 500 orders"), 400
+
+    project_requested = "project_id" in data
+    status_requested = "order_status" in data
+    tracker_requested = "tracker_email" in data
+
+    project_id = None
+    raw_project_id = data.get("project_id")
+    if project_requested and raw_project_id not in (None, ""):
+        if isinstance(raw_project_id, bool):
+            return jsonify(error="invalid project"), 400
+        if isinstance(raw_project_id, int):
+            project_id = raw_project_id
+        elif isinstance(raw_project_id, str) and re.fullmatch(
+                r"[1-9]\d*", raw_project_id.strip()):
+            project_id = int(raw_project_id)
+        else:
+            return jsonify(error="invalid project"), 400
+        if db.execute("SELECT 1 FROM projects WHERE id = ?", (project_id,)).fetchone() is None:
+            return jsonify(error="project not found"), 400
+
+    order_status = data.get("order_status")
+    if status_requested:
+        if order_status not in ORDER_STATUSES:
+            return jsonify(error="invalid order status"), 400
+        if order_status == "ordered":
+            return jsonify(
+                error="orders can only be marked ordered from the in-cart action"
+            ), 400
+
+    tracker_email = str(data.get("tracker_email") or "").strip().lower()
+    if tracker_requested and not EMAIL_RE.match(tracker_email):
+        return jsonify(error="invalid tracker email"), 400
+    if not (project_requested or status_requested or tracker_requested):
+        return jsonify(error="choose at least one change"), 400
+
+    marks = ",".join("?" * len(order_ids))
+    orders = db.execute(
+        f"SELECT * FROM orders WHERE status = 'submitted' AND id IN ({marks})",
+        order_ids,
+    ).fetchall()
+    if len(orders) != len(order_ids):
+        return jsonify(error="one or more selected orders were not found"), 404
+
+    changed_orders = set()
+    for order in orders:
+        sets, values = [], []
+        if project_requested and order["project_id"] != project_id:
+            log_change(db, order["id"], "project_id", order["project_id"], project_id)
+            sets.append("project_id = ?")
+            values.append(project_id)
+        if status_requested and order["order_status"] != order_status:
+            log_change(
+                db, order["id"], "order_status", order["order_status"], order_status
+            )
+            sets.append("order_status = ?")
+            values.append(order_status)
+        if sets:
+            values.append(order["id"])
+            db.execute(f"UPDATE orders SET {', '.join(sets)} WHERE id = ?", values)
+            changed_orders.add(order["id"])
+
+        if tracker_requested:
+            cur = db.execute(
+                "INSERT OR IGNORE INTO trackers (order_id, email) VALUES (?,?)",
+                (order["id"], tracker_email),
+            )
+            if cur.rowcount:
+                log_change(db, order["id"], "tracker", None, tracker_email)
+                changed_orders.add(order["id"])
+
+    if tracker_requested:
+        cur = db.execute(
+            "INSERT OR IGNORE INTO allowed_emails (email, added_by, added_at) "
+            "VALUES (?,?,?)",
+            (tracker_email, current_user(), now_iso()),
+        )
+        if cur.rowcount:
+            log_change(
+                db, 0, "email", None, tracker_email, table_name="allowed_emails"
+            )
+
+    db.commit()
+    return jsonify(
+        ok=True,
+        selected_count=len(orders),
+        changed_count=len(changed_orders),
+    )
 
 
 @app.route("/api/orders/<int:oid>", methods=["POST"])

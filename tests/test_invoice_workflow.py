@@ -299,6 +299,91 @@ def test_each_submitted_header_has_its_own_filter_and_sort_controls(invoice_clie
     assert b'id="filter-btn"' not in page.data
 
 
+def test_submitted_page_has_opt_in_bulk_selection_and_favicon(invoice_client):
+    client, _, order_ids = invoice_client
+    page = client.get("/submitted")
+    assert page.status_code == 200
+    assert b'id="selection-mode"' in page.data
+    assert b'id="change-selected" class="submit-btn" hidden' in page.data
+    assert page.data.count(b'class="row-select"') == 4
+    assert b'/static/favicon.ico' in page.data
+    assert client.get("/static/favicon.ico").status_code == 200
+
+
+def test_bulk_change_sets_project_status_and_adds_tracker(invoice_client):
+    client, db_path, order_ids = invoice_client
+    conn = sqlite3.connect(db_path)
+    project_id = conn.execute(
+        "INSERT INTO projects (name, notes) VALUES (?, ?)",
+        ("Bulk project", ""),
+    ).lastrowid
+    conn.commit()
+    conn.close()
+
+    response = client.post(
+        "/api/orders/bulk",
+        json={
+            "order_ids": order_ids[:2],
+            "project_id": project_id,
+            "order_status": "received",
+            "tracker_email": "Tracker@Lab.org",
+        },
+    )
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "ok": True, "selected_count": 2, "changed_count": 2
+    }
+
+    conn = sqlite3.connect(db_path)
+    changed = conn.execute(
+        "SELECT project_id, order_status FROM orders WHERE id IN (?, ?) ORDER BY id",
+        order_ids[:2],
+    ).fetchall()
+    trackers = conn.execute(
+        "SELECT order_id, email FROM trackers WHERE order_id IN (?, ?) "
+        "AND email = ? ORDER BY order_id",
+        (*order_ids[:2], "tracker@lab.org"),
+    ).fetchall()
+    allowed = conn.execute(
+        "SELECT email FROM allowed_emails WHERE email = ?", ("tracker@lab.org",)
+    ).fetchone()
+    history_fields = conn.execute(
+        "SELECT field FROM order_history WHERE order_id IN (?, ?)", order_ids[:2]
+    ).fetchall()
+    conn.close()
+
+    assert changed == [(project_id, "received"), (project_id, "received")]
+    assert trackers == [
+        (order_ids[0], "tracker@lab.org"),
+        (order_ids[1], "tracker@lab.org"),
+    ]
+    assert allowed == ("tracker@lab.org",)
+    assert {field[0] for field in history_fields} == {
+        "project_id", "order_status", "tracker"
+    }
+
+
+def test_bulk_change_rejects_partial_or_ordered_updates_atomically(invoice_client):
+    client, db_path, order_ids = invoice_client
+    missing = client.post(
+        "/api/orders/bulk",
+        json={"order_ids": [order_ids[0], 999999], "order_status": "received"},
+    )
+    assert missing.status_code == 404
+    ordered = client.post(
+        "/api/orders/bulk",
+        json={"order_ids": [order_ids[0]], "order_status": "ordered"},
+    )
+    assert ordered.status_code == 400
+
+    conn = sqlite3.connect(db_path)
+    status = conn.execute(
+        "SELECT order_status FROM orders WHERE id = ?", (order_ids[0],)
+    ).fetchone()[0]
+    conn.close()
+    assert status == "in cart"
+
+
 def test_unknown_get_parameters_are_not_treated_as_filters(invoice_client):
     client, _, _ = invoice_client
     page = client.get("/submitted?unrelated=value")
