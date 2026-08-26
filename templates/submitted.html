@@ -112,9 +112,9 @@ who submitted it. Filter and multi-level sort controls are in each column header
       <span class="cost-cell"><span class="cost-prefix">$</span><input data-field="cost" value="{{ r.cost | fmt_cost }}" placeholder="0.00" class="cost-input"></span>
       <input data-field="quantity" type="number" min="1" value="{{ r.quantity }}" class="qty-input">
       <select data-field="order_status"
-              class="status-select status-{{ (r.order_status or 'submitted').replace(' ', '-') }}">
+              class="status-select status-{{ (r.order_status or 'awaiting order').replace(' ', '-') }}">
         <option value="not ready"  {{ 'selected' if (r.order_status or '') == 'not ready'  }}>Not ready</option>
-        <option value="submitted"  {{ 'selected' if (r.order_status or 'submitted') == 'submitted'  }}>Submitted</option>
+        <option value="awaiting order" {{ 'selected' if (r.order_status or 'awaiting order') == 'awaiting order' }}>Awaiting Order</option>
         <option value="in cart"    {{ 'selected' if (r.order_status or '') == 'in cart'    }}>In cart</option>
         {% if (r.order_status or '') == 'ordered' %}
         <option value="ordered" selected disabled>Ordered</option>

@@ -671,6 +671,12 @@
       return { query: "", regex: false };
     }
 
+    function clearAllFilterState() {
+      FILTER_COLUMNS.forEach(function (filterCol) {
+        filterState[filterCol.field] = clearedState(filterCol);
+      });
+    }
+
     function buildCheckboxSection(col, state) {
       var sec = document.createElement("div");
       sec.className = "vendor-popup-section";
@@ -686,11 +692,7 @@
         values.forEach(function (v) { state.selected.add(v.value); });
         sec.querySelectorAll('input[type="checkbox"]').forEach(function (cb) { cb.checked = true; });
       });
-      var noneBtn = makePopupBtn("Clear", "", function () {
-        state.selected.clear();
-        sec.querySelectorAll('input[type="checkbox"]').forEach(function (cb) { cb.checked = false; });
-      });
-      actions.appendChild(allBtn); actions.appendChild(noneBtn);
+      actions.appendChild(allBtn);
       sec.appendChild(actions);
 
       if (values.length === 0) {
@@ -709,11 +711,6 @@
         cb.checked = state.selected.has(v.value);
         cb.addEventListener("change", function () {
           if (cb.checked) state.selected.add(v.value); else state.selected.delete(v.value);
-          if (col.field === "order_status" && v.value === "submitted" && cb.checked) {
-            state.selected.add("in cart");
-            var inCart = sec.querySelector('input[data-filter-value="in cart"]');
-            if (inCart) inCart.checked = true;
-          }
         });
         row.appendChild(cb);
         row.appendChild(document.createTextNode(" " + v.label));
@@ -825,11 +822,15 @@
 
       var actions = document.createElement("div");
       actions.className = "xl-popup-actions";
-      actions.appendChild(makePopupBtn("Clear this filter", "mini", function () {
-        filterState[col.field] = clearedState(col);
+      actions.appendChild(makePopupBtn("Clear all Filters", "mini", function () {
+        clearAllFilterState();
         applyGet();
       }));
       actions.appendChild(makePopupBtn("Cancel", "mini", closeFilterPopup));
+      actions.appendChild(makePopupBtn("clear this filter", "mini", function () {
+        filterState[col.field] = clearedState(col);
+        applyGet();
+      }));
       actions.appendChild(makePopupBtn("Apply", "submit-btn", function () {
         if (col.type === "tracker") {
           workingState.scope = workingState.selected.size ? "selected" : "all";
@@ -981,7 +982,7 @@
     status.appendChild(bulkOption("", "Do not change"));
     [
       ["not ready", "Not ready"],
-      ["submitted", "Submitted"],
+      ["awaiting order", "Awaiting Order"],
       ["in cart", "In cart"],
       ["received", "Received"],
       ["requires reimbursement", "Requires reimbursement"]
@@ -1288,7 +1289,7 @@
   });
 
   function updateStatusClass(sel) {
-    var val = (sel.value || 'submitted').replace(/\s+/g, '-');
+    var val = (sel.value || 'awaiting order').replace(/\s+/g, '-');
     sel.className = sel.className.replace(/\bstatus-\S+/g, '').trim();
     sel.classList.add('status-select', 'status-' + val);
   }

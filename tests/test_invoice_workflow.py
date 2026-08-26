@@ -37,7 +37,7 @@ def invoice_client(tmp_path, monkeypatch):
         [
             ("buyer@lab.org", "cart one", 2, "submitted", "in cart", "2026-01-01"),
             ("buyer@lab.org", "cart two", 3, "submitted", "in cart", "2026-01-01"),
-            ("buyer@lab.org", "waiting", 4, "submitted", "submitted", "2026-01-01"),
+            ("buyer@lab.org", "waiting", 4, "submitted", "awaiting order", "2026-01-01"),
             ("someone@else.org", "not visible", 9, "submitted", "in cart", "2026-01-01"),
             ("buyer@lab.org", "digikey done", 1, "submitted", "ordered", "2026-01-01"),
         ],
@@ -126,6 +126,29 @@ def test_ordered_cannot_be_selected_directly(invoice_client):
     assert "in-cart action" in response.get_json()["error"]
 
 
+def test_newly_submitted_order_awaits_order(invoice_client):
+    client, db_path, _ = invoice_client
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO orders (user_email, description, status) VALUES (?, ?, ?)",
+        ("buyer@lab.org", "new draft", "draft"),
+    )
+    conn.commit()
+    conn.close()
+
+    response = client.post("/orders/submit")
+    assert response.status_code == 302
+
+    conn = sqlite3.connect(db_path)
+    status, order_status = conn.execute(
+        "SELECT status, order_status FROM orders WHERE description = ?",
+        ("new draft",),
+    ).fetchone()
+    conn.close()
+    assert status == "submitted"
+    assert order_status == "awaiting order"
+
+
 def test_status_save_returns_count_for_filtered_page_button(invoice_client):
     client, _, order_ids = invoice_client
     response = client.post(
@@ -160,7 +183,7 @@ def test_from_cart_creates_invoice_and_orders_visible_rows(invoice_client):
     assert invoice == (str(data["invoice_id"]), "", "", "madhur cc")
     assert orders[0][1:] == ("ordered", data["invoice_id"])
     assert orders[1][1:] == ("ordered", data["invoice_id"])
-    assert orders[2][1:] == ("submitted", None)
+    assert orders[2][1:] == ("awaiting order", None)
     assert orders[3][1:] == ("in cart", None)
 
 
@@ -502,11 +525,42 @@ def test_unknown_get_parameters_are_not_treated_as_filters(invoice_client):
 
 def test_filter_choices_are_faceted_by_current_results(invoice_client):
     client, _, _ = invoice_client
-    page = client.get(
-        "/submitted?filter_order_status=submitted&filter_order_status=in+cart"
-    )
+    page = client.get("/submitted?filter_order_status=awaiting+order")
     match = re.search(rb'data-filter-choices="([^"]+)"', page.data)
     choices = json.loads(html.unescape(match.group(1).decode()))
     vendor_labels = {choice["label"] for choice in choices["vendor_id"]}
     assert "Mouser" in vendor_labels
     assert "DigiKey" not in vendor_labels
+
+
+def test_existing_submitted_fulfillment_status_is_migrated(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "legacy-submitted-status.db")
+    monkeypatch.setattr(app_module, "DB_PATH", db_path)
+    app_module.init_db()
+
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO orders (user_email, status, order_status) VALUES (?, ?, ?)",
+        ("buyer@lab.org", "submitted", "submitted"),
+    )
+    conn.commit()
+    conn.close()
+
+    app_module.init_db()
+
+    conn = sqlite3.connect(db_path)
+    lifecycle_status, order_status = conn.execute(
+        "SELECT status, order_status FROM orders"
+    ).fetchone()
+    conn.close()
+    assert lifecycle_status == "submitted"
+    assert order_status == "awaiting order"
+
+
+def test_filter_popup_has_two_working_clear_actions():
+    script = (app_module.BASE_DIR + "/static/app.js")
+    with open(script, encoding="utf-8") as source:
+        javascript = source.read()
+    assert 'makePopupBtn("Clear all Filters"' in javascript
+    assert 'makePopupBtn("clear this filter"' in javascript
+    assert 'makePopupBtn("Clear", ""' not in javascript

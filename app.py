@@ -23,7 +23,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.13.1"
+__version__ = "0.14.0"
 
 INVOICE_REIMBURSEMENT_DEFAULT = "madhur cc"
 INVOICE_REIMBURSEMENT_CHOICES = (
@@ -288,9 +288,9 @@ def api_order_from_capture():
     desc = (data.get("description") or "")[:200].strip()
 
     cur = db.execute(
-        "INSERT INTO orders (user_email, description, link, vendor_id, project_id, cost)"
-        " VALUES (?,?,?,?,?,?)",
-        (email, desc, link, vendor_id, project_id, cost))
+        "INSERT INTO orders (user_email, description, link, vendor_id, project_id, cost,"
+        " order_status) VALUES (?,?,?,?,?,?,?)",
+        (email, desc, link, vendor_id, project_id, cost, "awaiting order"))
     db.commit()
     return jsonify(ok=True, order_id=cur.lastrowid)
 
@@ -460,7 +460,7 @@ def init_db():
         cost TEXT NOT NULL DEFAULT '',
         quantity INTEGER NOT NULL DEFAULT 1,
         status TEXT NOT NULL DEFAULT 'draft',         -- 'draft' | 'submitted'
-        order_status TEXT NOT NULL DEFAULT 'submitted',-- fulfillment status
+        order_status TEXT NOT NULL DEFAULT 'awaiting order',-- fulfillment status
         invoice_id INTEGER REFERENCES invoices(id) ON DELETE SET NULL,
         submitted_at TEXT                             -- locked after submission
     );
@@ -505,7 +505,7 @@ def init_db():
         "ALTER TABLE order_history ADD COLUMN table_name TEXT NOT NULL DEFAULT 'orders'",
         "ALTER TABLE vendors ADD COLUMN address TEXT DEFAULT ''",
         "ALTER TABLE orders ADD COLUMN cost TEXT NOT NULL DEFAULT ''",
-        "ALTER TABLE orders ADD COLUMN order_status TEXT NOT NULL DEFAULT 'submitted'",
+        "ALTER TABLE orders ADD COLUMN order_status TEXT NOT NULL DEFAULT 'awaiting order'",
         "ALTER TABLE orders ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1",
         "ALTER TABLE orders ADD COLUMN invoice_id INTEGER REFERENCES invoices(id) ON DELETE SET NULL",
         "ALTER TABLE invoices ADD COLUMN reimbursement_status TEXT NOT NULL DEFAULT 'madhur cc'",
@@ -515,6 +515,13 @@ def init_db():
             db.execute(stmt)
         except Exception:
             pass
+
+    # ``status = 'submitted'`` still identifies which table an order belongs
+    # to.  Only the separate fulfillment status was renamed.
+    db.execute(
+        "UPDATE orders SET order_status = 'awaiting order' "
+        "WHERE order_status = 'submitted'"
+    )
 
     # Fix order_history if it still carries the old NOT NULL / FK constraint on
     # order_id (SQLite can't drop constraints, so rename + recreate + copy).
@@ -804,7 +811,7 @@ def submitted_filter_choices(rows, vendors, projects, invoices, filters, tracker
         "project_id": {str(p["id"]): p["name"] for p in projects},
         "invoice_id": {str(i["id"]): i["nickname"] for i in invoices},
         "order_status": {
-            "not ready": "Not ready", "submitted": "Submitted",
+            "not ready": "Not ready", "awaiting order": "Awaiting Order",
             "in cart": "In cart", "ordered": "Ordered", "received": "Received",
             "requires reimbursement": "Requires reimbursement",
         },
@@ -1142,7 +1149,10 @@ def new_row():
         "SELECT project_id FROM orders WHERE user_email = ? AND status = 'draft'"
         " ORDER BY id DESC LIMIT 1", (email,)).fetchone()
     project_id = last["project_id"] if last else None
-    db.execute("INSERT INTO orders (user_email, project_id) VALUES (?,?)", (email, project_id))
+    db.execute(
+        "INSERT INTO orders (user_email, project_id, order_status) VALUES (?,?,?)",
+        (email, project_id, "awaiting order"),
+    )
     db.commit()
     return redirect(url_for("orders"))
 
@@ -1191,7 +1201,7 @@ def submit_orders():
     for oid in ids:
         log_change(db, oid, "status", "draft", "submitted")
     db.execute(
-        "UPDATE orders SET status = 'submitted', order_status = 'submitted', submitted_at = ? "
+        "UPDATE orders SET status = 'submitted', order_status = 'awaiting order', submitted_at = ? "
         "WHERE user_email = ? AND status = 'draft'",
         (ts, current_user()))
     log_event(db, "orders_submitted", f"{len(ids)} order{'s' if len(ids) != 1 else ''} submitted")
@@ -1438,7 +1448,7 @@ def update_project(pid):
 # when (submitted_at). Every change is written to order_history.
 EDITABLE_FIELDS = {"description", "link", "vendor_id", "project_id", "use_note", "cost",
                    "quantity", "order_status"}
-ORDER_STATUSES = {"not ready", "submitted", "in cart", "ordered", "received",
+ORDER_STATUSES = {"not ready", "awaiting order", "in cart", "ordered", "received",
                   "requires reimbursement"}
 
 
@@ -1734,8 +1744,9 @@ def import_excel():
 
         db.execute(
             "INSERT INTO orders (user_email, description, link, vendor_id, project_id,"
-            " use_note, cost, quantity) VALUES (?,?,?,?,?,?,?,?)",
-            (email, desc, link, vendor_id, project_id, use_note, cost, qty))
+            " use_note, cost, quantity, order_status) VALUES (?,?,?,?,?,?,?,?,?)",
+            (email, desc, link, vendor_id, project_id, use_note, cost, qty,
+             "awaiting order"))
         inserted += 1
     log_event(db, "excel_import", f"imported {inserted} row{'s' if inserted != 1 else ''}")
     db.commit()
@@ -2061,7 +2072,7 @@ def export_xlsx(view):
                        vendor_map.get(r["vendor_id"], ""),
                        project_map.get(r["project_id"], ""),
                        r["use_note"], _cost_val(r["cost"]),
-                       r["order_status"] or "submitted",
+                       r["order_status"] or "awaiting order",
                        invoice_map.get(r["invoice_id"], ""))
         wb = _make_workbook("Submitted Orders", headers, _rows())
         return _xlsx_response(wb, "submitted_orders.xlsx")
