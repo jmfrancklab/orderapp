@@ -207,6 +207,7 @@ input[data-field="link"] { font-family: var(--mono); font-size: .8rem; }
 .status-select { font-size: .8rem; font-weight: 600; }
 .status-select.status-not-ready,
 .status-select.status-needs-work { color: var(--alert);  border-color: var(--alert); }
+.status-select.status-not-ready   { background: #fee2e2; font-weight: 700; }
 .status-select.status-awaiting-order { color: #b45309;     border-color: #b45309; }
 .status-select.status-in-cart     { color: #854d0e; border-color: #ca8a04; background: #fef08a; }
 .status-select.status-ordered     { color: #1d4ed8;       border-color: #1d4ed8; }
