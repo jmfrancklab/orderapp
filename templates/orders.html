@@ -69,7 +69,8 @@ immediately and will still be here next time you sign in.</p>
       <span class="cost-cell"><span class="cost-prefix">$</span><input data-field="cost" value="{{ d.cost | fmt_cost }}" placeholder="0.00" class="cost-input"></span>
       <input data-field="quantity" type="number" min="1" value="{{ d.quantity }}" class="qty-input">
       <span class="tracker-cell">
-        <input class="tracker-input" type="email" placeholder="email + Enter">
+        <input class="tracker-input" type="email" list="tracker-email-options"
+               placeholder="email + Enter">
         <span class="chips">
           {% for t in trackers[d.id] %}
           <span class="chip">{{ t }}<button type="button" class="chip-x" data-email="{{ t }}">×</button></span>
@@ -98,6 +99,12 @@ immediately and will still be here next time you sign in.</p>
   </div>
   {% endif %}
 </div>
+
+<datalist id="tracker-email-options">
+  {% for email in tracker_email_choices %}
+  <option value="{{ email }}"></option>
+  {% endfor %}
+</datalist>
 
 <div class="sheet-actions">
   <form method="post" action="{{ url_for('new_row') }}">

@@ -124,7 +124,8 @@ who submitted it. Filter and multi-level sort controls are in each column header
       </select>
       {{ invoice_cell(invoice_by_id.get(r.invoice_id)) }}
       <span class="tracker-cell">
-        <input class="tracker-input" type="email" placeholder="email + Enter">
+        <input class="tracker-input" type="email" list="tracker-email-options"
+               placeholder="email + Enter">
         <span class="chips">
           {% for t in trackers[r.id] %}
           <span class="chip">{{ t }}<button type="button" class="chip-x" data-email="{{ t }}">×</button></span>
@@ -159,6 +160,12 @@ who submitted it. Filter and multi-level sort controls are in each column header
   </div>
   {% endif %}
 </div>
+
+<datalist id="tracker-email-options">
+  {% for email in tracker_email_choices %}
+  <option value="{{ email }}"></option>
+  {% endfor %}
+</datalist>
 
 <div class="sheet-actions">
   {% if rows %}

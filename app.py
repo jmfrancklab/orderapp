@@ -637,6 +637,12 @@ def fetch_projects(db):
     return db.execute("SELECT * FROM projects ORDER BY name COLLATE NOCASE").fetchall()
 
 
+def fetch_allowed_email_choices(db):
+    return [row["email"] for row in db.execute(
+        "SELECT email FROM allowed_emails ORDER BY email COLLATE NOCASE"
+    ).fetchall()]
+
+
 # Records managed on the reference-data tabs.  These identifiers never come
 # directly from a request; API input is first looked up in this allowlist.
 REFERENCE_DELETE_CONFIG = {
@@ -1263,7 +1269,8 @@ def debug_health():
     # 6. Template render test (renders orders.html with empty drafts)
     try:
         html = render_template("orders.html", tab="orders", drafts=[],
-                               vendors=[], projects=[], trackers={})
+                               vendors=[], projects=[], trackers={},
+                               tracker_email_choices=[])
         result["checks"]["template_render"] = f"ok ({len(html)} chars)"
     except Exception:
         result["ok"] = False
@@ -1283,7 +1290,8 @@ def orders():
     return render_template(
         "orders.html", tab="orders", drafts=drafts,
         vendors=fetch_vendors(db), projects=fetch_projects(db),
-        trackers=trackers_for(db, [d["id"] for d in drafts]))
+        trackers=trackers_for(db, [d["id"] for d in drafts]),
+        tracker_email_choices=fetch_allowed_email_choices(db))
 
 
 @app.route("/orders/new", methods=["POST"])
@@ -1388,7 +1396,8 @@ def submitted():
             all_rows, vendors, projects, invoices, filters, all_trackers, email),
         submitted_totals=submitted_totals(rows), has_submitted_orders=bool(all_rows),
         in_cart_count=len(in_cart_order_ids), in_cart_order_ids=in_cart_order_ids,
-        invoice_by_id=invoice_by_id, current_email=email)
+        invoice_by_id=invoice_by_id, current_email=email,
+        tracker_email_choices=fetch_allowed_email_choices(db))
 
 
 @app.route("/invoices")
