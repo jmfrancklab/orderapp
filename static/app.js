@@ -1134,6 +1134,11 @@
     if (afterClose) afterClose();
   }
 
+  function isInvoiceUrlField(field) {
+    return field === "invoice_url" || field === "receipt_url" ||
+      field === "tracking_info";
+  }
+
   function invoiceField(label, value, field, editing) {
     var row = document.createElement("div");
     row.className = "invoice-field";
@@ -1144,22 +1149,21 @@
 
     if (editing) {
       var input = document.createElement("input");
-      input.type = (field === "invoice_url" || field === "receipt_url") ? "url" : "text";
+      input.type = isInvoiceUrlField(field) ? "url" : "text";
       input.name = field;
       input.value = value || "";
       if (field === "nickname") input.required = true;
-      if (field === "invoice_url" || field === "receipt_url") {
+      if (isInvoiceUrlField(field)) {
         input.placeholder = "https://www.dropbox.com/…";
       }
       row.appendChild(input);
     } else {
       var shown = document.createElement("span");
       shown.className = "invoice-field-value";
-      if ((field === "invoice_url" || field === "receipt_url") &&
-          /^https?:\/\//i.test(value || "")) {
+      if (isInvoiceUrlField(field) && /^https?:\/\//i.test(value || "")) {
         var link = document.createElement("a");
         link.href = value; link.target = "_blank"; link.rel = "noopener";
-        link.textContent = value;
+        link.textContent = "open ↗";
         shown.appendChild(link);
       } else {
         shown.textContent = value || "Not added";

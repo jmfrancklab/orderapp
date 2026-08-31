@@ -8,6 +8,10 @@ change them, or open its submitted orders as a filtered view.</p>
 
 {% block content %}
 
+{% macro open_link(url) -%}
+  {% if url %}<a href="{{ url }}" target="_blank" rel="noopener">open ↗</a>{% else %}—{% endif %}
+{%- endmacro %}
+
 {% if invoices %}
 <div class="table-wrap">
   <table class="ref-table invoice-table">
@@ -38,9 +42,9 @@ change them, or open its submitted orders as a filtered view.</p>
         <td>{{ invoice.created_by }}</td>
         <td>{{ invoice.item_count }} item{{ '' if invoice.item_count == 1 else 's' }}<br>
             <span class="invoice-item-count">{{ invoice.unique_items }} unique</span></td>
-        <td>{% if invoice.invoice_url %}<a href="{{ invoice.invoice_url }}" target="_blank" rel="noopener">open ↗</a>{% else %}—{% endif %}</td>
-        <td>{% if invoice.receipt_url %}<a href="{{ invoice.receipt_url }}" target="_blank" rel="noopener">open ↗</a>{% else %}—{% endif %}</td>
-        <td>{{ invoice.tracking_info or '—' }}</td>
+        <td>{{ open_link(invoice.invoice_url) }}</td>
+        <td>{{ open_link(invoice.receipt_url) }}</td>
+        <td>{{ open_link(invoice.tracking_info) }}</td>
         <td>{{ invoice_reimbursement_labels.get(invoice.reimbursement_status, invoice.reimbursement_status) }}</td>
         <td><a href="{{ url_for('submitted', filter_invoice_id=invoice.id) }}">view orders →</a></td>
         <td class="ref-row-actions">

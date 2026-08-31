@@ -202,7 +202,7 @@ def test_invoice_fields_can_be_edited_and_rendered(invoice_client):
             "nickname": "Mouser August",
             "invoice_url": "https://www.dropbox.com/invoice.pdf",
             "receipt_url": "https://www.dropbox.com/receipt.pdf",
-            "tracking_info": "UPS 1Z999AA10123456784",
+            "tracking_info": "https://www.ups.com/track?loc=en_US&tracknum=1Z999AA10123456784",
             "reimbursement_status": "reimbursed",
         },
     )
@@ -226,25 +226,35 @@ def test_invoice_fields_can_be_edited_and_rendered(invoice_client):
         "Mouser August",
         "https://www.dropbox.com/invoice.pdf",
         "https://www.dropbox.com/receipt.pdf",
-        "UPS 1Z999AA10123456784",
+        "https://www.ups.com/track?loc=en_US&tracknum=1Z999AA10123456784",
         "reimbursed",
     )
     assert reimbursement_history == ("madhur cc", "reimbursed", "invoices")
-    assert tracking_history == ("", "UPS 1Z999AA10123456784", "invoices")
+    assert tracking_history == (
+        "",
+        "https://www.ups.com/track?loc=en_US&tracknum=1Z999AA10123456784",
+        "invoices",
+    )
 
     page = client.get("/submitted")
     assert page.status_code == 200
     assert b'data-column-field="invoice_id"' in page.data
     assert b"Mouser August" in page.data
     assert b'data-invoice-url="https://www.dropbox.com/invoice.pdf"' in page.data
-    assert b'data-tracking-info="UPS 1Z999AA10123456784"' in page.data
+    assert (
+        b'data-tracking-info="https://www.ups.com/track?loc=en_US&amp;tracknum=1Z999AA10123456784"'
+        in page.data
+    )
     assert b'data-reimbursement-status="reimbursed"' in page.data
 
     invoice_page = client.get("/invoices")
     assert invoice_page.status_code == 200
     assert b"Mouser August" in invoice_page.data
     assert b"Tracking info" in invoice_page.data
-    assert b"UPS 1Z999AA10123456784" in invoice_page.data
+    assert (
+        b'href="https://www.ups.com/track?loc=en_US&amp;tracknum=1Z999AA10123456784"'
+        in invoice_page.data
+    )
     assert b"Reimbursed" in invoice_page.data
     expected_filter = f"/submitted?filter_invoice_id={created['invoice_id']}".encode()
     assert expected_filter in invoice_page.data
