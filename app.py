@@ -23,7 +23,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.16.1"
+__version__ = "0.16.2"
 
 INVOICE_REIMBURSEMENT_DEFAULT = "madhur cc"
 INVOICE_REIMBURSEMENT_CHOICES = (
