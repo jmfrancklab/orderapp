@@ -42,8 +42,9 @@ of dependency-free vanilla JS (autosave, vendor auto-detect, tracker chips).
   or shared. The footer shows total cost, total item quantity, and unique rows.
   Move rows to **In cart**, then use the page action to create an invoice and
   mark those rows ordered; invoice and receipt Dropbox links can be opened and
-  edited from each row's Invoice column. Each invoice also has a reimbursement
-  status: **Requires reimbursement**, **Reimbursed**, or **Madhur CC**.
+  edited from each row's Invoice column. Each invoice also stores tracking info
+  and a reimbursement status: **Requires reimbursement**, **Reimbursed**, or
+  **Madhur CC**.
 - **Invoices tab** — lists every visible invoice with its files and item counts;
   each invoice links back to a Submitted view filtered to its associated rows.
 - **Change history** — every field change, tracker add/remove, and submission
@@ -153,6 +154,13 @@ current schema. All orders, vendors, history, and allowed users are lost.
 That `touch` is equivalent to the Reload button, so a deploy is two commands.
 (If you later want true one-command deploys, a GitHub Action can call the
 PythonAnywhere API to pull + reload — happy to set that up when you need it.)
+
+For the v0.16.0 deploy, run the one-time row-status migration after pulling and
+before reloading. It converts legacy order rows marked `requires reimbursement`
+to `ordered` without changing invoice reimbursement statuses:
+
+    cd ~/orderapp
+    python3 migrate_reimbursement_orders.py
 
 ## Microsoft Entra ID (Azure AD) authentication
 

@@ -12,6 +12,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import app as app_module
+import migrate_reimbursement_orders
 from app import app as flask_app
 
 
@@ -82,6 +83,9 @@ def test_schema_contains_invoice_relationship(invoice_client):
     conn.close()
     assert "invoices" in tables
     assert "invoice_id" in order_columns
+    assert "tracking_info" in invoice_columns
+    assert invoice_columns["tracking_info"][3] == 1
+    assert invoice_columns["tracking_info"][4] == "''"
     assert "reimbursement_status" in invoice_columns
     assert invoice_columns["reimbursement_status"][3] == 1
     assert invoice_columns["reimbursement_status"][4] == "'madhur cc'"
@@ -111,11 +115,12 @@ def test_existing_invoices_migrate_to_madhur_cc_default(tmp_path, monkeypatch):
     app_module.init_db()
 
     conn = sqlite3.connect(db_path)
-    status = conn.execute(
-        "SELECT reimbursement_status FROM invoices WHERE nickname = ?",
+    tracking_info, status = conn.execute(
+        "SELECT tracking_info, reimbursement_status FROM invoices WHERE nickname = ?",
         ("Legacy invoice",),
-    ).fetchone()[0]
+    ).fetchone()
     conn.close()
+    assert tracking_info == ""
     assert status == "madhur cc"
 
 
@@ -167,11 +172,12 @@ def test_from_cart_creates_invoice_and_orders_visible_rows(invoice_client):
     assert data["nickname"] == str(data["invoice_id"])
     assert data["invoice_url"] == ""
     assert data["receipt_url"] == ""
+    assert data["tracking_info"] == ""
     assert data["reimbursement_status"] == "madhur cc"
 
     conn = sqlite3.connect(db_path)
     invoice = conn.execute(
-        "SELECT nickname, invoice_url, receipt_url, reimbursement_status "
+        "SELECT nickname, invoice_url, receipt_url, tracking_info, reimbursement_status "
         "FROM invoices WHERE id=?",
         (data["invoice_id"],),
     ).fetchone()
@@ -180,7 +186,7 @@ def test_from_cart_creates_invoice_and_orders_visible_rows(invoice_client):
     ).fetchall()
     conn.close()
 
-    assert invoice == (str(data["invoice_id"]), "", "", "madhur cc")
+    assert invoice == (str(data["invoice_id"]), "", "", "", "madhur cc")
     assert orders[0][1:] == ("ordered", data["invoice_id"])
     assert orders[1][1:] == ("ordered", data["invoice_id"])
     assert orders[2][1:] == ("awaiting order", None)
@@ -196,6 +202,7 @@ def test_invoice_fields_can_be_edited_and_rendered(invoice_client):
             "nickname": "Mouser August",
             "invoice_url": "https://www.dropbox.com/invoice.pdf",
             "receipt_url": "https://www.dropbox.com/receipt.pdf",
+            "tracking_info": "UPS 1Z999AA10123456784",
             "reimbursement_status": "reimbursed",
         },
     )
@@ -203,31 +210,41 @@ def test_invoice_fields_can_be_edited_and_rendered(invoice_client):
 
     conn = sqlite3.connect(db_path)
     invoice = conn.execute(
-        "SELECT nickname, invoice_url, receipt_url, reimbursement_status FROM invoices"
+        "SELECT nickname, invoice_url, receipt_url, tracking_info, "
+        "reimbursement_status FROM invoices"
     ).fetchone()
     reimbursement_history = conn.execute(
         "SELECT old_value, new_value, table_name FROM order_history "
         "WHERE field = 'reimbursement_status'"
+    ).fetchone()
+    tracking_history = conn.execute(
+        "SELECT old_value, new_value, table_name FROM order_history "
+        "WHERE field = 'tracking_info'"
     ).fetchone()
     conn.close()
     assert invoice == (
         "Mouser August",
         "https://www.dropbox.com/invoice.pdf",
         "https://www.dropbox.com/receipt.pdf",
+        "UPS 1Z999AA10123456784",
         "reimbursed",
     )
     assert reimbursement_history == ("madhur cc", "reimbursed", "invoices")
+    assert tracking_history == ("", "UPS 1Z999AA10123456784", "invoices")
 
     page = client.get("/submitted")
     assert page.status_code == 200
     assert b'data-column-field="invoice_id"' in page.data
     assert b"Mouser August" in page.data
     assert b'data-invoice-url="https://www.dropbox.com/invoice.pdf"' in page.data
+    assert b'data-tracking-info="UPS 1Z999AA10123456784"' in page.data
     assert b'data-reimbursement-status="reimbursed"' in page.data
 
     invoice_page = client.get("/invoices")
     assert invoice_page.status_code == 200
     assert b"Mouser August" in invoice_page.data
+    assert b"Tracking info" in invoice_page.data
+    assert b"UPS 1Z999AA10123456784" in invoice_page.data
     assert b"Reimbursed" in invoice_page.data
     expected_filter = f"/submitted?filter_invoice_id={created['invoice_id']}".encode()
     assert expected_filter in invoice_page.data
@@ -278,23 +295,79 @@ def test_invoice_rejects_unknown_reimbursement_status(invoice_client):
     assert stored == "madhur cc"
 
 
-def test_legacy_order_requires_reimbursement_status_remains_available(invoice_client):
+def test_order_requires_reimbursement_status_is_rejected(invoice_client):
     client, db_path, order_ids = invoice_client
     response = client.post(
         f"/api/orders/{order_ids[2]}",
         json={"order_status": "requires reimbursement"},
     )
-    assert response.status_code == 200
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "invalid order status"
 
     conn = sqlite3.connect(db_path)
     stored = conn.execute(
         "SELECT order_status FROM orders WHERE id = ?", (order_ids[2],)
     ).fetchone()[0]
     conn.close()
-    assert stored == "requires reimbursement"
+    assert stored == "awaiting order"
 
     page = client.get("/submitted")
-    assert b'<option value="requires reimbursement" selected>' in page.data
+    assert b'<option value="requires reimbursement"' not in page.data
+
+
+def test_reimbursement_order_migration_changes_rows_not_invoices(tmp_path):
+    db_path = str(tmp_path / "reimbursement-orders.db")
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE orders (
+            id INTEGER PRIMARY KEY,
+            order_status TEXT NOT NULL
+        );
+        CREATE TABLE invoices (
+            id INTEGER PRIMARY KEY,
+            reimbursement_status TEXT NOT NULL
+        );
+        CREATE TABLE order_history (
+            id INTEGER PRIMARY KEY,
+            order_id INTEGER,
+            changed_by TEXT NOT NULL,
+            changed_at TEXT NOT NULL,
+            field TEXT NOT NULL,
+            old_value TEXT,
+            new_value TEXT,
+            table_name TEXT NOT NULL DEFAULT 'orders'
+        );
+        INSERT INTO orders (order_status) VALUES
+            ('requires reimbursement'), ('ordered'), ('needs reimbursement');
+        INSERT INTO invoices (reimbursement_status) VALUES
+            ('requires reimbursement');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    assert migrate_reimbursement_orders.migrate(db_path) == 2
+    assert migrate_reimbursement_orders.migrate(db_path) == 0
+
+    conn = sqlite3.connect(db_path)
+    order_statuses = [
+        row[0] for row in conn.execute("SELECT order_status FROM orders ORDER BY id")
+    ]
+    invoice_status = conn.execute(
+        "SELECT reimbursement_status FROM invoices"
+    ).fetchone()[0]
+    history = conn.execute(
+        "SELECT old_value, new_value, changed_by FROM order_history ORDER BY id"
+    ).fetchall()
+    conn.close()
+
+    assert order_statuses == ["ordered", "ordered", "ordered"]
+    assert invoice_status == "requires reimbursement"
+    assert history == [
+        ("requires reimbursement", "ordered", "migration-script"),
+        ("needs reimbursement", "ordered", "migration-script"),
+    ]
 
 
 def test_submitted_open_link_keeps_all_query_parameters(invoice_client):

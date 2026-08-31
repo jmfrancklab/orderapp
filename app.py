@@ -23,7 +23,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.15.0"
+__version__ = "0.16.0"
 
 INVOICE_REIMBURSEMENT_DEFAULT = "madhur cc"
 INVOICE_REIMBURSEMENT_CHOICES = (
@@ -445,6 +445,7 @@ def init_db():
         nickname TEXT NOT NULL DEFAULT '',
         invoice_url TEXT NOT NULL DEFAULT '',
         receipt_url TEXT NOT NULL DEFAULT '',
+        tracking_info TEXT NOT NULL DEFAULT '',
         reimbursement_status TEXT NOT NULL DEFAULT 'madhur cc',
         created_by TEXT NOT NULL,
         created_at TEXT NOT NULL
@@ -508,6 +509,7 @@ def init_db():
         "ALTER TABLE orders ADD COLUMN order_status TEXT NOT NULL DEFAULT 'awaiting order'",
         "ALTER TABLE orders ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1",
         "ALTER TABLE orders ADD COLUMN invoice_id INTEGER REFERENCES invoices(id) ON DELETE SET NULL",
+        "ALTER TABLE invoices ADD COLUMN tracking_info TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE invoices ADD COLUMN reimbursement_status TEXT NOT NULL DEFAULT 'madhur cc'",
         "ALTER TABLE allowed_emails ADD COLUMN password_hash TEXT",
     ]:
@@ -965,7 +967,6 @@ def submitted_filter_choices(rows, vendors, projects, invoices, filters, tracker
         "order_status": {
             "not ready": "Not ready", "awaiting order": "Awaiting Order",
             "in cart": "In cart", "ordered": "Ordered", "received": "Received",
-            "requires reimbursement": "Requires reimbursement",
         },
     }
     choices = {}
@@ -1632,8 +1633,7 @@ def api_delete_reference_record(entity, record_id):
 # when (submitted_at). Every change is written to order_history.
 EDITABLE_FIELDS = {"description", "link", "vendor_id", "project_id", "use_note", "cost",
                    "quantity", "order_status"}
-ORDER_STATUSES = {"not ready", "awaiting order", "in cart", "ordered", "received",
-                  "requires reimbursement"}
+ORDER_STATUSES = {"not ready", "awaiting order", "in cart", "ordered", "received"}
 
 
 @app.route("/api/orders/bulk", methods=["POST"])
@@ -1847,7 +1847,7 @@ def api_invoice_from_cart():
               f"invoice #{invoice_id} created for {len(orders)} unique item(s)")
     db.commit()
     return jsonify(ok=True, invoice_id=invoice_id, nickname=nickname,
-                   invoice_url="", receipt_url="",
+                   invoice_url="", receipt_url="", tracking_info="",
                    reimbursement_status=INVOICE_REIMBURSEMENT_DEFAULT,
                    unique_items=len(orders),
                    item_count=sum(order["quantity"] for order in orders))
@@ -1863,7 +1863,8 @@ def api_save_invoice(invoice_id):
 
     data = request.get_json(silent=True) or {}
     allowed = {
-        "nickname", "invoice_url", "receipt_url", "reimbursement_status"
+        "nickname", "invoice_url", "receipt_url", "tracking_info",
+        "reimbursement_status"
     }
     if "reimbursement_status" in data:
         reimbursement_status = str(data["reimbursement_status"] or "").strip()

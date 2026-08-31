@@ -984,8 +984,7 @@
       ["not ready", "Not ready"],
       ["awaiting order", "Awaiting Order"],
       ["in cart", "In cart"],
-      ["received", "Received"],
-      ["requires reimbursement", "Requires reimbursement"]
+      ["received", "Received"]
     ].forEach(function (choice) {
       status.appendChild(bulkOption(choice[0], choice[1]));
     });
@@ -1114,6 +1113,7 @@
           nickname: data.nickname,
           invoiceUrl: data.invoice_url || "",
           receiptUrl: data.receipt_url || "",
+          trackingInfo: data.tracking_info || "",
           reimbursementStatus: data.reimbursement_status || "madhur cc"
         }, true, function () { window.location.reload(); });
       }).catch(function (err) {
@@ -1144,16 +1144,19 @@
 
     if (editing) {
       var input = document.createElement("input");
-      input.type = field === "nickname" ? "text" : "url";
+      input.type = (field === "invoice_url" || field === "receipt_url") ? "url" : "text";
       input.name = field;
       input.value = value || "";
       if (field === "nickname") input.required = true;
-      if (field !== "nickname") input.placeholder = "https://www.dropbox.com/…";
+      if (field === "invoice_url" || field === "receipt_url") {
+        input.placeholder = "https://www.dropbox.com/…";
+      }
       row.appendChild(input);
     } else {
       var shown = document.createElement("span");
       shown.className = "invoice-field-value";
-      if (field !== "nickname" && /^https?:\/\//i.test(value || "")) {
+      if ((field === "invoice_url" || field === "receipt_url") &&
+          /^https?:\/\//i.test(value || "")) {
         var link = document.createElement("a");
         link.href = value; link.target = "_blank"; link.rel = "noopener";
         link.textContent = value;
@@ -1203,6 +1206,7 @@
       nickname: link.dataset.nickname,
       invoiceUrl: link.dataset.invoiceUrl,
       receiptUrl: link.dataset.receiptUrl,
+      trackingInfo: link.dataset.trackingInfo,
       reimbursementStatus: link.dataset.reimbursementStatus
     };
   }
@@ -1235,6 +1239,7 @@
     fields.appendChild(invoiceField("Nickname", invoice.nickname, "nickname", editing));
     fields.appendChild(invoiceField("Invoice", invoice.invoiceUrl, "invoice_url", editing));
     fields.appendChild(invoiceField("Receipt", invoice.receiptUrl, "receipt_url", editing));
+    fields.appendChild(invoiceField("Tracking info", invoice.trackingInfo, "tracking_info", editing));
     fields.appendChild(invoiceReimbursementField(invoice.reimbursementStatus, editing));
 
     if (editing) {
@@ -1254,6 +1259,7 @@
           nickname: nickname,
           invoice_url: fields.elements.invoice_url.value.trim(),
           receipt_url: fields.elements.receipt_url.value.trim(),
+          tracking_info: fields.elements.tracking_info.value.trim(),
           reimbursement_status: fields.elements.reimbursement_status.value
         }, function () { window.location.reload(); });
       });

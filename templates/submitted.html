@@ -41,6 +41,7 @@ who submitted it. Filter and multi-level sort controls are in each column header
        data-nickname="{{ invoice.nickname }}"
        data-invoice-url="{{ invoice.invoice_url }}"
        data-receipt-url="{{ invoice.receipt_url }}"
+       data-tracking-info="{{ invoice.tracking_info }}"
        data-reimbursement-status="{{ invoice.reimbursement_status }}">{{ invoice.nickname }}</a>
     <button type="button" class="invoice-edit"
             data-invoice-id="{{ invoice.id }}">edit</button>
@@ -120,7 +121,6 @@ who submitted it. Filter and multi-level sort controls are in each column header
         <option value="ordered" selected disabled>Ordered</option>
         {% endif %}
         <option value="received"   {{ 'selected' if (r.order_status or '') == 'received'   }}>Received</option>
-        <option value="requires reimbursement" {{ 'selected' if (r.order_status or '') == 'requires reimbursement' }}>Requires reimbursement</option>
       </select>
       {{ invoice_cell(invoice_by_id.get(r.invoice_id)) }}
       <span class="tracker-cell">

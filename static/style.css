@@ -212,7 +212,6 @@ input[data-field="link"] { font-family: var(--mono); font-size: .8rem; }
 .status-select.status-in-cart     { color: #854d0e; border-color: #ca8a04; background: #fef08a; }
 .status-select.status-ordered     { color: #1d4ed8;       border-color: #1d4ed8; }
 .status-select.status-received    { color: #15803d;       border-color: #15803d; }
-.status-select.status-requires-reimbursement { color: #7c3aed; border-color: #7c3aed; }
 
 /* export button */
 .export-btn { text-decoration: none; display: inline-block; }
