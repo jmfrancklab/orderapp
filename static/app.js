@@ -490,10 +490,10 @@
     cell.querySelector(".chips").appendChild(chip);
   }
 
-  /* --- submitted column filters + sorting -----------------------------
+  /* --- column filters + sorting ---------------------------------------
      Both are encoded in GET parameters, so views remain bookmarkable. */
 
-  var FILTER_COLUMNS = [
+  var SUBMITTED_FILTER_COLUMNS = [
     { field: "submitted_at", type: "text" },
     { field: "user_email",   type: "text" },
     { field: "description",  type: "text" },
@@ -507,6 +507,13 @@
     { field: "invoice_id",   type: "checkbox", label: "Invoice" },
     { field: "trackers",     type: "tracker", label: "Trackers" }
   ];
+  var HISTORY_FILTER_COLUMNS = [
+    { field: "changed_at", type: "text", label: "When" },
+    { field: "changed_by", type: "checkbox", label: "Who" },
+    { field: "table_name", type: "checkbox", label: "Table" },
+    { field: "field",      type: "checkbox", label: "Field" },
+    { field: "change",     type: "text", label: "Change" }
+  ];
   var FILTER_FIELD_DISPLAY = {
     submitted_at: "Submitted", user_email: "By", description: "Description",
     link: "Link", use_note: "Use", cost: "Cost", quantity: "Qty",
@@ -514,27 +521,31 @@
   };
 
   var submittedSheet = document.getElementById("submitted-sheet");
+  var historySheet = document.getElementById("history-sheet");
+  var filterSheet = submittedSheet || historySheet;
+  var FILTER_COLUMNS = submittedSheet
+    ? SUBMITTED_FILTER_COLUMNS : HISTORY_FILTER_COLUMNS;
 
-  if (submittedSheet) {
+  if (filterSheet) {
     var initialFilterState = {};
     try {
-      initialFilterState = JSON.parse(submittedSheet.dataset.filterState || "{}");
+      initialFilterState = JSON.parse(filterSheet.dataset.filterState || "{}");
     } catch (e) {
       initialFilterState = {};
     }
     var initialFilterChoices = {};
     try {
-      initialFilterChoices = JSON.parse(submittedSheet.dataset.filterChoices || "{}");
+      initialFilterChoices = JSON.parse(filterSheet.dataset.filterChoices || "{}");
     } catch (e) {
       initialFilterChoices = {};
     }
     var sortState = [];
     try {
-      sortState = JSON.parse(submittedSheet.dataset.sortState || "[]");
+      sortState = JSON.parse(filterSheet.dataset.sortState || "[]");
     } catch (e) {
       sortState = [];
     }
-    var currentUser = (submittedSheet.dataset.currentUser || "").toLowerCase();
+    var currentUser = (filterSheet.dataset.currentUser || "").toLowerCase();
     var filterState = {};
     FILTER_COLUMNS.forEach(function (col) {
       var initial = initialFilterState[col.field] || {};
@@ -621,23 +632,23 @@
 
     function updateHeaderControls() {
       FILTER_COLUMNS.forEach(function (col) {
-        var button = submittedSheet.querySelector(
+        var button = filterSheet.querySelector(
           '.column-filter[data-filter-field="' + col.field + '"]');
         if (button) button.classList.toggle("active", filterIsActive(col));
       });
 
-      submittedSheet.querySelectorAll(".column-sort").forEach(function (button) {
+      filterSheet.querySelectorAll(".column-sort").forEach(function (button) {
         button.classList.remove("active");
       });
-      submittedSheet.querySelectorAll(".sort-priority").forEach(function (button) {
+      filterSheet.querySelectorAll(".sort-priority").forEach(function (button) {
         button.hidden = true;
         button.textContent = "";
       });
       sortState.forEach(function (spec, index) {
-        var arrow = submittedSheet.querySelector(
+        var arrow = filterSheet.querySelector(
           '.column-sort[data-sort-field="' + spec.field + '"]' +
           '[data-sort-dir="' + spec.direction + '"]');
-        var priority = submittedSheet.querySelector(
+        var priority = filterSheet.querySelector(
           '.sort-priority[data-sort-priority-field="' + spec.field + '"]');
         if (arrow) arrow.classList.add("active");
         if (priority) {
@@ -845,7 +856,7 @@
       if (firstInput) firstInput.focus();
     }
 
-    submittedSheet.addEventListener("click", function (e) {
+    filterSheet.addEventListener("click", function (e) {
       var filterButton = e.target.closest(".column-filter");
       if (filterButton) {
         var filterField = filterButton.dataset.filterField;
@@ -885,6 +896,112 @@
       }
     });
     updateHeaderControls();
+  }
+
+  /* --- lazy, read-only order details from History -------------------- */
+
+  var _orderSummaryOverlay = null, _orderSummaryPopup = null;
+
+  function closeOrderSummary() {
+    if (_orderSummaryOverlay) {
+      _orderSummaryOverlay.remove();
+      _orderSummaryOverlay = null;
+    }
+    if (_orderSummaryPopup) {
+      _orderSummaryPopup.remove();
+      _orderSummaryPopup = null;
+    }
+  }
+
+  function orderSummaryPopup(orderId) {
+    closeOrderSummary();
+    var overlay = document.createElement("div");
+    overlay.className = "xl-overlay";
+    overlay.onclick = closeOrderSummary;
+    document.body.appendChild(overlay);
+    _orderSummaryOverlay = overlay;
+
+    var pop = document.createElement("div");
+    pop.className = "xl-popup order-summary-popup";
+    pop.onclick = function (event) { event.stopPropagation(); };
+    _orderSummaryPopup = pop;
+
+    var head = document.createElement("div");
+    head.className = "xl-popup-head";
+    var title = document.createElement("strong");
+    title.textContent = "Current order #" + orderId;
+    var close = document.createElement("button");
+    close.type = "button";
+    close.className = "vendor-popup-x";
+    close.textContent = "×";
+    close.onclick = closeOrderSummary;
+    head.appendChild(title);
+    head.appendChild(close);
+    pop.appendChild(head);
+
+    var loading = document.createElement("p");
+    loading.className = "order-summary-loading";
+    loading.textContent = "Loading current order information…";
+    pop.appendChild(loading);
+    document.body.appendChild(pop);
+    return pop;
+  }
+
+  function renderOrderSummary(pop, data) {
+    var loading = pop.querySelector(".order-summary-loading");
+    if (loading) loading.remove();
+    var fields = document.createElement("dl");
+    fields.className = "order-summary-fields";
+    data.fields.forEach(function (field) {
+      var term = document.createElement("dt");
+      term.textContent = field.label;
+      var detail = document.createElement("dd");
+      if (!field.value) {
+        detail.className = "order-summary-empty";
+        detail.textContent = "—";
+      } else if (field.type === "link") {
+        var link = document.createElement("a");
+        link.href = field.value;
+        link.target = "_blank";
+        link.rel = "noopener";
+        link.textContent = field.value;
+        detail.appendChild(link);
+      } else {
+        detail.textContent = field.value;
+      }
+      fields.appendChild(term);
+      fields.appendChild(detail);
+    });
+    pop.appendChild(fields);
+    var actions = document.createElement("div");
+    actions.className = "xl-popup-actions";
+    actions.appendChild(makePopupBtn("Close", "mini", closeOrderSummary));
+    pop.appendChild(actions);
+  }
+
+  if (historySheet) {
+    historySheet.addEventListener("click", function (event) {
+      var link = event.target.closest(".hist-order-link");
+      if (!link) return;
+      event.preventDefault();
+      var pop = orderSummaryPopup(link.dataset.orderId);
+      fetch(link.href, { method: "GET", headers: { "Accept": "application/json" } })
+        .then(function (response) {
+          return response.json().then(function (body) {
+            if (!response.ok) throw new Error(body.error || "Could not load this order.");
+            return body;
+          });
+        })
+        .then(function (data) { renderOrderSummary(pop, data); })
+        .catch(function (error) {
+          if (!_orderSummaryPopup || pop !== _orderSummaryPopup) return;
+          var loading = pop.querySelector(".order-summary-loading");
+          if (loading) {
+            loading.className = "order-summary-error";
+            loading.textContent = error.message;
+          }
+        });
+    });
   }
 
   /* --- submitted-row bulk selection ---------------------------------- */

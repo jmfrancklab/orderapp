@@ -9,29 +9,7 @@ who submitted it. Filter and multi-level sort controls are in each column header
 
 {% block content %}
 
-{% macro column_heading(label, field, extra_class='') %}
-  <span class="column-heading {{ extra_class }}" data-column-field="{{ field }}">
-    <span class="column-label">{{ label }}</span>
-    <span class="column-tools">
-      <button type="button" class="column-filter" data-filter-field="{{ field }}"
-              title="Filter {{ label }}" aria-label="Filter {{ label }}">
-        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 3h12l-4.7 5.2v3.7l-2.6 1.3v-5z"/></svg>
-      </button>
-      <span class="sort-control">
-        <span class="sort-arrows">
-          <button type="button" class="column-sort" data-sort-field="{{ field }}"
-                  data-sort-dir="asc" title="Sort {{ label }} ascending"
-                  aria-label="Sort {{ label }} ascending">▲</button>
-          <button type="button" class="column-sort" data-sort-field="{{ field }}"
-                  data-sort-dir="desc" title="Sort {{ label }} descending"
-                  aria-label="Sort {{ label }} descending">▼</button>
-        </span>
-        <button type="button" class="sort-priority" data-sort-priority-field="{{ field }}"
-                title="Promote this sort one priority level" hidden></button>
-      </span>
-    </span>
-  </span>
-{% endmacro %}
+{% from "_column_controls.html" import column_heading %}
 
 {% macro invoice_cell(invoice) %}
   {% if invoice %}

@@ -513,6 +513,95 @@ def test_each_submitted_header_has_its_own_filter_and_sort_controls(invoice_clie
     assert b'id="filter-btn"' not in page.data
 
 
+def test_history_has_url_backed_column_controls_and_person_checkboxes(invoice_client):
+    client, db_path, order_ids = invoice_client
+    conn = sqlite3.connect(db_path)
+    conn.executemany(
+        """INSERT INTO order_history
+           (order_id, changed_by, changed_at, field, old_value, new_value, table_name)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        [
+            (order_ids[0], "alex@lab.org", "2026-01-03T10:00:00+00:00",
+             "description", "before", "after", "orders"),
+            (order_ids[1], "buyer@lab.org", "2026-01-02T10:00:00+00:00",
+             "cost", "1", "2", "orders"),
+            (1, "alex@lab.org", "2026-01-01T10:00:00+00:00",
+             "name", "Old vendor", "New vendor", "vendors"),
+        ],
+    )
+    conn.commit()
+    history_ids = [row[0] for row in conn.execute(
+        "SELECT id FROM order_history ORDER BY id"
+    )]
+    conn.close()
+
+    page = client.get("/history?filter_changed_by=alex%40lab.org")
+    assert page.status_code == 200
+    assert page.data.count(b'class="column-filter"') == 5
+    assert page.data.count(b'class="column-sort"') == 10
+    rendered_ids = [int(value) for value in re.findall(
+        rb'data-history-id="(\d+)"', page.data
+    )]
+    assert rendered_ids == [history_ids[2], history_ids[0]]
+    state_match = re.search(rb'data-filter-state="([^"]+)"', page.data)
+    state = json.loads(html.unescape(state_match.group(1).decode()))
+    assert state["changed_by"] == {"selected": ["alex@lab.org"]}
+    choices_match = re.search(rb'data-filter-choices="([^"]+)"', page.data)
+    choices = json.loads(html.unescape(choices_match.group(1).decode()))
+    assert {item["value"] for item in choices["changed_by"]} == {
+        "alex@lab.org", "buyer@lab.org"
+    }
+
+
+def test_history_order_details_are_lazy_read_only_and_expand_references(invoice_client):
+    client, db_path, order_ids = invoice_client
+    conn = sqlite3.connect(db_path)
+    project_id = conn.execute(
+        "INSERT INTO projects (name, notes) VALUES (?, ?)",
+        ("Magnet upgrade", ""),
+    ).lastrowid
+    invoice_id = conn.execute(
+        """INSERT INTO invoices (nickname, created_by, created_at)
+           VALUES (?, ?, ?)""",
+        ("Mouser August", "buyer@lab.org", "2026-01-04"),
+    ).lastrowid
+    conn.execute(
+        """UPDATE orders SET project_id = ?, invoice_id = ?, cost = ?, use_note = ?
+           WHERE id = ?""",
+        (project_id, invoice_id, "12.5", "bench supply", order_ids[0]),
+    )
+    conn.execute(
+        """INSERT INTO order_history
+           (order_id, changed_by, changed_at, field, old_value, new_value, table_name)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (order_ids[0], "alex@lab.org", "2026-01-04T10:00:00+00:00",
+         "cost", "10", "12.5", "orders"),
+    )
+    conn.commit()
+    conn.close()
+
+    page = client.get("/history")
+    summary_url = f'/api/orders/{order_ids[0]}/summary'.encode()
+    assert summary_url in page.data
+    assert b"cart one" not in page.data
+    assert b"Magnet upgrade" not in page.data
+
+    response = client.get(summary_url.decode())
+    assert response.status_code == 200
+    payload = response.get_json()
+    fields = {field["label"]: field["value"] for field in payload["fields"]}
+    assert payload["order_number"] == order_ids[0]
+    assert fields["Description"] == "cart one"
+    assert fields["Vendor"] == "Mouser"
+    assert fields["Project"] == "Magnet upgrade"
+    assert fields["Invoice"] == "Mouser August"
+    assert fields["Cost"] == "$12.50"
+    assert fields["Trackers"] == "alpha@lab.org, beta@lab.org"
+    assert "vendor_id" not in json.dumps(payload)
+    assert "project_id" not in json.dumps(payload)
+    assert "invoice_id" not in json.dumps(payload)
+
+
 def test_submitted_page_has_opt_in_bulk_selection_and_favicon(invoice_client):
     client, _, order_ids = invoice_client
     page = client.get("/submitted")

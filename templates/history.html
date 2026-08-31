@@ -2,26 +2,33 @@
 {% block title %}History{% endblock %}
 {% block page_note %}
 <p class="explain">Every field change, tracker add/remove, and submission is logged
-here. Showing the 300 most recent entries, newest first.</p>
+here. Filter and multi-level sort controls are in each column header. This view
+uses the 300 most recent entries before applying those controls.</p>
 {% endblock %}
 
 {% block content %}
 
-{% if rows %}
+{% from "_column_controls.html" import column_heading %}
+
+{% if has_history %}
+<div id="history-sheet"
+     data-filter-state="{{ history_filters | tojson | forceescape }}"
+     data-filter-choices="{{ history_filter_choices | tojson | forceescape }}"
+     data-sort-state="{{ history_sorts | tojson | forceescape }}">
 <div class="table-wrap">
 <table class="ref-table hist-table">
   <thead>
     <tr>
-      <th>When</th>
-      <th>Who</th>
-      <th>Table</th>
-      <th>Field</th>
-      <th>Change</th>
+      <th>{{ column_heading('When', 'changed_at') }}</th>
+      <th>{{ column_heading('Who', 'changed_by') }}</th>
+      <th>{{ column_heading('Table', 'table_name') }}</th>
+      <th>{{ column_heading('Field', 'field') }}</th>
+      <th>{{ column_heading('Change', 'change') }}</th>
     </tr>
   </thead>
   <tbody>
     {% for r in rows %}
-    <tr class="hist-row">
+    <tr class="hist-row" data-history-id="{{ r.id }}">
 
       <td class="hist-time">
         {{ r.changed_at[:10] }}<br>
@@ -35,7 +42,14 @@ here. Showing the 300 most recent entries, newest first.</p>
           {{ r.table_name }}
         </span>
         {% if r.order_id %}
-          <span class="hist-oid">#{{ r.order_id }}</span>
+          {% if r.table_name == 'orders' %}
+            <a class="hist-oid hist-order-link"
+               href="{{ url_for('api_order_summary', oid=r.order_id) }}"
+               data-order-id="{{ r.order_id }}"
+               aria-label="View current information for order {{ r.order_id }}">#{{ r.order_id }}</a>
+          {% else %}
+            <span class="hist-oid">#{{ r.order_id }}</span>
+          {% endif %}
         {% endif %}
       </td>
 
@@ -61,6 +75,10 @@ here. Showing the 300 most recent entries, newest first.</p>
     {% endfor %}
   </tbody>
 </table>
+</div>
+{% if not rows %}
+<p class="empty">No history entries match the filters in this URL.</p>
+{% endif %}
 </div>
 {% else %}
 <p class="empty">No history yet.</p>

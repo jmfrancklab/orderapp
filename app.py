@@ -23,7 +23,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.16.0"
+__version__ = "0.16.1"
 
 INVOICE_REIMBURSEMENT_DEFAULT = "madhur cc"
 INVOICE_REIMBURSEMENT_CHOICES = (
@@ -958,16 +958,25 @@ def filter_submitted_rows(rows, filters, trackers, current_email):
     return filtered
 
 
+def order_reference_labels(vendors, projects, invoices):
+    """Canonical display labels for foreign keys shown in order views."""
+    return {
+        "vendor_id": {item["id"]: item["name"] for item in vendors},
+        "project_id": {item["id"]: item["name"] for item in projects},
+        "invoice_id": {item["id"]: item["nickname"] for item in invoices},
+    }
+
+
 def submitted_filter_choices(rows, vendors, projects, invoices, filters, trackers,
                              current_email):
+    reference_labels = order_reference_labels(vendors, projects, invoices)
     labels = {
-        "vendor_id": {str(v["id"]): v["name"] for v in vendors},
-        "project_id": {str(p["id"]): p["name"] for p in projects},
-        "invoice_id": {str(i["id"]): i["nickname"] for i in invoices},
-        "order_status": {
-            "not ready": "Not ready", "awaiting order": "Awaiting Order",
-            "in cart": "In cart", "ordered": "Ordered", "received": "Received",
-        },
+        field: {str(key): value for key, value in values.items()}
+        for field, values in reference_labels.items()
+    }
+    labels["order_status"] = {
+        "not ready": "Not ready", "awaiting order": "Awaiting Order",
+        "in cart": "In cart", "ordered": "Ordered", "received": "Received",
     }
     choices = {}
     for field in SUBMITTED_CHOICE_FILTERS:
@@ -1005,11 +1014,7 @@ def sort_submitted_rows(rows, sorts, trackers, vendors, projects, invoices):
     """Apply stable, ordered multi-column sorting from validated GET state."""
     if not sorts:
         return list(rows)
-    labels = {
-        "vendor_id": {v["id"]: v["name"] for v in vendors},
-        "project_id": {p["id"]: p["name"] for p in projects},
-        "invoice_id": {i["id"]: i["nickname"] for i in invoices},
-    }
+    labels = order_reference_labels(vendors, projects, invoices)
 
     def value(row, field):
         raw = row[field] if field != "trackers" else "\0".join(trackers.get(row["id"], []))
@@ -1060,6 +1065,187 @@ def submitted_totals(rows):
         "unique_items": len(rows),
         "missing": missing,
     }
+
+
+HISTORY_TEXT_FILTERS = ("changed_at", "change")
+HISTORY_CHOICE_FILTERS = ("changed_by", "table_name", "field")
+HISTORY_SORT_FIELDS = HISTORY_TEXT_FILTERS + HISTORY_CHOICE_FILTERS
+
+
+def history_filters_from_args(args):
+    """Return validated, URL-backed filter state for the History page."""
+    filters = {}
+    for field in HISTORY_TEXT_FILTERS:
+        query = args.get(f"filter_{field}", "")
+        filters[field] = {
+            "query": query,
+            "regex": bool(query) and args.get(f"filter_{field}_regex") == "1",
+        }
+    for field in HISTORY_CHOICE_FILTERS:
+        filters[field] = {"selected": args.getlist(f"filter_{field}")}
+    return filters
+
+
+def history_sorts_from_args(args):
+    """Parse ordered, unique History-page sort parameters."""
+    sorts = []
+    seen = set()
+    for raw in args.getlist("sort"):
+        field, separator, direction = raw.partition(":")
+        if (not separator or field not in HISTORY_SORT_FIELDS
+                or direction not in ("asc", "desc") or field in seen):
+            continue
+        sorts.append({"field": field, "direction": direction})
+        seen.add(field)
+    return sorts
+
+
+def _history_value(row, field):
+    if field == "change":
+        return " ".join(
+            str(value) for value in (row["old_value"], row["new_value"])
+            if value is not None
+        )
+    return str(row[field] if row[field] is not None else "")
+
+
+def filter_history_rows(rows, filters):
+    """Apply History-page text and checkbox filters to recent entries."""
+    compiled = {}
+    for field in HISTORY_TEXT_FILTERS:
+        state = filters[field]
+        if state["query"] and state["regex"]:
+            try:
+                compiled[field] = re.compile(state["query"], re.IGNORECASE)
+            except re.error:
+                compiled[field] = None
+
+    filtered = []
+    for row in rows:
+        matches = True
+        for field in HISTORY_TEXT_FILTERS:
+            state = filters[field]
+            query = state["query"]
+            if not query:
+                continue
+            value = _history_value(row, field)
+            if state["regex"]:
+                pattern = compiled.get(field)
+                if pattern is None or not pattern.search(value):
+                    matches = False
+                    break
+            elif query.casefold() not in value.casefold():
+                matches = False
+                break
+        if not matches:
+            continue
+        for field in HISTORY_CHOICE_FILTERS:
+            selected = filters[field]["selected"]
+            if selected and _history_value(row, field) not in selected:
+                matches = False
+                break
+        if matches:
+            filtered.append(row)
+    return filtered
+
+
+def history_filter_choices(rows, filters):
+    """Build faceted checkbox choices from the 300-entry History window."""
+    choices = {}
+    for field in HISTORY_CHOICE_FILTERS:
+        facet_filters = {key: dict(value) for key, value in filters.items()}
+        facet_filters[field]["selected"] = []
+        values = {
+            _history_value(row, field)
+            for row in filter_history_rows(rows, facet_filters)
+        }
+        choices[field] = [
+            {"value": value, "label": value or "(none)"}
+            for value in sorted(values, key=str.casefold)
+        ]
+    return choices
+
+
+def sort_history_rows(rows, sorts):
+    """Apply stable, ordered multi-column sorting to History entries."""
+    if not sorts:
+        return list(rows)
+
+    def compare(left, right):
+        for spec in sorts:
+            left_value = _history_value(left, spec["field"])
+            right_value = _history_value(right, spec["field"])
+            left_missing = not bool(left_value)
+            right_missing = not bool(right_value)
+            if left_missing != right_missing:
+                return 1 if left_missing else -1
+            left_key = left_value.casefold()
+            right_key = right_value.casefold()
+            if left_key == right_key:
+                continue
+            result = -1 if left_key < right_key else 1
+            return result if spec["direction"] == "asc" else -result
+        return right["id"] - left["id"]
+
+    return sorted(rows, key=cmp_to_key(compare))
+
+
+# This is the canonical, presentation-level order schema used by lazy detail
+# views. Foreign keys are represented by their site-facing labels, never IDs.
+ORDER_DISPLAY_SCHEMA = (
+    ("submitted_at", "Submitted", "date"),
+    ("user_email", "Submitted by", "text"),
+    ("description", "Description", "text"),
+    ("link", "Link", "link"),
+    ("vendor", "Vendor", "text"),
+    ("project", "Project", "text"),
+    ("use_note", "Use", "text"),
+    ("cost", "Cost", "money"),
+    ("quantity", "Quantity", "text"),
+    ("order_status", "Order status", "title"),
+    ("invoice", "Invoice", "text"),
+    ("trackers", "Trackers", "text"),
+    ("status", "List", "title"),
+)
+
+
+def order_display_fields(db, order_id):
+    """Return an order as site-facing label/value rows with references expanded."""
+    row = db.execute(
+        """SELECT o.submitted_at, o.user_email, o.description, o.link,
+                  v.name AS vendor, p.name AS project, o.use_note, o.cost,
+                  o.quantity, o.order_status, i.nickname AS invoice, o.status
+           FROM orders o
+           LEFT JOIN vendors v ON v.id = o.vendor_id
+           LEFT JOIN projects p ON p.id = o.project_id
+           LEFT JOIN invoices i ON i.id = o.invoice_id
+           WHERE o.id = ?""",
+        (order_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    values = dict(row)
+    values["trackers"] = ", ".join(
+        tracker["email"] for tracker in db.execute(
+            "SELECT email FROM trackers WHERE order_id = ? ORDER BY email",
+            (order_id,),
+        )
+    )
+    fields = []
+    for key, label, display_type in ORDER_DISPLAY_SCHEMA:
+        value = values.get(key)
+        if display_type == "date" and value:
+            value = value[:10]
+        elif display_type == "money" and value not in (None, ""):
+            value = "$" + fmt_cost(value)
+        elif display_type == "title" and value:
+            value = str(value).replace("_", " ").title()
+        fields.append({
+            "label": label,
+            "value": "" if value is None else str(value),
+            "type": display_type,
+        })
+    return fields
 
 
 def current_user():
@@ -1506,10 +1692,31 @@ def delete_vendor(vid):
 @login_required
 def history():
     db = get_db()
-    rows = db.execute(
+    recent_rows = db.execute(
         "SELECT * FROM order_history ORDER BY id DESC LIMIT 300"
     ).fetchall()
-    return render_template("history.html", tab="history", rows=rows)
+    filters = history_filters_from_args(request.args)
+    sorts = history_sorts_from_args(request.args)
+    rows = sort_history_rows(filter_history_rows(recent_rows, filters), sorts)
+    return render_template(
+        "history.html", tab="history", rows=rows,
+        has_history=bool(recent_rows), history_filters=filters,
+        history_sorts=sorts,
+        history_filter_choices=history_filter_choices(recent_rows, filters),
+    )
+
+
+@app.route("/api/orders/<int:oid>/summary", methods=["GET"])
+@login_required
+def api_order_summary(oid):
+    """Return lazy, read-only, site-facing order details for History."""
+    db = get_db()
+    if order_visible_to(db, oid, current_user()) is None:
+        return jsonify(error="Current order information is unavailable."), 404
+    fields = order_display_fields(db, oid)
+    if fields is None:
+        return jsonify(error="Current order information is unavailable."), 404
+    return jsonify(order_number=oid, fields=fields)
 
 
 @app.route("/log")
