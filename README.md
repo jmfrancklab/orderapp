@@ -133,6 +133,16 @@ can log in until at least one address is added. From the PythonAnywhere bash con
 Run it as many times as needed. Once logged in, additional users can be added from
 the **Users** tab without touching the console.
 
+To reset a local user's forgotten password, run:
+
+    cd ~/orderapp
+    python3 reset_password.py user@example.com
+
+The next time that user signs in, the app prompts them to choose a new password.
+This does not invalidate any login sessions that are already active. When
+`auth_provider = "microsoft"`, passwords are managed and reset through Microsoft
+instead.
+
 **Resetting the database (nuclear option).** If the schema is out of date
 or you just want a clean slate, wipe and recreate in one step:
 
