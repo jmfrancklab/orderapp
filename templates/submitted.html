@@ -11,6 +11,20 @@ who submitted it. Filter and multi-level sort controls are in each column header
 
 {% from "_column_controls.html" import column_heading %}
 
+<aside class="submitted-ordering-notice" id="submitted-ordering-notice"
+       data-current-user="{{ current_email }}" aria-labelledby="submitted-ordering-notice-title"
+       hidden>
+  <div>
+    <strong id="submitted-ordering-notice-title">How to mark orders as ordered</strong>
+    <p>Set every item from the same purchase or invoice to <strong>In cart</strong>,
+    then click <strong>Mark all in cart as ordered</strong> at the bottom of this
+    page. A dialog will open to create one invoice for those items, where you can
+    add links to the invoice and receipt files.</p>
+  </div>
+  <button type="button" class="mini submitted-ordering-notice-dismiss"
+          id="dismiss-submitted-ordering-notice">Dismiss</button>
+</aside>
+
 {% macro invoice_cell(invoice) %}
   {% if invoice %}
   <span class="invoice-cell">
@@ -61,7 +75,8 @@ who submitted it. Filter and multi-level sort controls are in each column header
     <div class="row-line row-line-primary">
       <span class="ro" data-field="submitted_at">{{ (r.submitted_at or '')[:10] }}</span>
       <span class="ro" data-field="user_email">{{ r.user_email }}</span>
-      <input data-field="description" value="{{ r.description }}">
+      <textarea data-field="description"
+                rows="{{ r.description | description_rows(18) }}">{{ r.description }}</textarea>
       <span class="link-cell">
         <input data-field="link" value="{{ r.link }}" inputmode="url">
         <a class="link-out" href="{{ r.link }}" target="_blank" rel="noopener"

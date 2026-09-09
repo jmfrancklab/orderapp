@@ -7,6 +7,7 @@ identically under PythonAnywhere's WSGI).
 import os
 import re
 import sqlite3
+import textwrap
 import tomllib
 from datetime import datetime, timedelta, timezone
 from functools import cmp_to_key
@@ -23,7 +24,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.16.2"
+__version__ = "0.16.3"
 
 INVOICE_REIMBURSEMENT_DEFAULT = "madhur cc"
 INVOICE_REIMBURSEMENT_CHOICES = (
@@ -62,6 +63,26 @@ def fmt_cost(value):
         return '{:,.2f}'.format(float(s))
     except ValueError:
         return value or ''
+
+
+@app.template_filter("description_rows")
+def description_rows(value, columns):
+    """Estimate whether a description needs one or two rendered lines."""
+    text = str(value or "")
+    wrapped_lines = 0
+    for line in text.split("\n"):
+        wrapped_lines += max(
+            1,
+            len(textwrap.wrap(
+                line,
+                width=columns,
+                break_long_words=True,
+                break_on_hyphens=False,
+            )),
+        )
+        if wrapped_lines > 1:
+            return 2
+    return 1
 
 
 def _normalise_cost(raw):

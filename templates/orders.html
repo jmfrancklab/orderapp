@@ -51,7 +51,8 @@ immediately and will still be here next time you sign in.</p>
   {% for d in drafts %}
   <div class="order-row" data-id="{{ d.id }}">
     <div class="row-line row-line-primary">
-      <input data-field="description" value="{{ d.description }}" placeholder="What is it?">
+      <textarea data-field="description" rows="{{ d.description | description_rows(32) }}"
+                placeholder="What is it?">{{ d.description }}</textarea>
       <span class="link-cell">
         <input data-field="link" value="{{ d.link }}" placeholder="https://…" inputmode="url">
         <span class="row-note" aria-live="polite"></span>

@@ -1006,6 +1006,33 @@
 
   /* --- submitted-row bulk selection ---------------------------------- */
 
+  var submittedOrderingNotice = document.getElementById("submitted-ordering-notice");
+  if (submittedOrderingNotice) {
+    var noticeUser = (submittedOrderingNotice.dataset.currentUser || "")
+      .trim().toLowerCase();
+    var noticeStorageKey = "orderapp:submitted-ordering-notice-dismissed:" + noticeUser;
+    var noticeDismissed = false;
+    try {
+      noticeDismissed = window.localStorage.getItem(noticeStorageKey) === "1";
+    } catch (error) {
+      // Storage can be disabled; keep the notice dismissible for this page view.
+    }
+    submittedOrderingNotice.hidden = noticeDismissed;
+
+    var dismissSubmittedNotice = document.getElementById(
+      "dismiss-submitted-ordering-notice");
+    if (dismissSubmittedNotice) {
+      dismissSubmittedNotice.addEventListener("click", function () {
+        submittedOrderingNotice.hidden = true;
+        try {
+          window.localStorage.setItem(noticeStorageKey, "1");
+        } catch (error) {
+          // The notice is still dismissed until the page is loaded again.
+        }
+      });
+    }
+  }
+
   var selectionMode = document.getElementById("selection-mode");
   var changeSelectedBtn = document.getElementById("change-selected");
   var _bulkOverlay = null, _bulkPopup = null;

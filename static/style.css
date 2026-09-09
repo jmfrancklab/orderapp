@@ -69,6 +69,23 @@ main { width: 100%; padding: 1.2rem 1.2rem 3rem; margin: 0 auto; }
 }
 .explain a { color: var(--accent); }
 
+.submitted-ordering-notice {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem;
+  margin: 0 0 1rem; padding: .8rem 1rem;
+  border: 2px solid var(--alert); border-radius: 3px;
+  background: #f9dddd; color: #8f241c;
+}
+.submitted-ordering-notice[hidden] { display: none; }
+.submitted-ordering-notice strong { color: var(--alert); }
+.submitted-ordering-notice p { margin: .25rem 0 0; }
+.submitted-ordering-notice-dismiss {
+  flex: 0 0 auto; border-color: var(--alert); background: #fff;
+  color: var(--alert);
+}
+.submitted-ordering-notice-dismiss:hover {
+  background: var(--alert); color: #fff;
+}
+
 /* ------------------------------------------------- order sheet */
 .sheet {
   border-top: 1px solid var(--rule);
@@ -86,9 +103,9 @@ main { width: 100%; padding: 1.2rem 1.2rem 3rem; margin: 0 auto; }
 }
 .submitted-sheet .sheet-head, .submitted-row, .submitted-sheet .sheet-foot {
   grid-template-columns:
-    7rem minmax(0, 1fr) minmax(0, 1.4fr) minmax(0, 1.4fr)
+    7rem minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1.4fr)
     minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1.1fr)
-    5.5rem 3.5rem 12rem 6rem minmax(0, 1.2fr) 2.2rem;
+    5.5rem 3.5rem 9rem 6rem minmax(0, 1.2fr) 2.2rem;
 }
 .row-line { display: contents; }
 
@@ -170,13 +187,16 @@ main { width: 100%; padding: 1.2rem 1.2rem 3rem; margin: 0 auto; }
 .submitted-row.selected,
 .submitted-row.selected:nth-child(even) { background: var(--accent-soft); }
 
-input, select {
+input, select, textarea {
   width: 100%; padding: .4rem .5rem;
   border: 1px solid var(--rule); border-radius: 2px;
   background: #fff; color: var(--ink); font: inherit; font-size: .88rem;
 }
-input:focus, select:focus {
+input:focus, select:focus, textarea:focus {
   outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent);
+}
+textarea[data-field="description"] {
+  display: block; resize: none; overflow-y: auto;
 }
 input[data-field="link"] { font-family: var(--mono); font-size: .8rem; }
 
