@@ -3,6 +3,28 @@
 (function () {
   "use strict";
 
+  var historyTimezone = document.getElementById("history-timezone");
+  if (historyTimezone) {
+    try {
+      var browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (browserTimezone && browserTimezone !== historyTimezone.dataset.browserTimezone) {
+        var timezoneCookie = "history_timezone=" + encodeURIComponent(browserTimezone);
+        document.cookie = timezoneCookie + "; Path=/; SameSite=Lax" +
+          (window.location.protocol === "https:" ? "; Secure" : "");
+        // Confirm cookies work before reloading. Compare the requested zone,
+        // not the server fallback, so unsupported zones cannot cause a loop.
+        if (document.cookie.split(";").some(function (cookie) {
+          return cookie.trim() === timezoneCookie;
+        })) {
+          window.location.reload();
+          return;
+        }
+      }
+    } catch (e) {
+      // The server's explicitly labeled UTC fallback remains usable.
+    }
+  }
+
   var saveState = document.getElementById("save-state");
   var timers = {};          // "rowId:field" -> debounce timer
   var pending = 0;

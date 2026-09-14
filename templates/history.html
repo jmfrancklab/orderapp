@@ -1,9 +1,10 @@
 {% extends "base.html" %}
 {% block title %}History{% endblock %}
 {% block page_note %}
-<p class="explain">Every field change, tracker add/remove, and submission is logged
+<p class="explain" id="history-timezone" data-browser-timezone="{{ browser_timezone }}">Every field change, tracker add/remove, and submission is logged
 here. Filter and multi-level sort controls are in each column header. This view
-uses the 300 most recent entries before applying those controls.</p>
+uses the 300 most recent entries before applying those controls.
+Dates and time filters use {{ history_timezone }}.</p>
 {% endblock %}
 
 {% block content %}
@@ -31,8 +32,8 @@ uses the 300 most recent entries before applying those controls.</p>
     <tr class="hist-row" data-history-id="{{ r.id }}">
 
       <td class="hist-time">
-        {{ r.changed_at[:10] }}<br>
-        <span class="hist-time-sub">{{ r.changed_at[11:16] }}</span>
+        {{ r.changed_at_local[:10] }}<br>
+        <span class="hist-time-sub">{{ r.changed_at_local[11:16] }}</span>
       </td>
 
       <td class="hist-by">{{ r.changed_by }}</td>

@@ -11,7 +11,8 @@ import textwrap
 import tomllib
 from datetime import datetime, timedelta, timezone
 from functools import cmp_to_key
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from flask import (Flask, g, jsonify, redirect, render_template, request,
                    session, url_for)
@@ -24,7 +25,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.16.3"
+__version__ = "0.16.4"
 
 INVOICE_REIMBURSEMENT_DEFAULT = "madhur cc"
 INVOICE_REIMBURSEMENT_CHOICES = (
@@ -1093,6 +1094,27 @@ HISTORY_CHOICE_FILTERS = ("changed_by", "table_name", "field")
 HISTORY_SORT_FIELDS = HISTORY_TEXT_FILTERS + HISTORY_CHOICE_FILTERS
 
 
+def localize_history_rows(rows, timezone_name):
+    """Add presentation values without changing stored timestamps."""
+    try:
+        local_zone = ZoneInfo(timezone_name)
+    except (ZoneInfoNotFoundError, ValueError):
+        local_zone = timezone.utc
+        timezone_name = "UTC"
+    localized = []
+    for row in rows:
+        item = dict(row)
+        instant = datetime.fromisoformat(item["changed_at"])
+        if instant.tzinfo is None:
+            instant = instant.replace(tzinfo=timezone.utc)
+        item["changed_at_local"] = instant.astimezone(local_zone).strftime(
+            "%Y-%m-%d %H:%M"
+        )
+        item["changed_at_instant"] = instant.timestamp()
+        localized.append(item)
+    return localized, timezone_name
+
+
 def history_filters_from_args(args):
     """Return validated, URL-backed filter state for the History page."""
     filters = {}
@@ -1149,7 +1171,9 @@ def filter_history_rows(rows, filters):
             query = state["query"]
             if not query:
                 continue
-            value = _history_value(row, field)
+            value = (row["changed_at_local"]
+                     if field == "changed_at" and "changed_at_local" in row
+                     else _history_value(row, field))
             if state["regex"]:
                 pattern = compiled.get(field)
                 if pattern is None or not pattern.search(value):
@@ -1200,8 +1224,12 @@ def sort_history_rows(rows, sorts):
             right_missing = not bool(right_value)
             if left_missing != right_missing:
                 return 1 if left_missing else -1
-            left_key = left_value.casefold()
-            right_key = right_value.casefold()
+            if spec["field"] == "changed_at" and "changed_at_instant" in left:
+                left_key = left["changed_at_instant"]
+                right_key = right["changed_at_instant"]
+            else:
+                left_key = left_value.casefold()
+                right_key = right_value.casefold()
             if left_key == right_key:
                 continue
             result = -1 if left_key < right_key else 1
@@ -1716,11 +1744,16 @@ def history():
     recent_rows = db.execute(
         "SELECT * FROM order_history ORDER BY id DESC LIMIT 300"
     ).fetchall()
+    browser_timezone = unquote(request.cookies.get("history_timezone", ""))
+    recent_rows, history_timezone = localize_history_rows(
+        recent_rows, browser_timezone
+    )
     filters = history_filters_from_args(request.args)
     sorts = history_sorts_from_args(request.args)
     rows = sort_history_rows(filter_history_rows(recent_rows, filters), sorts)
     return render_template(
         "history.html", tab="history", rows=rows,
+        browser_timezone=browser_timezone, history_timezone=history_timezone,
         has_history=bool(recent_rows), history_filters=filters,
         history_sorts=sorts,
         history_filter_choices=history_filter_choices(recent_rows, filters),
