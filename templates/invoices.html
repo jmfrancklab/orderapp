@@ -3,22 +3,28 @@
 {% block page_note %}
 <p class="explain">Invoices created when in-cart orders are marked ordered.
 Click an invoice name to view its stored fields, use the small edit link to
-change them, or open its submitted orders as a filtered view.</p>
+change them, or open its submitted orders as a filtered view.
+Use the Reimbursement column filter to select reimbursement types.</p>
 {% endblock %}
 
 {% block content %}
+{% from "_column_controls.html" import column_heading %}
 
 {% macro open_link(url) -%}
   {% if url %}<a href="{{ url }}" target="_blank" rel="noopener">open ↗</a>{% else %}—{% endif %}
 {%- endmacro %}
 
-{% if invoices %}
+{% if has_invoices %}
+<div id="invoices-sheet"
+     data-filter-state="{{ invoice_filters | tojson | forceescape }}"
+     data-filter-choices="{{ invoice_filter_choices | tojson | forceescape }}">
 <div class="table-wrap">
   <table class="ref-table invoice-table">
     <thead>
       <tr>
         <th>Invoice</th><th>Created</th><th>Created by</th><th>Items</th>
-        <th>Invoice file</th><th>Receipt file</th><th>Tracking info</th><th>Reimbursement</th>
+        <th>Invoice file</th><th>Receipt file</th><th>Tracking info</th>
+        <th>{{ column_heading('Reimbursement', 'reimbursement_status', sortable=false) }}</th>
         <th>Submitted orders</th><th></th>
       </tr>
     </thead>
@@ -57,6 +63,11 @@ change them, or open its submitted orders as a filtered view.</p>
       {% endfor %}
     </tbody>
   </table>
+</div>
+{% if not invoices %}
+<p class="empty">No invoices match the selected reimbursement types.
+<a href="{{ url_for('invoices') }}">Clear filters</a></p>
+{% endif %}
 </div>
 {% else %}
 <p class="empty">No invoices yet. Mark in-cart orders as ordered from the Submitted tab to create one.</p>

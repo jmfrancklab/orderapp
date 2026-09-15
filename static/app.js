@@ -544,9 +544,12 @@
 
   var submittedSheet = document.getElementById("submitted-sheet");
   var historySheet = document.getElementById("history-sheet");
-  var filterSheet = submittedSheet || historySheet;
+  var invoicesSheet = document.getElementById("invoices-sheet");
+  var filterSheet = submittedSheet || historySheet || invoicesSheet;
   var FILTER_COLUMNS = submittedSheet
-    ? SUBMITTED_FILTER_COLUMNS : HISTORY_FILTER_COLUMNS;
+    ? SUBMITTED_FILTER_COLUMNS : invoicesSheet
+      ? [{ field: "reimbursement_status", type: "checkbox", label: "Reimbursement" }]
+      : HISTORY_FILTER_COLUMNS;
 
   if (filterSheet) {
     var initialFilterState = {};

@@ -1639,9 +1639,18 @@ def submitted():
 @app.route("/invoices")
 @login_required
 def invoices():
+    all_invoices = fetch_visible_invoices(get_db(), current_user())
+    selected = request.args.getlist("filter_reimbursement_status")
+    rows = [invoice for invoice in all_invoices
+            if not selected or invoice["reimbursement_status"] in selected]
     return render_template(
         "invoices.html", tab="invoices",
-        invoices=fetch_visible_invoices(get_db(), current_user()))
+        invoices=rows, has_invoices=bool(all_invoices),
+        invoice_filters={"reimbursement_status": {"selected": selected}},
+        invoice_filter_choices={"reimbursement_status": [
+            {"value": value, "label": label}
+            for value, label in INVOICE_REIMBURSEMENT_CHOICES
+        ]})
 
 
 @app.route("/vendors", methods=["GET", "POST"])
