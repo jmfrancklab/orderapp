@@ -24,7 +24,7 @@ def invoice_client(tmp_path, monkeypatch):
 
     conn = sqlite3.connect(test_db)
     conn.execute(
-        "INSERT INTO allowed_emails (email, added_by, added_at) VALUES (?,?,?)",
+        "INSERT INTO allowed_emails (email, added_by, added_at, expenditure_authorization) VALUES (?,?,?,1)",
         ("buyer@lab.org", "test", "2026-01-01"),
     )
     conn.executemany(
@@ -616,6 +616,7 @@ def test_submitted_page_has_opt_in_bulk_selection_and_favicon(invoice_client):
 def test_bulk_change_sets_project_status_and_adds_tracker(invoice_client):
     client, db_path, order_ids = invoice_client
     conn = sqlite3.connect(db_path)
+    conn.execute("UPDATE allowed_emails SET is_admin = 1 WHERE email = 'buyer@lab.org'")
     project_id = conn.execute(
         "INSERT INTO projects (name, notes) VALUES (?, ?)",
         ("Bulk project", ""),

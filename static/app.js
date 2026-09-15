@@ -31,18 +31,41 @@
 
   function setState(txt) { if (saveState) saveState.textContent = txt; }
 
-  function post(url, method, body, onOk) {
+  function checkedJson(response) {
+    return response.json().then(function (data) {
+      if (!response.ok) {
+        var error = new Error(data.error || "Request failed");
+        error.permissionDenied = data.code === "expenditure_authorization_required";
+        if (error.permissionDenied) {
+          var popup = document.createElement("dialog");
+          popup.setAttribute("aria-label", "Expenditure authorization required");
+          var message = document.createElement("p");
+          message.textContent = "⚠ " + data.error;
+          popup.appendChild(message);
+          var close = document.createElement("button");
+          close.textContent = "OK";
+          close.onclick = function () { popup.close(); };
+          popup.appendChild(close);
+          popup.addEventListener("close", function () { popup.remove(); });
+          document.body.appendChild(popup);
+          popup.showModal();
+        }
+        throw error;
+      }
+      return data;
+    });
+  }
+
+  function post(url, method, body, onOk, onError) {
     pending++; setState("saving…");
     fetch(url, {
       method: method,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body)
-    }).then(function (r) {
-      if (!r.ok) throw new Error(r.status);
-      return r.json();
-    }).then(function (data) {
+    }).then(checkedJson).then(function (data) {
       if (onOk) onOk(data);
-    }).catch(function () {
+    }).catch(function (error) {
+      if (onError) onError(error);
       setState("save failed — retrying on next edit");
       pending = 1; // keep the warning until something succeeds
     }).finally(function () {
@@ -112,7 +135,16 @@
     var field = input.dataset.field;
     var body = {};
     body[field] = input.value;
-    post("/api/orders/" + row.dataset.id, "POST", body, onOk);
+    post("/api/orders/" + row.dataset.id, "POST", body, function (data) {
+      if (field === "order_status") input.dataset.savedValue = body[field];
+      if (onOk) onOk(data);
+    }, function () {
+      if (field === "order_status") {
+        var original = input.querySelector("option[selected]");
+        input.value = input.dataset.savedValue || (original ? original.value : "not ready");
+        updateStatusClass(input);
+      }
+    });
   }
 
   function debounceSave(input) {
@@ -1031,32 +1063,25 @@
 
   /* --- submitted-row bulk selection ---------------------------------- */
 
-  var submittedOrderingNotice = document.getElementById("submitted-ordering-notice");
-  if (submittedOrderingNotice) {
-    var noticeUser = (submittedOrderingNotice.dataset.currentUser || "")
-      .trim().toLowerCase();
-    var noticeStorageKey = "orderapp:submitted-ordering-notice-dismissed:" + noticeUser;
-    var noticeDismissed = false;
+  function initializeOneTimeConfirm(notice) {
+    var noticeUser = (notice.dataset.currentUser || "").trim().toLowerCase();
+    var noticeStorageKey = "orderapp:" + notice.dataset.oneTimeConfirm + "-dismissed:" + noticeUser;
     try {
-      noticeDismissed = window.localStorage.getItem(noticeStorageKey) === "1";
-    } catch (error) {
-      // Storage can be disabled; keep the notice dismissible for this page view.
+      notice.hidden = window.localStorage.getItem(noticeStorageKey) === "1";
+    } catch (e) {
+      notice.hidden = false;
     }
-    submittedOrderingNotice.hidden = noticeDismissed;
-
-    var dismissSubmittedNotice = document.getElementById(
-      "dismiss-submitted-ordering-notice");
-    if (dismissSubmittedNotice) {
-      dismissSubmittedNotice.addEventListener("click", function () {
-        submittedOrderingNotice.hidden = true;
-        try {
-          window.localStorage.setItem(noticeStorageKey, "1");
-        } catch (error) {
-          // The notice is still dismissed until the page is loaded again.
-        }
-      });
-    }
+    notice.querySelector("[data-confirm-notice]").addEventListener("click", function () {
+      notice.hidden = true;
+      try {
+        window.localStorage.setItem(noticeStorageKey, "1");
+      } catch (e) {
+        // Storage may be disabled; confirmation still works for this page view.
+      }
+    });
   }
+
+  document.querySelectorAll("[data-one-time-confirm]").forEach(initializeOneTimeConfirm);
 
   var selectionMode = document.getElementById("selection-mode");
   var changeSelectedBtn = document.getElementById("change-selected");
@@ -1201,12 +1226,7 @@
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body)
-      }).then(function (response) {
-        return response.json().then(function (data) {
-          if (!response.ok) throw new Error(data.error || "could not apply changes");
-          return data;
-        });
-      }).then(function () {
+      }).then(checkedJson).then(function () {
         window.location.reload();
       }).catch(function (err) {
         error.textContent = err.message;
@@ -1271,12 +1291,7 @@
         body: JSON.stringify({
           order_ids: JSON.parse(markCartOrderedBtn.dataset.inCartIds || "[]")
         })
-      }).then(function (r) {
-        return r.json().then(function (data) {
-          if (!r.ok) throw new Error(data.error || "could not create invoice");
-          return data;
-        });
-      }).then(function (data) {
+      }).then(checkedJson).then(function (data) {
         showInvoicePopup({
           id: data.invoice_id,
           nickname: data.nickname,
@@ -1288,7 +1303,7 @@
       }).catch(function (err) {
         markCartOrderedBtn.disabled = false;
         markCartOrderedBtn.textContent = "Mark all in cart as ordered";
-        window.alert(err.message);
+        if (!err.permissionDenied) window.alert(err.message);
       });
     });
   }

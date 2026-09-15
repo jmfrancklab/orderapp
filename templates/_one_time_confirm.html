@@ -1,0 +1,12 @@
+{% macro one_time_confirm(key, current_email, title, button_label="I understand") %}
+<aside class="one-time-confirm" id="{{ key }}"
+       data-one-time-confirm="{{ key }}" data-current-user="{{ current_email }}"
+       aria-labelledby="{{ key }}-title" hidden>
+  <div>
+    <strong id="{{ key }}-title">{{ title }}</strong>
+    {{ caller() }}
+  </div>
+  <button type="button" class="mini one-time-confirm-dismiss"
+          id="dismiss-{{ key }}" data-confirm-notice>{{ button_label }}</button>
+</aside>
+{% endmacro %}

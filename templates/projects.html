@@ -5,6 +5,7 @@
 {% endblock %}
 
 {% block content %}
+{% if error %}<p role="alert">{{ error }}</p>{% endif %}
 
 {% for p in projects %}
 <form id="p{{ p.id }}" method="post" action="{{ url_for('update_project', pid=p.id) }}"></form>

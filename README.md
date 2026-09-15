@@ -174,6 +174,38 @@ to `ordered` without changing invoice reimbursement statuses:
 
 ## Microsoft Entra ID (Azure AD) authentication
 
+### Admin permissions (v0.16.5)
+
+On the first reload after upgrading, the temporary migration in `app.py:init_db`
+adds `allowed_emails.is_admin` and grants admin access to every existing user.
+Subsequent reloads preserve changes to permissions. New users default to non-admin.
+Admins can create projects, add users (including unfamiliar tracker emails), and
+change the **Admin** checkbox on the Users page. Non-admins can still assign
+existing users as trackers. Configured Microsoft domain sign-in remains enabled;
+users registered that way also start as non-admins.
+
+Keep at least one trusted admin checked. If needed, the database owner can restore
+admin access from the server console:
+
+```sql
+UPDATE allowed_emails SET is_admin = 1 WHERE email = 'your@email.com';
+```
+
+Remove the temporary migration in a later commit after existing deployments
+have upgraded, as described in `AGENTS.md`.
+
+In v0.16.6, **Expenditure authorization** is a separate checkbox managed by
+admins. Its one-time migration grants it to existing users; new users default
+to unchecked. All submissions start as **Not ready**. Moving an order to any
+other status requires expenditure authorization, including bulk changes and
+marking cart items ordered. Admin status alone does not grant this permission.
+
+Red confirmation notices use the `one_time_confirm` macro in
+`templates/_one_time_confirm.html` and `initializeOneTimeConfirm` in
+`static/app.js`. Give each notice a unique key; confirmation is remembered per
+user and browser. The Submitted page uses this for the project review reminder
+and the existing cart-to-invoice guide.
+
 The default `auth_provider = "local"` in `config.toml` uses the email
 allowlist.  To switch to real Microsoft sign-in, do the following two things:
 register the app with Microsoft, then set three environment variables and flip

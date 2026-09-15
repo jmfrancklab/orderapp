@@ -25,7 +25,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.16.4"
+__version__ = "0.16.6"
+
+EXPENDITURE_PERMISSION_MESSAGE = (
+    "you need to to review this with the project lead, so they can mark it as awaiting order"
+)
 
 INVOICE_REIMBURSEMENT_DEFAULT = "madhur cc"
 INVOICE_REIMBURSEMENT_CHOICES = (
@@ -312,7 +316,7 @@ def api_order_from_capture():
     cur = db.execute(
         "INSERT INTO orders (user_email, description, link, vendor_id, project_id, cost,"
         " order_status) VALUES (?,?,?,?,?,?,?)",
-        (email, desc, link, vendor_id, project_id, cost, "awaiting order"))
+        (email, desc, link, vendor_id, project_id, cost, "not ready"))
     db.commit()
     return jsonify(ok=True, order_id=cur.lastrowid)
 
@@ -483,7 +487,7 @@ def init_db():
         cost TEXT NOT NULL DEFAULT '',
         quantity INTEGER NOT NULL DEFAULT 1,
         status TEXT NOT NULL DEFAULT 'draft',         -- 'draft' | 'submitted'
-        order_status TEXT NOT NULL DEFAULT 'awaiting order',-- fulfillment status
+        order_status TEXT NOT NULL DEFAULT 'not ready',-- fulfillment status
         invoice_id INTEGER REFERENCES invoices(id) ON DELETE SET NULL,
         submitted_at TEXT                             -- locked after submission
     );
@@ -506,7 +510,9 @@ def init_db():
         id INTEGER PRIMARY KEY,
         email TEXT NOT NULL UNIQUE,
         added_by TEXT NOT NULL DEFAULT 'system',
-        added_at TEXT NOT NULL
+        added_at TEXT NOT NULL,
+        is_admin INTEGER NOT NULL DEFAULT 0,
+        expenditure_authorization INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS blocked_ips (
         id INTEGER PRIMARY KEY,
@@ -523,12 +529,29 @@ def init_db():
         detail TEXT NOT NULL DEFAULT ''
     );
     """)
+    # TEMPORARY admin bootstrap migration: remove after deployment (AGENTS.md).
+    # Grant existing users access only when introducing the column; restarting
+    # must never restore permissions that an admin has revoked.
+    db.execute("BEGIN IMMEDIATE")
+    if "is_admin" not in {
+        row[1] for row in db.execute("PRAGMA table_info(allowed_emails)")
+    }:
+        db.execute("ALTER TABLE allowed_emails ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
+        db.execute("UPDATE allowed_emails SET is_admin = 1")
+    # TEMPORARY expenditure bootstrap migration: remove after deployment (AGENTS.md).
+    if "expenditure_authorization" not in {
+        row[1] for row in db.execute("PRAGMA table_info(allowed_emails)")
+    }:
+        db.execute("ALTER TABLE allowed_emails ADD COLUMN expenditure_authorization INTEGER NOT NULL DEFAULT 0")
+        db.execute("UPDATE allowed_emails SET expenditure_authorization = 1")
+    db.commit()
+
     # Column-level migrations (idempotent — exception = already exists)
     for stmt in [
         "ALTER TABLE order_history ADD COLUMN table_name TEXT NOT NULL DEFAULT 'orders'",
         "ALTER TABLE vendors ADD COLUMN address TEXT DEFAULT ''",
         "ALTER TABLE orders ADD COLUMN cost TEXT NOT NULL DEFAULT ''",
-        "ALTER TABLE orders ADD COLUMN order_status TEXT NOT NULL DEFAULT 'awaiting order'",
+        "ALTER TABLE orders ADD COLUMN order_status TEXT NOT NULL DEFAULT 'not ready'",
         "ALTER TABLE orders ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1",
         "ALTER TABLE orders ADD COLUMN invoice_id INTEGER REFERENCES invoices(id) ON DELETE SET NULL",
         "ALTER TABLE invoices ADD COLUMN tracking_info TEXT NOT NULL DEFAULT ''",
@@ -1301,6 +1324,32 @@ def current_user():
     return session.get("email")
 
 
+def current_user_is_admin(db):
+    row = db.execute(
+        "SELECT is_admin FROM allowed_emails WHERE email = ?", (current_user(),)
+    ).fetchone()
+    return bool(row and row["is_admin"])
+
+
+def can_add_tracker_user(db, email):
+    return current_user_is_admin(db) or db.execute(
+        "SELECT 1 FROM allowed_emails WHERE email = ?", (email,)
+    ).fetchone() is not None
+
+
+def can_authorize_expenditure(db):
+    row = db.execute(
+        "SELECT expenditure_authorization FROM allowed_emails WHERE email = ?",
+        (current_user(),),
+    ).fetchone()
+    return bool(row and row["expenditure_authorization"])
+
+
+def expenditure_permission_denied():
+    return jsonify(error=EXPENDITURE_PERMISSION_MESSAGE,
+                   code="expenditure_authorization_required"), 403
+
+
 def login_required(view):
     from functools import wraps
 
@@ -1541,7 +1590,7 @@ def new_row():
     project_id = last["project_id"] if last else None
     db.execute(
         "INSERT INTO orders (user_email, project_id, order_status) VALUES (?,?,?)",
-        (email, project_id, "awaiting order"),
+        (email, project_id, "not ready"),
     )
     db.commit()
     return redirect(url_for("orders"))
@@ -1585,13 +1634,16 @@ def api_delete_order(oid):
 def submit_orders():
     db = get_db()
     ts = now_iso()
-    ids = [r["id"] for r in db.execute(
-        "SELECT id FROM orders WHERE user_email = ? AND status = 'draft'",
-        (current_user(),))]
-    for oid in ids:
-        log_change(db, oid, "status", "draft", "submitted")
+    drafts = db.execute(
+        "SELECT id, order_status FROM orders WHERE user_email = ? AND status = 'draft'",
+        (current_user(),)).fetchall()
+    ids = [row["id"] for row in drafts]
+    for row in drafts:
+        log_change(db, row["id"], "status", "draft", "submitted")
+        if row["order_status"] != "not ready":
+            log_change(db, row["id"], "order_status", row["order_status"], "not ready")
     db.execute(
-        "UPDATE orders SET status = 'submitted', order_status = 'awaiting order', submitted_at = ? "
+        "UPDATE orders SET status = 'submitted', order_status = 'not ready', submitted_at = ? "
         "WHERE user_email = ? AND status = 'draft'",
         (ts, current_user()))
     log_event(db, "orders_submitted", f"{len(ids)} order{'s' if len(ids) != 1 else ''} submitted")
@@ -1695,6 +1747,8 @@ def update_vendor(vid):
 def users():
     db = get_db()
     if request.method == "POST":
+        if not current_user_is_admin(db):
+            return "ERROR -- you do not have permissions to add a user!", 403
         email = request.form.get("email", "").strip().lower()
         if EMAIL_RE.match(email):
             cur = db.execute(
@@ -1708,7 +1762,47 @@ def users():
     emails = db.execute("SELECT * FROM allowed_emails ORDER BY added_at DESC").fetchall()
     blocked = db.execute("SELECT * FROM blocked_ips ORDER BY blocked_at DESC").fetchall()
     return render_template("users.html", tab="users", emails=emails, blocked=blocked,
-                           threshold=_IP_BLOCK_THRESHOLD)
+                           threshold=_IP_BLOCK_THRESHOLD,
+                           can_manage_admin=current_user_is_admin(db))
+
+
+@app.route("/users/<int:uid>/admin", methods=["POST"])
+@login_required
+def update_user_admin(uid):
+    db = get_db()
+    if not current_user_is_admin(db):
+        return "ERROR -- you do not have permissions to change admin status!", 403
+    row = db.execute("SELECT is_admin FROM allowed_emails WHERE id = ?", (uid,)).fetchone()
+    if row is None:
+        return "User not found", 404
+    is_admin = 1 if request.form.get("is_admin") == "1" else 0
+    db.execute("UPDATE allowed_emails SET is_admin = ? WHERE id = ?", (is_admin, uid))
+    if row["is_admin"] != is_admin:
+        log_change(db, uid, "is_admin", row["is_admin"], is_admin,
+                   table_name="allowed_emails")
+    db.commit()
+    return redirect(url_for("users"))
+
+
+@app.route("/users/<int:uid>/expenditure-authorization", methods=["POST"])
+@login_required
+def update_user_expenditure_authorization(uid):
+    db = get_db()
+    if not current_user_is_admin(db):
+        return "ERROR -- you do not have permissions to change expenditure authorization!", 403
+    row = db.execute(
+        "SELECT expenditure_authorization FROM allowed_emails WHERE id = ?", (uid,)
+    ).fetchone()
+    if row is None:
+        return "User not found", 404
+    allowed = 1 if request.form.get("expenditure_authorization") == "1" else 0
+    db.execute("UPDATE allowed_emails SET expenditure_authorization = ? WHERE id = ?",
+               (allowed, uid))
+    if row["expenditure_authorization"] != allowed:
+        log_change(db, uid, "expenditure_authorization",
+                   row["expenditure_authorization"], allowed, table_name="allowed_emails")
+    db.commit()
+    return redirect(url_for("users"))
 
 
 @app.route("/users/<int:uid>/remove", methods=["POST"])
@@ -1843,6 +1937,11 @@ def api_patch_vendor(vid):
 def projects():
     db = get_db()
     if request.method == "POST":
+        if not current_user_is_admin(db):
+            return render_template(
+                "projects.html", tab="projects", projects=fetch_projects(db),
+                error="ERROR -- you do not have permissions to create a project!",
+            ), 403
         name = request.form.get("name", "").strip()
         if name:
             db.execute("INSERT OR IGNORE INTO projects (name, notes) VALUES (?,?)",
@@ -1957,6 +2056,8 @@ def api_bulk_update_orders():
     if status_requested:
         if order_status not in ORDER_STATUSES:
             return jsonify(error="invalid order status"), 400
+        if order_status != "not ready" and not can_authorize_expenditure(db):
+            return expenditure_permission_denied()
         if order_status == "ordered":
             return jsonify(
                 error="orders can only be marked ordered from the in-cart action"
@@ -1965,6 +2066,8 @@ def api_bulk_update_orders():
     tracker_email = str(data.get("tracker_email") or "").strip().lower()
     if tracker_requested and not EMAIL_RE.match(tracker_email):
         return jsonify(error="invalid tracker email"), 400
+    if tracker_requested and not can_add_tracker_user(db, tracker_email):
+        return jsonify(error="ERROR -- you do not have permissions to add a user!"), 403
     if not (project_requested or status_requested or tracker_requested):
         return jsonify(error="choose at least one change"), 400
 
@@ -2035,9 +2138,11 @@ def api_save(oid):
 
     data = request.get_json(silent=True) or {}
     requested_status = data.get("order_status")
-    if requested_status is not None:
+    if "order_status" in data:
         if requested_status not in ORDER_STATUSES:
             return jsonify(error="invalid order status"), 400
+        if requested_status != "not ready" and not can_authorize_expenditure(db):
+            return expenditure_permission_denied()
         if requested_status == "ordered" and order["order_status"] != "ordered":
             return jsonify(error="orders can only be marked ordered from the in-cart action"), 400
     sets, vals = [], []
@@ -2072,6 +2177,8 @@ def api_save(oid):
 def api_invoice_from_cart():
     """Group every visible in-cart order into an invoice and mark it ordered."""
     db = get_db()
+    if not can_authorize_expenditure(db):
+        return expenditure_permission_denied()
     email = current_user()
     requested_ids = (request.get_json(silent=True) or {}).get("order_ids")
     if isinstance(requested_ids, list):
@@ -2201,7 +2308,7 @@ def import_excel():
             "INSERT INTO orders (user_email, description, link, vendor_id, project_id,"
             " use_note, cost, quantity, order_status) VALUES (?,?,?,?,?,?,?,?,?)",
             (email, desc, link, vendor_id, project_id, use_note, cost, qty,
-             "awaiting order"))
+             "not ready"))
         inserted += 1
     log_event(db, "excel_import", f"imported {inserted} row{'s' if inserted != 1 else ''}")
     db.commit()
@@ -2304,6 +2411,8 @@ def api_add_tracker(oid):
     email = (request.get_json(silent=True) or {}).get("email", "").strip().lower()
     if not EMAIL_RE.match(email):
         return jsonify(error="invalid email"), 400
+    if not can_add_tracker_user(db, email):
+        return jsonify(error="ERROR -- you do not have permissions to add a user!"), 403
     cur = db.execute("INSERT OR IGNORE INTO trackers (order_id, email) VALUES (?,?)",
                      (oid, email))
     if cur.rowcount:

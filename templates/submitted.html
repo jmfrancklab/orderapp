@@ -11,19 +11,20 @@ who submitted it. Filter and multi-level sort controls are in each column header
 
 {% from "_column_controls.html" import column_heading %}
 
-<aside class="submitted-ordering-notice" id="submitted-ordering-notice"
-       data-current-user="{{ current_email }}" aria-labelledby="submitted-ordering-notice-title"
-       hidden>
-  <div>
-    <strong id="submitted-ordering-notice-title">How to mark orders as ordered</strong>
-    <p>Set every item from the same purchase or invoice to <strong>In cart</strong>,
-    then click <strong>Mark all in cart as ordered</strong> at the bottom of this
-    page. A dialog will open to create one invoice for those items, where you can
-    add links to the invoice and receipt files.</p>
-  </div>
-  <button type="button" class="mini submitted-ordering-notice-dismiss"
-          id="dismiss-submitted-ordering-notice">Dismiss</button>
-</aside>
+{% from "_one_time_confirm.html" import one_time_confirm %}
+{% call one_time_confirm("project-review-notice", current_email, "Review orders with the project lead") %}
+<p>Newly submitted orders now start as <strong>Not ready</strong> so they can be
+reviewed with the project lead before moving to <strong>Awaiting order</strong>.
+Even if you are the project lead, take a moment to double-check the order.
+Someone with expenditure authorization can mark it as awaiting order after review.</p>
+{% endcall %}
+
+{% call one_time_confirm("submitted-ordering-notice", current_email, "How to mark orders as ordered", "Dismiss") %}
+<p>Set every item from the same purchase or invoice to <strong>In cart</strong>,
+then click <strong>Mark all in cart as ordered</strong> at the bottom of this
+page. A dialog will open to create one invoice for those items, where you can
+add links to the invoice and receipt files.</p>
+{% endcall %}
 
 {% macro invoice_cell(invoice) %}
   {% if invoice %}

@@ -1,10 +1,13 @@
 {% extends "base.html" %}
 {% block title %}Users{% endblock %}
 {% block page_note %}
-<p class="explain">Any logged-in user can authorize new email addresses or unblock IPs
+<p class="explain">Admins can authorize new email addresses. Any logged-in user can unblock IPs
 here. An IP is blocked automatically after {{ threshold }} consecutive login attempts
 with an email that isn't on the allowlist. All changes are recorded in
 <code>order_history</code>.</p>
+<p class="explain">Admins can create projects and change admin status. New users start without admin access.</p>
+<p class="explain">Expenditure authorization allows moving orders beyond Not ready.
+Admins can grant or revoke this permission.</p>
 {% endblock %}
 
 {% block content %}
@@ -16,7 +19,7 @@ with an email that isn't on the allowlist. All changes are recorded in
 <div class="table-wrap">
 <table class="ref-table">
   <thead><tr>
-    <th>Email</th><th>Added by</th><th>Added at</th><th></th>
+    <th>Email</th><th>Added by</th><th>Added at</th><th>Admin</th><th>Expenditure authorization</th><th></th>
   </tr></thead>
   <tbody>
     {% for e in emails %}
@@ -24,6 +27,24 @@ with an email that isn't on the allowlist. All changes are recorded in
       <td class="ro">{{ e.email }}</td>
       <td class="ro">{{ e.added_by }}</td>
       <td class="ro">{{ e.added_at }}</td>
+      <td class="center">
+        <form method="post" action="{{ url_for('update_user_admin', uid=e.id) }}">
+          <input type="checkbox" name="is_admin" value="1"
+                 aria-label="Admin for {{ e.email }}"
+                 {% if e.is_admin %}checked{% endif %}
+                 {% if not can_manage_admin %}disabled{% endif %}
+                 onchange="this.form.submit()">
+        </form>
+      </td>
+      <td class="center">
+        <form method="post" action="{{ url_for('update_user_expenditure_authorization', uid=e.id) }}">
+          <input type="checkbox" name="expenditure_authorization" value="1"
+                 aria-label="Expenditure authorization for {{ e.email }}"
+                 {% if e.expenditure_authorization %}checked{% endif %}
+                 {% if not can_manage_admin %}disabled{% endif %}
+                 onchange="this.form.submit()">
+        </form>
+      </td>
       <td class="ref-row-actions">
         <button type="button" class="mini vdel reference-delete"
                 data-entity="users" data-record-id="{{ e.id }}"
@@ -32,13 +53,15 @@ with an email that isn't on the allowlist. All changes are recorded in
       </td>
     </tr>
     {% endfor %}
+    {% if can_manage_admin %}
     <tr class="new-row">
-      <td colspan="3">
+      <td colspan="5">
         <input form="uadd" name="email" type="email"
                placeholder="new@email.com" required>
       </td>
       <td><button form="uadd" type="submit" class="mini">Add</button></td>
     </tr>
+    {% endif %}
   </tbody>
 </table>
 </div>

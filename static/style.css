@@ -69,20 +69,20 @@ main { width: 100%; padding: 1.2rem 1.2rem 3rem; margin: 0 auto; }
 }
 .explain a { color: var(--accent); }
 
-.submitted-ordering-notice {
+.one-time-confirm {
   display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem;
   margin: 0 0 1rem; padding: .8rem 1rem;
   border: 2px solid var(--alert); border-radius: 3px;
   background: #f9dddd; color: #8f241c;
 }
-.submitted-ordering-notice[hidden] { display: none; }
-.submitted-ordering-notice strong { color: var(--alert); }
-.submitted-ordering-notice p { margin: .25rem 0 0; }
-.submitted-ordering-notice-dismiss {
+.one-time-confirm[hidden] { display: none; }
+.one-time-confirm strong { color: var(--alert); }
+.one-time-confirm p { margin: .25rem 0 0; }
+.one-time-confirm-dismiss {
   flex: 0 0 auto; border-color: var(--alert); background: #fff;
   color: var(--alert);
 }
-.submitted-ordering-notice-dismiss:hover {
+.one-time-confirm-dismiss:hover {
   background: var(--alert); color: #fff;
 }
 
