@@ -2,8 +2,8 @@
 {% block title %}Invoices{% endblock %}
 {% block page_note %}
 <p class="explain">Invoices created when in-cart orders are marked ordered.
-Click an invoice name to view its stored fields, use the small edit link to
-change them, or open its submitted orders as a filtered view.
+Click an invoice name to edit its details, or open its submitted orders as a
+filtered view.
 Use the Reimbursement column filter to select reimbursement types.</p>
 {% endblock %}
 
@@ -40,8 +40,6 @@ Use the Reimbursement column filter to select reimbursement types.</p>
                data-receipt-url="{{ invoice.receipt_url }}"
                data-tracking-info="{{ invoice.tracking_info }}"
                data-reimbursement-status="{{ invoice.reimbursement_status }}">{{ invoice.nickname }}</a>
-            <button type="button" class="invoice-edit"
-                    data-invoice-id="{{ invoice.id }}">edit</button>
           </span>
         </td>
         <td>{{ invoice.created_at[:10] }}</td>

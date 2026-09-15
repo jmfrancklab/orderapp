@@ -305,10 +305,6 @@ input[data-field="link"] { font-family: var(--mono); font-size: .8rem; }
 .invoice-name { color: var(--accent); font-weight: 700; }
 .invoice-cell { display: grid; justify-items: start; align-content: center; min-width: 0; }
 .invoice-cell .invoice-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
-.invoice-edit {
-  justify-self: start; border: 0; background: none; padding: 0;
-  color: #687582; cursor: pointer; font-size: .62rem; text-decoration: underline;
-}
 .invoice-item-count { color: #687582; font-size: .68rem; margin-top: .25rem; }
 .invoice-fields { display: grid; gap: .8rem; }
 .invoice-field { display: grid; grid-template-columns: 7rem 1fr; gap: .7rem; align-items: center; }
@@ -316,8 +312,6 @@ input[data-field="link"] { font-family: var(--mono); font-size: .8rem; }
   color: #5a6572; font-size: .72rem; font-weight: 600;
   letter-spacing: .06em; text-transform: uppercase;
 }
-.invoice-field-value { overflow-wrap: anywhere; }
-.invoice-field-value a { color: var(--accent); }
 .invoice-empty { color: #8a94a0; font-style: italic; }
 
 /* ------------------------------------------------- reference tables */

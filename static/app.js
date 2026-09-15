@@ -1284,7 +1284,7 @@
           receiptUrl: data.receipt_url || "",
           trackingInfo: data.tracking_info || "",
           reimbursementStatus: data.reimbursement_status || "madhur cc"
-        }, true, function () { window.location.reload(); });
+        }, function () { window.location.reload(); });
       }).catch(function (err) {
         markCartOrderedBtn.disabled = false;
         markCartOrderedBtn.textContent = "Mark all in cart as ordered";
@@ -1308,7 +1308,7 @@
       field === "tracking_info";
   }
 
-  function invoiceField(label, value, field, editing) {
+  function invoiceField(label, value, field) {
     var row = document.createElement("div");
     row.className = "invoice-field";
     var name = document.createElement("span");
@@ -1316,34 +1316,19 @@
     name.textContent = label;
     row.appendChild(name);
 
-    if (editing) {
-      var input = document.createElement("input");
-      input.type = isInvoiceUrlField(field) ? "url" : "text";
-      input.name = field;
-      input.value = value || "";
-      if (field === "nickname") input.required = true;
-      if (isInvoiceUrlField(field)) {
-        input.placeholder = "https://www.dropbox.com/…";
-      }
-      row.appendChild(input);
-    } else {
-      var shown = document.createElement("span");
-      shown.className = "invoice-field-value";
-      if (isInvoiceUrlField(field) && /^https?:\/\//i.test(value || "")) {
-        var link = document.createElement("a");
-        link.href = value; link.target = "_blank"; link.rel = "noopener";
-        link.textContent = "open ↗";
-        shown.appendChild(link);
-      } else {
-        shown.textContent = value || "Not added";
-        if (!value) shown.classList.add("invoice-empty");
-      }
-      row.appendChild(shown);
+    var input = document.createElement("input");
+    input.type = isInvoiceUrlField(field) ? "url" : "text";
+    input.name = field;
+    input.value = value || "";
+    if (field === "nickname") input.required = true;
+    if (isInvoiceUrlField(field)) {
+      input.placeholder = "https://www.dropbox.com/…";
     }
+    row.appendChild(input);
     return row;
   }
 
-  function invoiceReimbursementField(value, editing) {
+  function invoiceReimbursementField(value) {
     var row = document.createElement("div");
     row.className = "invoice-field";
     var name = document.createElement("span");
@@ -1352,24 +1337,16 @@
     row.appendChild(name);
 
     var choices = INVOICE_REIMBURSEMENT_CHOICES || [];
-    if (editing) {
-      var select = document.createElement("select");
-      select.name = "reimbursement_status";
-      choices.forEach(function (choice) {
-        var option = document.createElement("option");
-        option.value = choice[0];
-        option.textContent = choice[1];
-        option.selected = choice[0] === value;
-        select.appendChild(option);
-      });
-      row.appendChild(select);
-    } else {
-      var shown = document.createElement("span");
-      shown.className = "invoice-field-value";
-      var match = choices.find(function (choice) { return choice[0] === value; });
-      shown.textContent = match ? match[1] : value;
-      row.appendChild(shown);
-    }
+    var select = document.createElement("select");
+    select.name = "reimbursement_status";
+    choices.forEach(function (choice) {
+      var option = document.createElement("option");
+      option.value = choice[0];
+      option.textContent = choice[1];
+      option.selected = choice[0] === value;
+      select.appendChild(option);
+    });
+    row.appendChild(select);
     return row;
   }
 
@@ -1384,7 +1361,7 @@
     };
   }
 
-  function showInvoicePopup(invoice, editing, afterClose) {
+  function showInvoicePopup(invoice, afterClose) {
     closeInvoicePopup();
     _invoiceAfterClose = afterClose || null;
     var overlay = document.createElement("div");
@@ -1401,45 +1378,43 @@
     var head = document.createElement("div");
     head.className = "xl-popup-head";
     var title = document.createElement("strong");
-    title.textContent = editing ? "Edit invoice" : "Invoice " + invoice.nickname;
+    title.textContent = "Edit invoice";
     var close = document.createElement("button");
     close.type = "button"; close.className = "vendor-popup-x";
     close.textContent = "×"; close.onclick = closeInvoicePopup;
     head.appendChild(title); head.appendChild(close); pop.appendChild(head);
 
-    var fields = document.createElement(editing ? "form" : "div");
+    var fields = document.createElement("form");
     fields.className = "invoice-fields";
-    fields.appendChild(invoiceField("Nickname", invoice.nickname, "nickname", editing));
-    fields.appendChild(invoiceField("Invoice", invoice.invoiceUrl, "invoice_url", editing));
-    fields.appendChild(invoiceField("Receipt", invoice.receiptUrl, "receipt_url", editing));
-    fields.appendChild(invoiceField("Tracking info", invoice.trackingInfo, "tracking_info", editing));
-    fields.appendChild(invoiceReimbursementField(invoice.reimbursementStatus, editing));
+    fields.appendChild(invoiceField("Nickname", invoice.nickname, "nickname"));
+    fields.appendChild(invoiceField("Invoice", invoice.invoiceUrl, "invoice_url"));
+    fields.appendChild(invoiceField("Receipt", invoice.receiptUrl, "receipt_url"));
+    fields.appendChild(invoiceField("Tracking info", invoice.trackingInfo, "tracking_info"));
+    fields.appendChild(invoiceReimbursementField(invoice.reimbursementStatus));
 
-    if (editing) {
-      var actions = document.createElement("div");
-      actions.className = "xl-popup-actions";
-      actions.appendChild(makePopupBtn("Cancel", "mini", closeInvoicePopup));
-      var save = makePopupBtn("Save", "submit-btn", function () {});
-      save.type = "submit";
-      actions.appendChild(save);
-      fields.appendChild(actions);
-      fields.addEventListener("submit", function (e) {
-        e.preventDefault();
-        var nickname = fields.elements.nickname.value.trim();
-        if (!nickname) return;
-        save.disabled = true;
-        post("/api/invoices/" + invoice.id, "POST", {
-          nickname: nickname,
-          invoice_url: fields.elements.invoice_url.value.trim(),
-          receipt_url: fields.elements.receipt_url.value.trim(),
-          tracking_info: fields.elements.tracking_info.value.trim(),
-          reimbursement_status: fields.elements.reimbursement_status.value
-        }, function () { window.location.reload(); });
-      });
-    }
+    var actions = document.createElement("div");
+    actions.className = "xl-popup-actions";
+    actions.appendChild(makePopupBtn("Cancel", "mini", closeInvoicePopup));
+    var save = makePopupBtn("Save", "submit-btn", function () {});
+    save.type = "submit";
+    actions.appendChild(save);
+    fields.appendChild(actions);
+    fields.addEventListener("submit", function (e) {
+      e.preventDefault();
+      var nickname = fields.elements.nickname.value.trim();
+      if (!nickname) return;
+      save.disabled = true;
+      post("/api/invoices/" + invoice.id, "POST", {
+        nickname: nickname,
+        invoice_url: fields.elements.invoice_url.value.trim(),
+        receipt_url: fields.elements.receipt_url.value.trim(),
+        tracking_info: fields.elements.tracking_info.value.trim(),
+        reimbursement_status: fields.elements.reimbursement_status.value
+      }, function () { window.location.reload(); });
+    });
     pop.appendChild(fields);
     document.body.appendChild(pop);
-    if (editing) fields.elements.nickname.focus();
+    fields.elements.nickname.focus();
   }
 
   /* --- delegated events ---------------------------------------------- */
@@ -1509,13 +1484,7 @@
     var invoiceName = e.target.closest(".invoice-name");
     if (invoiceName) {
       e.preventDefault();
-      showInvoicePopup(invoiceDataFromLink(invoiceName), false);
-      return;
-    }
-    if (e.target.classList.contains("invoice-edit")) {
-      var invoiceLink = document.querySelector(
-        '.invoice-name[data-invoice-id="' + e.target.dataset.invoiceId + '"]');
-      if (invoiceLink) showInvoicePopup(invoiceDataFromLink(invoiceLink), true);
+      showInvoicePopup(invoiceDataFromLink(invoiceName));
       return;
     }
     // chip remove
