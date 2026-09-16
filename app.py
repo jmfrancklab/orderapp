@@ -1566,14 +1566,14 @@ def debug_health():
 
 @app.route("/orders")
 @login_required
-def orders():
+def orders(submission_error=None):
     db = get_db()
     email = current_user()
     drafts = db.execute(
         "SELECT * FROM orders WHERE user_email = ? AND status = 'draft' ORDER BY id",
         (email,)).fetchall()
     return render_template(
-        "orders.html", tab="orders", drafts=drafts,
+        "orders.html", tab="orders", drafts=drafts, submission_error=submission_error,
         vendors=fetch_vendors(db), projects=fetch_projects(db),
         trackers=trackers_for(db, [d["id"] for d in drafts]),
         tracker_email_choices=fetch_allowed_email_choices(db))
@@ -1635,8 +1635,11 @@ def submit_orders():
     db = get_db()
     ts = now_iso()
     drafts = db.execute(
-        "SELECT id, order_status FROM orders WHERE user_email = ? AND status = 'draft'",
+        "SELECT id, order_status, project_id FROM orders WHERE user_email = ? AND status = 'draft'",
         (current_user(),)).fetchall()
+    project_ids = {row["id"] for row in db.execute("SELECT id FROM projects")}
+    if any(row["project_id"] not in project_ids for row in drafts):
+        return orders(submission_error="Select a project for every order before submitting."), 400
     ids = [row["id"] for row in drafts]
     for row in drafts:
         log_change(db, row["id"], "status", "draft", "submitted")

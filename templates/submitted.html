@@ -117,7 +117,7 @@ add links to the invoice and receipt files.</p>
       {{ invoice_cell(invoice_by_id.get(r.invoice_id)) }}
       <span class="tracker-cell">
         <input class="tracker-input" type="email" list="tracker-email-options"
-               placeholder="email + Enter">
+               placeholder="Select email or type + Enter">
         <span class="chips">
           {% for t in trackers[r.id] %}
           <span class="chip">{{ t }}<button type="button" class="chip-x" data-email="{{ t }}">×</button></span>

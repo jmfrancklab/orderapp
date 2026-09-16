@@ -12,6 +12,9 @@ immediately and will still be here next time you sign in.</p>
 {% endblock %}
 
 {% block content %}
+{% if submission_error %}
+<p id="submission-error" role="alert">{{ submission_error }}</p>
+{% endif %}
 
 <div class="bookmarklet-bar">
   <a class="bookmarklet-link" href="{{ bookmarklet }}">📋 ACERT Capture</a>
@@ -71,7 +74,7 @@ immediately and will still be here next time you sign in.</p>
       <input data-field="quantity" type="number" min="1" value="{{ d.quantity }}" class="qty-input">
       <span class="tracker-cell">
         <input class="tracker-input" type="email" list="tracker-email-options"
-               placeholder="email + Enter">
+               placeholder="Select email or type + Enter">
         <span class="chips">
           {% for t in trackers[d.id] %}
           <span class="chip">{{ t }}<button type="button" class="chip-x" data-email="{{ t }}">×</button></span>
@@ -112,8 +115,7 @@ immediately and will still be here next time you sign in.</p>
     <button type="submit" class="add-btn" title="Add a row">＋</button>
   </form>
   {% if drafts %}
-  <form method="post" action="{{ url_for('submit_orders') }}"
-        onsubmit="return confirm('Submit all rows? They will move to the Submitted tab.');">
+  <form method="post" action="{{ url_for('submit_orders') }}" id="submit-orders">
     <button type="submit" class="submit-btn">Submit order</button>
   </form>
   <a href="{{ url_for('export_xlsx', view='drafts') }}" class="mini export-btn">Export to Excel</a>

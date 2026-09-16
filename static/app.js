@@ -534,6 +534,9 @@
   /* --- trackers ------------------------------------------------------ */
 
   function addChip(cell, email, orderId) {
+    if (Array.from(cell.querySelectorAll(".chip-x")).some(function (button) {
+      return button.dataset.email.toLowerCase() === email.toLowerCase();
+    })) return;
     var chip = document.createElement("span");
     chip.className = "chip";
     chip.textContent = email;
@@ -543,6 +546,53 @@
     chip.appendChild(x);
     cell.querySelector(".chips").appendChild(chip);
   }
+
+  function addTracker(input) {
+    var email = input.value.trim();
+    if (!email || input.dataset.addingTracker) return;
+    var row = rowOf(input);
+    input.dataset.addingTracker = "true";
+    post("/api/orders/" + row.dataset.id + "/trackers", "POST",
+         { email: email }, function (data) {
+           addChip(input.closest(".tracker-cell"), data.email, row.dataset.id);
+           if (input.value.trim() === email) input.value = "";
+           delete input.dataset.addingTracker;
+         }, function () { delete input.dataset.addingTracker; });
+  }
+
+  function acceptTrackerSuggestion(e) {
+    var input = e.target;
+    if (!input.classList.contains("tracker-input") || !input.list) return;
+    var email = input.value.trim().toLowerCase();
+    if (Array.from(input.list.options).some(function (option) {
+      return option.value.toLowerCase() === email;
+    })) addTracker(input);
+  }
+  document.addEventListener("input", acceptTrackerSuggestion);
+  document.addEventListener("change", acceptTrackerSuggestion);
+
+  function missingProject() {
+    return Array.from(document.querySelectorAll('.sheet select[data-field="project_id"]'))
+      .find(function (select) { return !select.value; });
+  }
+
+  function showProjectError(message) {
+    window.alert(message);
+    var missing = missingProject();
+    if (missing) missing.focus();
+  }
+
+  var submitOrders = document.getElementById("submit-orders");
+  if (submitOrders) submitOrders.addEventListener("submit", function (e) {
+    if (missingProject()) {
+      e.preventDefault();
+      showProjectError("Select a project for every order before submitting.");
+    } else if (!window.confirm("Submit all rows? They will move to the Submitted tab.")) {
+      e.preventDefault();
+    }
+  });
+  var submissionError = document.getElementById("submission-error");
+  if (submissionError) showProjectError(submissionError.textContent);
 
   /* --- column filters + sorting ---------------------------------------
      Both are encoded in GET parameters, so views remain bookmarkable. */
@@ -1483,16 +1533,7 @@
   document.addEventListener("keydown", function (e) {
     if (e.key !== "Enter" || !e.target.classList.contains("tracker-input")) return;
     e.preventDefault();
-    var input = e.target;
-    var email = input.value.trim();
-    if (!email) return;
-    var row = rowOf(input);
-    post("/api/orders/" + row.dataset.id + "/trackers", "POST",
-         { email: email },
-         function (data) {
-           addChip(input.closest(".tracker-cell"), data.email, row.dataset.id);
-           input.value = "";
-         });
+    addTracker(e.target);
   });
 
   document.addEventListener("click", function (e) {

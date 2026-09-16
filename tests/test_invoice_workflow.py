@@ -131,12 +131,13 @@ def test_ordered_cannot_be_selected_directly(invoice_client):
     assert "in-cart action" in response.get_json()["error"]
 
 
-def test_newly_submitted_order_awaits_order(invoice_client):
+def test_newly_submitted_order_starts_not_ready(invoice_client):
     client, db_path, _ = invoice_client
     conn = sqlite3.connect(db_path)
+    project = conn.execute("INSERT INTO projects (name) VALUES ('Test project')").lastrowid
     conn.execute(
-        "INSERT INTO orders (user_email, description, status) VALUES (?, ?, ?)",
-        ("buyer@lab.org", "new draft", "draft"),
+        "INSERT INTO orders (user_email, description, status, project_id) VALUES (?, ?, ?, ?)",
+        ("buyer@lab.org", "new draft", "draft", project),
     )
     conn.commit()
     conn.close()
@@ -151,7 +152,7 @@ def test_newly_submitted_order_awaits_order(invoice_client):
     ).fetchone()
     conn.close()
     assert status == "submitted"
-    assert order_status == "awaiting order"
+    assert order_status == "not ready"
 
 
 def test_status_save_returns_count_for_filtered_page_button(invoice_client):
