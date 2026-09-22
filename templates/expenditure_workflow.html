@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Expenditure workflow{% endblock %}
+{% block page_note %}
+<p class="explain">Required means that a user must have expenditure authorization to make that status change.
+Not required removes only that permission requirement. Admin status does not bypass these rules.</p>
+<p class="explain">Items can become Ordered only through the In cart action, which creates an invoice.
+Other transitions into Ordered cannot be performed directly, regardless of the setting below.
+Received items still require a location. Changes apply to all users immediately after saving.</p>
+{% endblock %}
+{% block content %}
+<h2>Expenditure workflow</h2>
+<p><a href="{{ url_for('users') }}">Back to Users</a></p>
+{% if error %}<p role="alert">{{ error }}</p>{% endif %}
+{% if saved and not error %}<p role="status">Workflow settings saved.</p>{% endif %}
+{% if rules %}
+{% if can_edit %}<form method="post" action="{{ url_for('expenditure_workflow_settings') }}">{% endif %}
+<div class="table-wrap">
+<table class="ref-table">
+  <thead><tr><th scope="col">From</th><th scope="col">To</th><th scope="col">Expenditure authorization</th></tr></thead>
+  <tbody>
+  {% for source, target in pairs %}
+    <tr>
+      <td>{{ source|capitalize }}</td><td>{{ target|capitalize }}</td>
+      <td>
+      {% if can_edit %}
+        <select name="rule_{{ loop.index0 }}" aria-label="Expenditure authorization: {{ source }} to {{ target }}">
+          <option value="required" {% if rules[source][target] %}selected{% endif %}>Required</option>
+          <option value="not_required" {% if not rules[source][target] %}selected{% endif %}>Not required</option>
+        </select>
+      {% else %}{{ 'Required' if rules[source][target] else 'Not required' }}{% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% if can_edit %}<p><button type="submit">Save changes</button></p></form>{% endif %}
+{% endif %}
+{% endblock %}
