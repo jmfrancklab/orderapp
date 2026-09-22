@@ -4,7 +4,9 @@
 <p class="explain">By default, this shows submitted orders you placed or are
 tracking; the Trackers filter can show every submitted order. Everything stays
 editable — and edits are autosaved and logged — except the submission date and
-who submitted it. Filter and multi-level sort controls are in each column header.</p>
+who submitted it. Received items require a location; locations are cleared if an
+item leaves Received. New location names require confirmation. Filter and
+multi-level sort controls are in the applicable column headers.</p>
 {% endblock %}
 
 {% block content %}
@@ -49,6 +51,7 @@ add links to the invoice and receipt files.</p>
      data-current-user="{{ current_email }}">
   <div class="sheet-head">
     <div class="row-line row-line-primary">
+      <span>Key</span>
       {{ column_heading('Submitted', 'submitted_at') }}
       {{ column_heading('By', 'user_email') }}
       {{ column_heading('Description', 'description') }}
@@ -61,6 +64,7 @@ add links to the invoice and receipt files.</p>
       {{ column_heading('Cost', 'cost') }}
       {{ column_heading('Qty', 'quantity', 'qty-head') }}
       {{ column_heading('Status', 'order_status') }}
+      <span>Location</span>
       {{ column_heading('Invoice', 'invoice_id') }}
       {{ column_heading('Trackers', 'trackers') }}
       <span></span>
@@ -72,6 +76,7 @@ add links to the invoice and receipt files.</p>
     <input type="checkbox" class="row-select" value="{{ r.id }}"
            aria-label="Select {{ r.description or ('order ' ~ r.id) }}" hidden>
     <div class="row-line row-line-primary">
+      <strong class="item-key" title="Item key (hexadecimal)">0x{{ "%x" | format(r.id) }}</strong>
       <span class="ro" data-field="submitted_at">{{ (r.submitted_at or '')[:10] }}</span>
       <span class="ro" data-field="user_email">{{ r.user_email }}</span>
       <textarea data-field="description"
@@ -114,6 +119,9 @@ add links to the invoice and receipt files.</p>
         {% endif %}
         <option value="received"   {{ 'selected' if (r.order_status or '') == 'received'   }}>Received</option>
       </select>
+      <input data-field="location" value="{{ r.location }}" list="location-options"
+             aria-label="Location" placeholder="Location required"
+             {{ 'required' if r.order_status == 'received' else 'disabled' }}>
       {{ invoice_cell(invoice_by_id.get(r.invoice_id)) }}
       <span class="tracker-cell">
         <input class="tracker-input" type="email" list="tracker-email-options"
@@ -152,6 +160,10 @@ add links to the invoice and receipt files.</p>
   </div>
   {% endif %}
 </div>
+
+<datalist id="location-options">
+  {% for location in location_choices %}<option value="{{ location }}"></option>{% endfor %}
+</datalist>
 
 <datalist id="tracker-email-options">
   {% for email in tracker_email_choices %}

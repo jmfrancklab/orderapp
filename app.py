@@ -489,7 +489,11 @@ def init_db():
         status TEXT NOT NULL DEFAULT 'draft',         -- 'draft' | 'submitted'
         order_status TEXT NOT NULL DEFAULT 'not ready',-- fulfillment status
         invoice_id INTEGER REFERENCES invoices(id) ON DELETE SET NULL,
+        location TEXT NOT NULL DEFAULT '',
         submitted_at TEXT                             -- locked after submission
+    );
+    CREATE TABLE IF NOT EXISTS locations (
+        name TEXT PRIMARY KEY COLLATE NOCASE
     );
     CREATE TABLE IF NOT EXISTS trackers (
         order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
@@ -550,6 +554,7 @@ def init_db():
     for stmt in [
         "ALTER TABLE order_history ADD COLUMN table_name TEXT NOT NULL DEFAULT 'orders'",
         "ALTER TABLE vendors ADD COLUMN address TEXT DEFAULT ''",
+        "ALTER TABLE orders ADD COLUMN location TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE orders ADD COLUMN cost TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE orders ADD COLUMN order_status TEXT NOT NULL DEFAULT 'not ready'",
         "ALTER TABLE orders ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1",
@@ -1680,6 +1685,7 @@ def submitted():
     return render_template(
         "submitted.html", tab="submitted", rows=rows,
         vendors=vendors, projects=projects, trackers=all_trackers, invoices=invoices,
+        location_choices=[r[0] for r in db.execute("SELECT name FROM locations ORDER BY name")],
         submitted_filters=filters,
         submitted_sorts=sorts,
         submitted_filters_active=submitted_filters_active(filters),
@@ -2004,8 +2010,29 @@ def api_delete_reference_record(entity, record_id):
 # Everything is editable at any time EXCEPT who submitted (user_email) and
 # when (submitted_at). Every change is written to order_history.
 EDITABLE_FIELDS = {"description", "link", "vendor_id", "project_id", "use_note", "cost",
-                   "quantity", "order_status"}
+                   "quantity", "order_status", "location"}
 ORDER_STATUSES = {"not ready", "awaiting order", "in cart", "ordered", "received"}
+
+
+def validated_location(db, order, data):
+    """Validate the final state before any edits or history writes."""
+    status = data.get("order_status", order["order_status"])
+    value = data.get("location", order["location"])
+    if not isinstance(value, str):
+        raise ValueError("location must be text")
+    value = value.strip()
+    if status != "received":
+        if data.get("location"):
+            raise ValueError("location is only allowed for received items")
+        return ""
+    if not value:
+        raise ValueError("a location is required for received items")
+    existing = db.execute("SELECT name FROM locations WHERE name = ?", (value,)).fetchone()
+    if existing:
+        return existing[0]
+    if data.get("confirm_new_location") is not True:
+        raise ValueError("confirm the new location or choose an existing location")
+    return value
 
 
 @app.route("/api/orders/bulk", methods=["POST"])
@@ -2082,9 +2109,20 @@ def api_bulk_update_orders():
     if len(orders) != len(order_ids):
         return jsonify(error="one or more selected orders were not found"), 404
 
+    try:
+        locations = {order["id"]: validated_location(db, order, data) for order in orders}
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
     changed_orders = set()
     for order in orders:
         sets, values = [], []
+        location = locations[order["id"]]
+        if location:
+            db.execute("INSERT OR IGNORE INTO locations (name) VALUES (?)", (location,))
+        if location != order["location"]:
+            log_change(db, order["id"], "location", order["location"], location)
+            sets.append("location = ?")
+            values.append(location)
         if project_requested and order["project_id"] != project_id:
             log_change(db, order["id"], "project_id", order["project_id"], project_id)
             sets.append("project_id = ?")
@@ -2148,6 +2186,12 @@ def api_save(oid):
             return expenditure_permission_denied()
         if requested_status == "ordered" and order["order_status"] != "ordered":
             return jsonify(error="orders can only be marked ordered from the in-cart action"), 400
+    try:
+        data["location"] = validated_location(db, order, data)
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    if data["location"]:
+        db.execute("INSERT OR IGNORE INTO locations (name) VALUES (?)", (data["location"],))
     sets, vals = [], []
     for field, value in data.items():
         if field not in EDITABLE_FIELDS:
@@ -2168,8 +2212,8 @@ def api_save(oid):
     if sets:
         vals.append(oid)
         db.execute(f"UPDATE orders SET {', '.join(sets)} WHERE id = ?", vals)
-        db.commit()
-    response = {"ok": True}
+    db.commit()
+    response = {"ok": True, "location": data["location"]}
     if requested_status is not None:
         response["in_cart_count"] = visible_in_cart_count(db, email)
     return jsonify(response)

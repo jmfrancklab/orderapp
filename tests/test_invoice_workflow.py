@@ -631,6 +631,8 @@ def test_bulk_change_sets_project_status_and_adds_tracker(invoice_client):
             "order_ids": order_ids[:2],
             "project_id": project_id,
             "order_status": "received",
+            "location": "Common desk",
+            "confirm_new_location": True,
             "tracker_email": "Tracker@Lab.org",
         },
     )
@@ -664,7 +666,7 @@ def test_bulk_change_sets_project_status_and_adds_tracker(invoice_client):
     ]
     assert allowed == ("tracker@lab.org",)
     assert {field[0] for field in history_fields} == {
-        "project_id", "order_status", "tracker"
+        "project_id", "order_status", "location", "tracker"
     }
 
 

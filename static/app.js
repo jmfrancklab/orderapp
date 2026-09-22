@@ -129,16 +129,142 @@
     }
   }
 
-  function saveField(input, onOk) {
+  function locationDistance(a, b) {
+    a = a.toLowerCase(); b = b.toLowerCase();
+    var previous = Array.from({length: b.length + 1}, function (_, i) { return i; });
+    for (var i = 1; i <= a.length; i++) {
+      var next = [i];
+      for (var j = 1; j <= b.length; j++) {
+        next[j] = Math.min(next[j - 1] + 1, previous[j] + 1,
+          previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      }
+      previous = next;
+    }
+    return previous[b.length] / Math.max(a.length, b.length, 1);
+  }
+
+  function locationChoices() {
+    var list = document.getElementById("location-options");
+    return list ? Array.from(list.options).map(function (o) { return o.value; }) : [];
+  }
+
+  function locationDialog(value, choices) {
+    return new Promise(function (resolve) {
+      var dialog = document.createElement("dialog");
+      dialog.className = "location-dialog";
+      dialog.setAttribute("aria-label", choices ? "Confirm new location" : "Received item location");
+      var form = document.createElement("form");
+      var title = document.createElement("p");
+      title.textContent = choices ? 'Are you sure you want to add “' + value +
+        '”? Choose an existing location or confirm the new name.' :
+        "Where is this received item stored? A location is required.";
+      form.appendChild(title);
+      var input;
+      if (choices) {
+        choices.concat([value]).forEach(function (name, index) {
+          var label = document.createElement("label");
+          var radio = document.createElement("input");
+          radio.type = "radio"; radio.name = "location"; radio.value = name;
+          radio.required = true;
+          label.appendChild(radio);
+          label.appendChild(document.createTextNode(index === choices.length ?
+            'Add new location: ' + name : name));
+          form.appendChild(label);
+        });
+      } else {
+        input = document.createElement("input");
+        input.value = value; input.required = true;
+        input.setAttribute("list", "location-options");
+        input.setAttribute("aria-label", "Location");
+        form.appendChild(input);
+      }
+      var save = document.createElement("button");
+      save.type = "submit"; save.textContent = choices ? "Confirm location" : "Continue";
+      form.appendChild(save);
+      var cancel = document.createElement("button");
+      cancel.type = "button"; cancel.textContent = "Cancel";
+      cancel.onclick = function () { dialog.close(); };
+      form.appendChild(cancel);
+      var result = null;
+      form.onsubmit = function (event) {
+        event.preventDefault();
+        result = choices ? form.querySelector('input:checked').value : input.value.trim();
+        if (!result) { input.focus(); return; }
+        dialog.close();
+      };
+      dialog.addEventListener("close", function () { dialog.remove(); resolve(result); });
+      dialog.appendChild(form); document.body.appendChild(dialog); dialog.showModal();
+      if (input) input.focus();
+    });
+  }
+
+  async function chooseLocation(value) {
+    value = value.trim();
+    if (!value) value = await locationDialog("", null);
+    if (!value) return null;
+    var choices = locationChoices();
+    var existing = choices.find(function (name) { return name.toLowerCase() === value.toLowerCase(); });
+    if (existing) return {location: existing};
+    choices.sort(function (a, b) {
+      return locationDistance(value, a) - locationDistance(value, b) || a.localeCompare(b);
+    });
+    var selected = await locationDialog(value, choices);
+    return selected ? {location: selected, confirm_new_location: selected === value} : null;
+  }
+
+  async function saveField(input, onOk) {
     var row = rowOf(input);
     if (!row) return;
     var field = input.dataset.field;
     var body = {};
     body[field] = input.value;
+    var locationInput = row.querySelector('[data-field="location"]');
+    var statusInput = row.querySelector('[data-field="order_status"]');
+    var originalStatus = statusInput && (statusInput.dataset.savedValue ||
+      statusInput.querySelector("option[selected]").value);
+    if (locationInput && (field === "location" || field === "order_status")) {
+      if (row.dataset.locationSaving) return;
+      row.dataset.locationSaving = "1";
+      statusInput.disabled = true;
+      locationInput.disabled = true;
+      if (field === "location" || input.value === "received") {
+        var chosen = await chooseLocation(locationInput.value);
+        if (!chosen) {
+          if (field === "order_status") { input.value = originalStatus; updateStatusClass(input); }
+          locationInput.value = locationInput.dataset.savedValue === undefined ?
+            locationInput.defaultValue : locationInput.dataset.savedValue;
+          statusInput.disabled = false;
+          locationInput.disabled = statusInput.value !== "received";
+          delete row.dataset.locationSaving;
+          return;
+        }
+        Object.assign(body, chosen);
+      }
+    }
     post("/api/orders/" + row.dataset.id, "POST", body, function (data) {
+      if (locationInput && (field === "location" || field === "order_status")) {
+        statusInput.disabled = false;
+        locationInput.value = data.location;
+        locationInput.dataset.savedValue = data.location;
+        locationInput.disabled = statusInput.value !== "received";
+        locationInput.required = statusInput.value === "received";
+        delete row.dataset.locationSaving;
+        if (data.location && locationChoices().indexOf(data.location) < 0) {
+          var option = document.createElement("option"); option.value = data.location;
+          document.getElementById("location-options").appendChild(option);
+        }
+      }
       if (field === "order_status") input.dataset.savedValue = body[field];
       if (onOk) onOk(data);
-    }, function () {
+    }, function (error) {
+      if (locationInput && (field === "location" || field === "order_status")) {
+        statusInput.disabled = false;
+        locationInput.disabled = originalStatus !== "received";
+        locationInput.value = locationInput.dataset.savedValue === undefined ?
+          locationInput.defaultValue : locationInput.dataset.savedValue;
+        delete row.dataset.locationSaving;
+        if (!error.permissionDenied) window.alert(error.message);
+      }
       if (field === "order_status") {
         var original = input.querySelector("option[selected]");
         input.value = input.dataset.savedValue || (original ? original.value : "not ready");
@@ -1253,7 +1379,7 @@
     actions.appendChild(apply);
     form.appendChild(actions);
 
-    form.addEventListener("submit", function (e) {
+    form.addEventListener("submit", async function (e) {
       e.preventDefault();
       error.textContent = "";
       var body = { order_ids: orderIds };
@@ -1271,6 +1397,11 @@
       }
 
       apply.disabled = true;
+      if (body.order_status === "received") {
+        var chosen = await chooseLocation("");
+        if (!chosen) { apply.disabled = false; return; }
+        Object.assign(body, chosen);
+      }
       apply.textContent = "Applying\u2026";
       fetch("/api/orders/bulk", {
         method: "POST",
@@ -1485,7 +1616,7 @@
   /* --- delegated events ---------------------------------------------- */
 
   document.addEventListener("input", function (e) {
-    if (!e.target.matches("[data-field]")) return;
+    if (!e.target.matches("[data-field]") || e.target.matches('[data-field="location"], select')) return;
     debounceSave(e.target);
     if (e.target.matches('[data-field="link"]')) updateOpenLinkVisibility(e.target);
     if (e.target.matches('[data-field="cost"], [data-field="quantity"]')) updateOrderTotals();
@@ -1515,7 +1646,9 @@
 
   document.addEventListener("change", function (e) {
     var t = e.target;
-    if (t.matches("select[data-field]")) {
+    if (t.matches('input[data-field="location"]')) {
+      saveField(t);
+    } else if (t.matches("select[data-field]")) {
       if (t.classList.contains("status-select")) {
         saveField(t, function (data) {
           setInCartCount(data.in_cart_count);
