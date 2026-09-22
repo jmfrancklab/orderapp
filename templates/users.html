@@ -6,7 +6,7 @@ here. An IP is blocked automatically after {{ threshold }} consecutive login att
 with an email that isn't on the allowlist. All changes are recorded in
 <code>order_history</code>.</p>
 <p class="explain">Admins can create projects and change admin status. New users start without admin access.</p>
-<p class="explain">Expenditure authorization allows moving orders beyond Not ready.
+<p class="explain">Workflow settings determine which status changes require expenditure authorization.
 Admins can grant or revoke this permission.</p>
 {% endblock %}
 
@@ -19,7 +19,7 @@ Admins can grant or revoke this permission.</p>
 <div class="table-wrap">
 <table class="ref-table">
   <thead><tr>
-    <th>Email</th><th>Added by</th><th>Added at</th><th>Admin</th><th>Expenditure authorization</th><th></th>
+    <th>Email</th><th>Added by</th><th>Added at</th><th>Admin</th><th>Expenditure authorization<br><a href="{{ url_for('expenditure_workflow_settings') }}">Workflow settings</a></th><th></th>
   </tr></thead>
   <tbody>
     {% for e in emails %}

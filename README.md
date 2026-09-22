@@ -124,6 +124,49 @@ Because `app.py` computes the SQLite path from its own location, the database
 lands in `/home/YOUR_PYTHONANYWHERE_USERNAME/orderapp/orders.db` with no config. Add `orders.db` to
 `.gitignore` (already done) so pulls never clobber production data.
 
+Expenditure workflow rules live in `expenditure_workflow.yaml` beside the database.
+The app creates this file on first initialization, preserving the previous rules:
+authorization is required for every status transition except transitions into
+Not ready. Existing files are never overwritten during initialization or deployment.
+Install the updated `requirements.txt` (including PyYAML) when deploying this feature.
+The app must be able to write both the file and its containing directory, including
+the adjacent `.lock` file and temporary files used for atomic replacement.
+The YAML and lock file are ignored by Git. Back up the YAML alongside `orders.db`;
+removing it resets rules to defaults at the next initialization.
+
+On **Users**, follow **Workflow settings** beneath the Expenditure authorization
+column heading. Everyone logged in can view the 20 transitions; only admins can
+save changes. These rules apply immediately to individual and bulk status edits
+and the In cart → Ordered invoice action. They do not bypass the cart-only entry
+into Ordered or the location requirement for Received. Admin status does not
+itself grant expenditure authorization.
+
+The YAML contains `version: 1` and a `transitions` mapping. Each of the five source
+statuses (`not ready`, `awaiting order`, `in cart`, `ordered`, `received`) maps
+the four *other* statuses to YAML Booleans: `true` means authorization required,
+`false` means not required. For example, one source entry is:
+
+```yaml
+version: 1
+transitions:
+  not ready:
+    awaiting order: true
+    in cart: true
+    ordered: true
+    received: true
+  # The other four source entries are required in the actual file.
+```
+
+Prefer editing through the page. If editing the YAML manually, preserve the
+complete mapping and replace the file atomically. An invalid or unreadable file
+blocks status transitions with a configuration error; ordinary non-status edits
+remain available. Repair the file or its permissions on the server to recover.
+Page saves are atomic, serialized between workers, and recorded in order history;
+the most recently saved complete table wins if multiple admins edit simultaneously.
+The YAML is authoritative; its replacement and the SQLite audit commit are separate
+operations, so a process failure between them can leave a saved rule change without
+an audit entry. Manual file edits are not audited.
+
 **5. Authorize the first user.** The `allowed_emails` table starts empty, so nobody
 can log in until at least one address is added. From the PythonAnywhere bash console:
 

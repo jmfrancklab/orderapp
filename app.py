@@ -1,8 +1,7 @@
 """ACERT order interface — Flask + SQLite.
 
 Single-file backend (plus quotes.py for Dropbox/SharePoint quote handling).
-All state lives in orders.db next to this file (absolute path, so it works
-identically under PythonAnywhere's WSGI).
+Application data lives in orders.db; expenditure rules live in adjacent YAML.
 """
 import os
 import re
@@ -20,15 +19,16 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash, generate_password_hash
 
 import quotes
+import expenditure_workflow as workflow
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.16.6"
+__version__ = "0.16.7"
 
 EXPENDITURE_PERMISSION_MESSAGE = (
-    "you need to to review this with the project lead, so they can mark it as awaiting order"
+    "Expenditure authorization is required for this status transition."
 )
 
 INVOICE_REIMBURSEMENT_DEFAULT = "madhur cc"
@@ -450,7 +450,15 @@ def close_db(_exc):
         db.close()
 
 
+def workflow_path():
+    return os.path.join(os.path.dirname(os.path.abspath(DB_PATH)), "expenditure_workflow.yaml")
+
+
 def init_db():
+    try:
+        workflow.initialize(workflow_path())
+    except OSError:
+        app.logger.exception("Cannot initialize expenditure workflow configuration")
     db = sqlite3.connect(DB_PATH)
     db.executescript("""
     CREATE TABLE IF NOT EXISTS vendors (
@@ -1350,6 +1358,22 @@ def can_authorize_expenditure(db):
     return bool(row and row["expenditure_authorization"])
 
 
+def check_expenditure_transitions(db, orders, target):
+    transitions = [(order["order_status"], target) for order in orders
+                   if order["order_status"] != target]
+    if not transitions:
+        return None
+    try:
+        rules = workflow.read(workflow_path())
+        required = any(rules[source][destination] for source, destination in transitions)
+    except (workflow.WorkflowError, KeyError):
+        return jsonify(error="Expenditure workflow configuration is unavailable. Contact an admin.",
+                       code="expenditure_workflow_unavailable"), 503
+    if required and not can_authorize_expenditure(db):
+        return expenditure_permission_denied()
+    return None
+
+
 def expenditure_permission_denied():
     return jsonify(error=EXPENDITURE_PERMISSION_MESSAGE,
                    code="expenditure_authorization_required"), 403
@@ -1775,6 +1799,51 @@ def users():
                            can_manage_admin=current_user_is_admin(db))
 
 
+@app.route("/users/expenditure-workflow", methods=["GET", "POST"])
+@login_required
+def expenditure_workflow_settings():
+    db = get_db()
+    can_edit = current_user_is_admin(db)
+    if request.method == "POST" and not can_edit:
+        return "Only admins can change expenditure workflow rules.", 403
+    error = None
+    status = 200
+    rules = None
+    try:
+        rules = workflow.read(workflow_path())
+        if request.method == "POST":
+            expected = {f"rule_{i}" for i in range(len(workflow.PAIRS))}
+            if (set(request.form) != expected
+                    or any(len(request.form.getlist(key)) != 1
+                           or request.form[key] not in {"required", "not_required"}
+                           for key in expected)):
+                raise ValueError("Choose Required or Not required for all 20 transitions.")
+            updated = {source: {} for source in workflow.STATUSES}
+            for i, (source, target) in enumerate(workflow.PAIRS):
+                updated[source][target] = request.form[f"rule_{i}"] == "required"
+            previous = workflow.save(workflow_path(), updated)
+            for source, target in workflow.PAIRS:
+                if previous[source][target] != updated[source][target]:
+                    db.execute(
+                        "INSERT INTO order_history (changed_by, changed_at, field, "
+                        "old_value, new_value, table_name) VALUES (?,?,?,?,?,?)",
+                        (current_user(), now_iso(), f"{source} → {target}",
+                         "required" if previous[source][target] else "not required",
+                         "required" if updated[source][target] else "not required",
+                         "expenditure_workflow"))
+            db.commit()
+            return redirect(url_for("expenditure_workflow_settings", saved="1"))
+    except (workflow.WorkflowError, OSError):
+        error = "Expenditure workflow configuration could not be read or saved. Contact an admin to check the YAML file and its permissions."
+        status = 503
+    except ValueError as exc:
+        error = str(exc)
+        status = 400
+    return render_template("expenditure_workflow.html", tab="users", rules=rules,
+                           pairs=workflow.PAIRS, can_edit=can_edit, error=error,
+                           saved=request.args.get("saved") == "1"), status
+
+
 @app.route("/users/<int:uid>/admin", methods=["POST"])
 @login_required
 def update_user_admin(uid):
@@ -2011,7 +2080,7 @@ def api_delete_reference_record(entity, record_id):
 # when (submitted_at). Every change is written to order_history.
 EDITABLE_FIELDS = {"description", "link", "vendor_id", "project_id", "use_note", "cost",
                    "quantity", "order_status", "location"}
-ORDER_STATUSES = {"not ready", "awaiting order", "in cart", "ordered", "received"}
+ORDER_STATUSES = set(workflow.STATUSES)
 
 
 def validated_location(db, order, data):
@@ -2086,12 +2155,6 @@ def api_bulk_update_orders():
     if status_requested:
         if order_status not in ORDER_STATUSES:
             return jsonify(error="invalid order status"), 400
-        if order_status != "not ready" and not can_authorize_expenditure(db):
-            return expenditure_permission_denied()
-        if order_status == "ordered":
-            return jsonify(
-                error="orders can only be marked ordered from the in-cart action"
-            ), 400
 
     tracker_email = str(data.get("tracker_email") or "").strip().lower()
     if tracker_requested and not EMAIL_RE.match(tracker_email):
@@ -2109,6 +2172,14 @@ def api_bulk_update_orders():
     if len(orders) != len(order_ids):
         return jsonify(error="one or more selected orders were not found"), 404
 
+    if status_requested:
+        denied = check_expenditure_transitions(db, orders, order_status)
+        if denied is not None:
+            return denied
+        if order_status == "ordered":
+            return jsonify(
+                error="orders can only be marked ordered from the in-cart action"
+            ), 400
     try:
         locations = {order["id"]: validated_location(db, order, data) for order in orders}
     except ValueError as exc:
@@ -2182,8 +2253,9 @@ def api_save(oid):
     if "order_status" in data:
         if requested_status not in ORDER_STATUSES:
             return jsonify(error="invalid order status"), 400
-        if requested_status != "not ready" and not can_authorize_expenditure(db):
-            return expenditure_permission_denied()
+        denied = check_expenditure_transitions(db, [order], requested_status)
+        if denied is not None:
+            return denied
         if requested_status == "ordered" and order["order_status"] != "ordered":
             return jsonify(error="orders can only be marked ordered from the in-cart action"), 400
     try:
@@ -2224,8 +2296,6 @@ def api_save(oid):
 def api_invoice_from_cart():
     """Group every visible in-cart order into an invoice and mark it ordered."""
     db = get_db()
-    if not can_authorize_expenditure(db):
-        return expenditure_permission_denied()
     email = current_user()
     requested_ids = (request.get_json(silent=True) or {}).get("order_ids")
     if isinstance(requested_ids, list):
@@ -2253,6 +2323,9 @@ def api_invoice_from_cart():
     if not orders:
         return jsonify(error="no in-cart orders"), 400
 
+    denied = check_expenditure_transitions(db, orders, "ordered")
+    if denied is not None:
+        return denied
     cur = db.execute(
         "INSERT INTO invoices (nickname, created_by, created_at) VALUES ('', ?, ?)",
         (email, now_iso()))

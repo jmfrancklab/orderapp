@@ -18,7 +18,8 @@ multi-level sort controls are in the applicable column headers.</p>
 <p>Newly submitted orders now start as <strong>Not ready</strong> so they can be
 reviewed with the project lead before moving to <strong>Awaiting order</strong>.
 Even if you are the project lead, take a moment to double-check the order.
-Someone with expenditure authorization can mark it as awaiting order after review.</p>
+After review, mark it as awaiting order. The <a href="{{ url_for('expenditure_workflow_settings') }}">workflow settings</a>
+determine whether this change requires expenditure authorization.</p>
 {% endcall %}
 
 {% call one_time_confirm("submitted-ordering-notice", current_email, "How to mark orders as ordered", "Dismiss") %}

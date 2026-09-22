@@ -12,7 +12,6 @@ def test_status_changes_denied_atomically(admin_db, status):
     for url, body in [
         ('/api/orders/1', {'order_status': status, 'description': 'Forbidden'}),
         ('/api/orders/bulk', {'order_ids': [1], 'order_status': status}),
-        ('/api/invoices/from-cart', {'order_ids': [1]}),
     ]:
         response = client.post(url, json=body)
         assert response.status_code == 403

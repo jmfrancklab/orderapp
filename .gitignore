@@ -1,4 +1,6 @@
 orders.db
+expenditure_workflow.yaml
+expenditure_workflow.yaml.lock
 venv/
 __pycache__/
 *.pyc
