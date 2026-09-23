@@ -120,9 +120,11 @@ add links to the invoice and receipt files.</p>
         {% endif %}
         <option value="received"   {{ 'selected' if (r.order_status or '') == 'received'   }}>Received</option>
       </select>
+      <span class="location-cell">
       <input data-field="location" value="{{ r.location }}" list="location-options"
              aria-label="Location" placeholder="Location required"
-             {{ 'required' if r.order_status == 'received' else 'disabled' }}>
+             {{ 'required' if r.order_status == 'received' else 'hidden disabled' }}>
+      </span>
       {{ invoice_cell(invoice_by_id.get(r.invoice_id)) }}
       <span class="tracker-cell">
         <input class="tracker-input" type="email" list="tracker-email-options"

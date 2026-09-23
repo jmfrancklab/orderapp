@@ -1365,13 +1365,56 @@ def check_expenditure_transitions(db, orders, target):
         return None
     try:
         rules = workflow.read(workflow_path())
-        required = any(rules[source][destination] for source, destination in transitions)
+        group = "authorized" if can_authorize_expenditure(db) else "unauthorized"
+        denied = any(not rules[group][source][destination] for source, destination in transitions)
     except (workflow.WorkflowError, KeyError):
         return jsonify(error="Expenditure workflow configuration is unavailable. Contact an admin.",
                        code="expenditure_workflow_unavailable"), 503
-    if required and not can_authorize_expenditure(db):
-        return expenditure_permission_denied()
+    if denied:
+        return jsonify(error="This status transition is not allowed for your expenditure authorization level.",
+                       code="workflow_transition_forbidden"), 403
     return None
+
+
+def check_field_locks(order, data=None, fields=()):
+    """Validate edits before writes, including helper operations and destination locks."""
+    data = data or {}
+    try:
+        rules = workflow.read(workflow_path())
+    except workflow.WorkflowError:
+        return jsonify(error="Workflow configuration is unavailable.",
+                       code="expenditure_workflow_unavailable"), 503
+    source = order["order_status"]
+    target = data.get("order_status", source)
+    for field in workflow.FIELDS:
+        if field not in fields:
+            if field not in data:
+                continue
+            old, new = order[field], data[field]
+            if field in ("project_id", "vendor_id"):
+                old, new = str(old or ""), str(new or "")
+            elif field == "quantity":
+                old, new = str(old), str(new)
+            if old == new:
+                continue
+            if field == "location" and target != "received" and not new:
+                continue  # Required system clearing when leaving Received.
+        if any(rules["locks"].get(status, {}).get(field, False) for status in (source, target)):
+            return jsonify(error=f"{field.replace('_id', '').replace('_', ' ').capitalize()} is locked for this item status.",
+                           code="workflow_field_locked"), 403
+    return None
+
+
+@app.context_processor
+def workflow_ui_context():
+    if not current_user():
+        return {}
+    try:
+        rules = workflow.read(workflow_path())
+        group = "authorized" if can_authorize_expenditure(get_db()) else "unauthorized"
+        return {"workflow_ui": {"transitions": rules[group], "locks": rules["locks"]}}
+    except workflow.WorkflowError:
+        return {"workflow_ui": {"transitions": {}, "locks": {}, "unavailable": True}}
 
 
 def expenditure_permission_denied():
@@ -1812,25 +1855,34 @@ def expenditure_workflow_settings():
     try:
         rules = workflow.read(workflow_path())
         if request.method == "POST":
-            expected = {f"rule_{i}" for i in range(len(workflow.PAIRS))}
-            if (set(request.form) != expected
-                    or any(len(request.form.getlist(key)) != 1
-                           or request.form[key] not in {"required", "not_required"}
-                           for key in expected)):
-                raise ValueError("Choose Required or Not required for all 20 transitions.")
-            updated = {source: {} for source in workflow.STATUSES}
-            for i, (source, target) in enumerate(workflow.PAIRS):
-                updated[source][target] = request.form[f"rule_{i}"] == "required"
+            expected = {f"{group}_{i}" for group in workflow.GROUPS
+                        for i, (source, target) in enumerate(workflow.PAIRS)
+                        if workflow.possible(source, target)}
+            expected |= {f"lock_{i}_{j}" for i in range(len(workflow.STATUSES))
+                         for j in range(len(workflow.FIELDS))}
+            if (request.form.get("version") != "2" or
+                    set(request.form) - {"version"} - expected or
+                    any(request.form.getlist(key) != ["on"] for key in request.form if key != "version") or
+                    request.form.getlist("version") != ["2"]):
+                raise ValueError("Invalid workflow checkbox settings.")
+            updated = workflow.default_rules()
+            for group in workflow.GROUPS:
+                for i, (source, target) in enumerate(workflow.PAIRS):
+                    updated[group][source][target] = f"{group}_{i}" in request.form
+            for i, source in enumerate(workflow.STATUSES):
+                for j, field in enumerate(workflow.FIELDS):
+                    updated["locks"][source][field] = f"lock_{i}_{j}" in request.form
             previous = workflow.save(workflow_path(), updated)
-            for source, target in workflow.PAIRS:
-                if previous[source][target] != updated[source][target]:
-                    db.execute(
-                        "INSERT INTO order_history (changed_by, changed_at, field, "
-                        "old_value, new_value, table_name) VALUES (?,?,?,?,?,?)",
-                        (current_user(), now_iso(), f"{source} → {target}",
-                         "required" if previous[source][target] else "not required",
-                         "required" if updated[source][target] else "not required",
-                         "expenditure_workflow"))
+            for section in (*workflow.GROUPS, "locks"):
+                for source, row in updated[section].items():
+                    for target, value in row.items():
+                        if previous[section][source][target] != value:
+                            db.execute(
+                                "INSERT INTO order_history (changed_by, changed_at, field, "
+                                "old_value, new_value, table_name) VALUES (?,?,?,?,?,?)",
+                                (current_user(), now_iso(), f"{section}: {source} → {target}",
+                                 str(previous[section][source][target]).lower(), str(value).lower(),
+                                 "expenditure_workflow"))
             db.commit()
             return redirect(url_for("expenditure_workflow_settings", saved="1"))
     except (workflow.WorkflowError, OSError):
@@ -1840,7 +1892,8 @@ def expenditure_workflow_settings():
         error = str(exc)
         status = 400
     return render_template("expenditure_workflow.html", tab="users", rules=rules,
-                           pairs=workflow.PAIRS, can_edit=can_edit, error=error,
+                           pairs=workflow.PAIRS, statuses=workflow.STATUSES, fields=workflow.FIELDS,
+                           possible=workflow.possible, can_edit=can_edit, error=error,
                            saved=request.args.get("saved") == "1"), status
 
 
@@ -2184,6 +2237,15 @@ def api_bulk_update_orders():
         locations = {order["id"]: validated_location(db, order, data) for order in orders}
     except ValueError as exc:
         return jsonify(error=str(exc)), 400
+    for order in orders:
+        edits = {"location": locations[order["id"]]}
+        if project_requested:
+            edits["project_id"] = project_id
+        if status_requested:
+            edits["order_status"] = order_status
+        denied = check_field_locks(order, edits)
+        if denied is not None:
+            return denied
     changed_orders = set()
     for order in orders:
         sets, values = [], []
@@ -2262,6 +2324,9 @@ def api_save(oid):
         data["location"] = validated_location(db, order, data)
     except ValueError as exc:
         return jsonify(error=str(exc)), 400
+    denied = check_field_locks(order, data)
+    if denied is not None:
+        return denied
     if data["location"]:
         db.execute("INSERT OR IGNORE INTO locations (name) VALUES (?)", (data["location"],))
     sets, vals = [], []
@@ -2444,6 +2509,10 @@ def api_quote_vendor(oid):
     order = order_visible_to(db, oid, current_user())
     if order is None:
         return jsonify(error="not found"), 404
+    denied = check_field_locks(order, fields=("cost", "vendor_id"))
+    if denied is not None:
+        return denied
+
 
     link = (request.get_json(silent=True) or {}).get("link", "").strip()
     provider = quotes.classify_link(link)
@@ -2575,6 +2644,10 @@ def api_link_vendor(oid):
     order = order_visible_to(db, oid, current_user())
     if order is None:
         return jsonify(error="not found"), 404
+    denied = check_field_locks(order, fields=("vendor_id",))
+    if denied is not None:
+        return denied
+
 
     data = request.get_json(silent=True) or {}
     link = data.get("link", "").strip()
@@ -2642,6 +2715,10 @@ def api_fetch_price(oid):
     order = order_visible_to(db, oid, current_user())
     if order is None:
         return jsonify(error="not found"), 404
+    denied = check_field_locks(order, fields=("cost",))
+    if denied is not None:
+        return denied
+
     # Accept link from request body (may be ahead of the autosave debounce)
     data = request.get_json(silent=True) or {}
     link = data.get("link", "").strip() or (order["link"] or "").strip()

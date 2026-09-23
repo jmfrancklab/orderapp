@@ -36,6 +36,7 @@
 {% block content %}{% endblock %}
 </main>
 <script>
+var ORDER_WORKFLOW = {{ workflow_ui | default(none) | tojson }};
 var QUOTE_STORAGE_DOMAINS = {{ quote_storage_domains | tojson }};
 var INVOICE_REIMBURSEMENT_CHOICES = {{ invoice_reimbursement_choices | tojson }};
 </script>

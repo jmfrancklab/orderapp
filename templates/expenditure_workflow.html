@@ -1,39 +1,41 @@
 {% extends "base.html" %}
 {% block title %}Expenditure workflow{% endblock %}
-{% block page_note %}
-<p class="explain">Required means that a user must have expenditure authorization to make that status change.
-Not required removes only that permission requirement. Admin status does not bypass these rules.</p>
-<p class="explain">Items can become Ordered only through the In cart action, which creates an invoice.
-Other transitions into Ordered cannot be performed directly, regardless of the setting below.
-Received items still require a location. Changes apply to all users immediately after saving.</p>
-{% endblock %}
 {% block content %}
 <h2>Expenditure workflow</h2>
 <p><a href="{{ url_for('users') }}">Back to Users</a></p>
+<p>Checked transitions are allowed. Rows show the current status; columns show the destination.
+Admin status does not bypass these rules. Changes apply after saving.</p>
+<p>Ordered items must go through the cart action, which creates an invoice. Other transitions into Ordered are unavailable.
+Received items require a location.</p>
 {% if error %}<p role="alert">{{ error }}</p>{% endif %}
 {% if saved and not error %}<p role="status">Workflow settings saved.</p>{% endif %}
 {% if rules %}
-{% if can_edit %}<form method="post" action="{{ url_for('expenditure_workflow_settings') }}">{% endif %}
-<div class="table-wrap">
-<table class="ref-table">
-  <thead><tr><th scope="col">From</th><th scope="col">To</th><th scope="col">Expenditure authorization</th></tr></thead>
-  <tbody>
-  {% for source, target in pairs %}
-    <tr>
-      <td>{{ source|capitalize }}</td><td>{{ target|capitalize }}</td>
-      <td>
-      {% if can_edit %}
-        <select name="rule_{{ loop.index0 }}" aria-label="Expenditure authorization: {{ source }} to {{ target }}">
-          <option value="required" {% if rules[source][target] %}selected{% endif %}>Required</option>
-          <option value="not_required" {% if not rules[source][target] %}selected{% endif %}>Not required</option>
-        </select>
-      {% else %}{{ 'Required' if rules[source][target] else 'Not required' }}{% endif %}
-      </td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table>
-</div>
-{% if can_edit %}<p><button type="submit">Save changes</button></p></form>{% endif %}
+<form method="post">
+<input type="hidden" name="version" value="2">
+{% for group, title in [('authorized', 'Transitions with expenditure authorization'), ('unauthorized', 'Transitions without expenditure authorization')] %}
+<h3>{{ title }}</h3>
+<div class="table-wrap"><table class="ref-table">
+<thead><tr><th scope="col">From / To</th>{% for target in statuses %}<th scope="col">{{ target|capitalize }}</th>{% endfor %}</tr></thead>
+<tbody>{% for source in statuses %}<tr><th scope="row">{{ source|capitalize }}</th>
+{% for target in statuses %}<td>
+{% if source == target %}<span aria-label="No status change">—</span>
+{% else %}<input type="checkbox" name="{{ group }}_{{ pairs.index((source, target)) }}"
+aria-label="{{ title }}: {{ source }} to {{ target }}"
+{{ 'checked' if rules[group][source][target] else '' }}
+{{ 'disabled' if not can_edit or not possible(source, target) else '' }}>
+{% if target == 'ordered' and source == 'in cart' %}<small>Via cart action</small>{% endif %}
+{% endif %}</td>{% endfor %}</tr>{% endfor %}</tbody>
+</table></div>
+{% endfor %}
+<h3>Fields locked against editing</h3>
+<p>Checked fields cannot be edited in that status, including by admins or users with expenditure authorization.</p>
+<div class="table-wrap"><table class="ref-table">
+<thead><tr><th scope="col">Status / Field</th>{% for field in fields %}<th scope="col">{{ 'Description / name' if field == 'description' else field.replace('_id', '').replace('_', ' ')|capitalize }}</th>{% endfor %}</tr></thead>
+<tbody>{% for status in statuses %}{% set i = loop.index0 %}<tr><th scope="row">{{ status|capitalize }}</th>
+{% for field in fields %}<td><input type="checkbox" name="lock_{{ i }}_{{ loop.index0 }}"
+aria-label="Lock {{ field }} when {{ status }}" {{ 'checked' if rules.locks[status][field] else '' }} {{ 'disabled' if not can_edit else '' }}></td>{% endfor %}
+</tr>{% endfor %}</tbody></table></div>
+{% if can_edit %}<p><button type="submit">Save changes</button></p>{% endif %}
+</form>
 {% endif %}
 {% endblock %}

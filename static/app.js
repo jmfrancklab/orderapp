@@ -32,7 +32,10 @@
   function setState(txt) { if (saveState) saveState.textContent = txt; }
 
   function checkedJson(response) {
-    return response.json().then(function (data) {
+    return response.json().catch(function () {
+      throw new Error(response.ok ? "The server returned an unexpected response. Reload before trying again." :
+        "Couldn’t save: server unavailable (HTTP " + response.status + "). Please try again later.");
+    }).then(function (data) {
       if (!response.ok) {
         var error = new Error(data.error || "Request failed");
         error.permissionDenied = data.code === "expenditure_authorization_required";
@@ -128,6 +131,25 @@
         " · Unique items: " + n.toLocaleString();
     }
   }
+
+  function applyWorkflow(row) {
+    if (typeof ORDER_WORKFLOW === "undefined" || !ORDER_WORKFLOW) return;
+    var status = row.querySelector('[data-field="order_status"]');
+    var current = status ? status.value : "not ready";
+    var locks = ORDER_WORKFLOW.locks[current] || {};
+    row.querySelectorAll('[data-field]').forEach(function (input) {
+      var field = input.dataset.field;
+      if (field === "order_status") return;
+      input.disabled = !!ORDER_WORKFLOW.unavailable || !!locks[field] ||
+        (field === "location" && current !== "received");
+    });
+    if (status) Array.from(status.options).forEach(function (option) {
+      option.disabled = option.value === "ordered" || (option.value !== current &&
+        !(ORDER_WORKFLOW.transitions[current] || {})[option.value]);
+    });
+  }
+
+  document.querySelectorAll(".order-row").forEach(applyWorkflow);
 
   function locationDistance(a, b) {
     a = a.toLowerCase(); b = b.toLowerCase();
@@ -235,6 +257,8 @@
             locationInput.defaultValue : locationInput.dataset.savedValue;
           statusInput.disabled = false;
           locationInput.disabled = statusInput.value !== "received";
+          locationInput.hidden = statusInput.value !== "received";
+          locationInput.required = statusInput.value === "received";
           delete row.dataset.locationSaving;
           return;
         }
@@ -247,6 +271,7 @@
         locationInput.value = data.location;
         locationInput.dataset.savedValue = data.location;
         locationInput.disabled = statusInput.value !== "received";
+        locationInput.hidden = statusInput.value !== "received";
         locationInput.required = statusInput.value === "received";
         delete row.dataset.locationSaving;
         if (data.location && locationChoices().indexOf(data.location) < 0) {
@@ -255,11 +280,15 @@
         }
       }
       if (field === "order_status") input.dataset.savedValue = body[field];
+      if (data.workflow) ORDER_WORKFLOW = data.workflow;
       if (onOk) onOk(data);
+      if (typeof applyWorkflow === "function") applyWorkflow(row);
     }, function (error) {
       if (locationInput && (field === "location" || field === "order_status")) {
         statusInput.disabled = false;
         locationInput.disabled = originalStatus !== "received";
+        locationInput.hidden = originalStatus !== "received";
+        locationInput.required = originalStatus === "received";
         locationInput.value = locationInput.dataset.savedValue === undefined ?
           locationInput.defaultValue : locationInput.dataset.savedValue;
         delete row.dataset.locationSaving;
@@ -270,6 +299,8 @@
         input.value = input.dataset.savedValue || (original ? original.value : "not ready");
         updateStatusClass(input);
       }
+      if (typeof applyWorkflow === "function") applyWorkflow(row);
+      if (!locationInput && !error.permissionDenied) window.alert(error.message);
     });
   }
 
