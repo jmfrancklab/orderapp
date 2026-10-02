@@ -57,7 +57,7 @@ def test_all_submissions_start_not_ready(admin_db, authorized):
         db.execute('UPDATE allowed_emails SET expenditure_authorization = ?', (authorized,))
         project = db.execute("INSERT INTO projects (name) VALUES ('Test project')").lastrowid
         db.execute("INSERT INTO orders (user_email, status, order_status, project_id) VALUES ('user@lab.org', 'draft', 'awaiting order', ?)", (project,))
-    assert client.post('/orders/submit').status_code == 302
+    assert client.post('/orders/submit', data={'order_ids': [2]}).status_code == 302
     with sqlite3.connect(path) as db:
         assert db.execute('SELECT status, order_status FROM orders WHERE id=2').fetchone() == ('submitted', 'not ready')
     page = client.get('/submitted').get_data(as_text=True)

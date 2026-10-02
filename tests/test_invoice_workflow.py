@@ -135,14 +135,14 @@ def test_newly_submitted_order_starts_not_ready(invoice_client):
     client, db_path, _ = invoice_client
     conn = sqlite3.connect(db_path)
     project = conn.execute("INSERT INTO projects (name) VALUES ('Test project')").lastrowid
-    conn.execute(
+    draft_id = conn.execute(
         "INSERT INTO orders (user_email, description, status, project_id) VALUES (?, ?, ?, ?)",
         ("buyer@lab.org", "new draft", "draft", project),
-    )
+    ).lastrowid
     conn.commit()
     conn.close()
 
-    response = client.post("/orders/submit")
+    response = client.post("/orders/submit", data={"order_ids": [draft_id]})
     assert response.status_code == 302
 
     conn = sqlite3.connect(db_path)

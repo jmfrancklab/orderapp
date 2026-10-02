@@ -108,6 +108,10 @@ main { width: 100%; padding: 1.2rem 1.2rem 3rem; margin: 0 auto; }
     5.5rem 3.5rem 9rem minmax(8rem, 1fr) 6rem minmax(0, 1.2fr) 2.2rem;
 }
 .row-line { display: contents; }
+.draft-description { display: flex; align-items: center; gap: .4rem; min-width: 0; }
+.draft-description textarea { flex: 1; min-width: 0; }
+.draft-description .draft-select { width: auto; flex: none; }
+#select-all-drafts { width: auto; }
 
 /* totals row at the foot of an order sheet */
 .sheet-foot { border-bottom: none; border-top: 2px solid var(--ink); font-size: .85rem; }

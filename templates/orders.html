@@ -34,6 +34,10 @@ immediately and will still be here next time you sign in.</p>
   <span class="flag" title="Vendor record incomplete — see Vendors tab">?</span>
 {% endmacro %}
 
+{% if drafts %}
+<p><label><input type="checkbox" id="select-all-drafts"> Select all rows</label>
+  <span class="mini">Select the rows you want to submit. Other rows remain here.</span></p>
+{% endif %}
 <div class="sheet">
   <div class="sheet-head">
     <div class="row-line row-line-primary">
@@ -54,8 +58,13 @@ immediately and will still be here next time you sign in.</p>
   {% for d in drafts %}
   <div class="order-row" data-id="{{ d.id }}">
     <div class="row-line row-line-primary">
-      <textarea data-field="description" rows="{{ d.description | description_rows(32) }}"
-                placeholder="What is it?">{{ d.description }}</textarea>
+      <div class="draft-description">
+        <input type="checkbox" class="draft-select" name="order_ids" value="{{ d.id }}"
+               form="submit-orders" aria-label="Select row {{ loop.index }} for submission"
+               {{ 'checked' if d.id in selected_ids }}>
+        <textarea data-field="description" rows="{{ d.description | description_rows(32) }}"
+                  placeholder="What is it?">{{ d.description }}</textarea>
+      </div>
       <span class="link-cell">
         <input data-field="link" value="{{ d.link }}" placeholder="https://…" inputmode="url">
         <span class="row-note" aria-live="polite"></span>
@@ -116,7 +125,7 @@ immediately and will still be here next time you sign in.</p>
   </form>
   {% if drafts %}
   <form method="post" action="{{ url_for('submit_orders') }}" id="submit-orders">
-    <button type="submit" class="submit-btn">Submit order</button>
+    <button type="submit" class="submit-btn" id="submit-selected-orders">Submit selected rows</button>
   </form>
   <a href="{{ url_for('export_xlsx', view='drafts') }}" class="mini export-btn">Export to Excel</a>
   {% endif %}

@@ -729,7 +729,10 @@
   document.addEventListener("change", acceptTrackerSuggestion);
 
   function missingProject() {
-    return Array.from(document.querySelectorAll('.sheet select[data-field="project_id"]'))
+    return Array.from(document.querySelectorAll('.draft-select:checked'))
+      .map(function (checkbox) {
+        return checkbox.closest('.order-row').querySelector('select[data-field="project_id"]');
+      })
       .find(function (select) { return !select.value; });
   }
 
@@ -740,11 +743,37 @@
   }
 
   var submitOrders = document.getElementById("submit-orders");
+  var selectAllDrafts = document.getElementById("select-all-drafts");
+  var draftCheckboxes = Array.from(document.querySelectorAll('.draft-select'));
+  function updateDraftSelection() {
+    var count = draftCheckboxes.filter(function (checkbox) { return checkbox.checked; }).length;
+    var button = document.getElementById("submit-selected-orders");
+    if (button) {
+      button.textContent = "Submit selected rows (" + count + ")";
+      button.disabled = count === 0;
+    }
+    if (selectAllDrafts) {
+      selectAllDrafts.checked = count > 0 && count === draftCheckboxes.length;
+      selectAllDrafts.indeterminate = count > 0 && count < draftCheckboxes.length;
+    }
+  }
+  if (selectAllDrafts) selectAllDrafts.addEventListener("change", function () {
+    draftCheckboxes.forEach(function (checkbox) { checkbox.checked = selectAllDrafts.checked; });
+    updateDraftSelection();
+  });
+  draftCheckboxes.forEach(function (checkbox) {
+    checkbox.addEventListener("change", updateDraftSelection);
+  });
+  updateDraftSelection();
   if (submitOrders) submitOrders.addEventListener("submit", function (e) {
-    if (missingProject()) {
+    var count = draftCheckboxes.filter(function (checkbox) { return checkbox.checked; }).length;
+    if (!count) {
       e.preventDefault();
-      showProjectError("Select a project for every order before submitting.");
-    } else if (!window.confirm("Submit all rows? They will move to the Submitted tab.")) {
+      window.alert("Select at least one row to submit.");
+    } else if (missingProject()) {
+      e.preventDefault();
+      showProjectError("Select a project for every selected order before submitting.");
+    } else if (!window.confirm("Submit " + count + " selected row(s)? They will move to the Submitted tab.")) {
       e.preventDefault();
     }
   });

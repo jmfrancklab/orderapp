@@ -10,6 +10,12 @@ const alerts = [];
 let focused = false;
 let confirmations = 0;
 const project = {value: '', focus() { focused = true; }};
+const checkbox = {checked: true, addEventListener(type, handler) { this.onchange = handler; },
+  closest() { return {querySelector() { return project; }}; }};
+const unchecked = {checked: false, addEventListener() {},
+  closest() { return {querySelector() { return {value: ''}; }}; }};
+const selectAll = {checked: false, addEventListener(type, handler) { this.onchange = handler; }};
+const submitButton = {};
 const form = {addEventListener(type, handler) { listeners.submit = handler; }};
 const cell = {
   querySelectorAll() { return chips.map(chip => chip.child); },
@@ -24,8 +30,12 @@ const input = {
 const context = {
   document: {
     addEventListener(type, handler) { listeners[type] = handler; },
-    getElementById(id) { return id === 'submit-orders' ? form : null; },
-    querySelectorAll() { return [project]; },
+    getElementById(id) { return {'submit-orders': form, 'select-all-drafts': selectAll,
+      'submit-selected-orders': submitButton}[id] || null; },
+    querySelectorAll(selector) {
+      return selector === '.draft-select:checked'
+        ? [checkbox, unchecked].filter(item => item.checked) : [checkbox, unchecked];
+    },
     createElement() { return {dataset: {}, appendChild(child) { this.child = child; }}; }
   },
   window: {alert(message) { alerts.push(message); }, confirm() { confirmations++; return true; }},
@@ -64,11 +74,24 @@ let prevented = false;
 listeners.submit({preventDefault() { prevented = true; }});
 assert.equal(prevented, true);
 assert.equal(focused, true);
-assert.equal(alerts[0], 'Select a project for every order before submitting.');
+assert.equal(alerts[0], 'Select a project for every selected order before submitting.');
 assert.equal(confirmations, 0);
 project.value = '1';
 prevented = false;
 listeners.submit({preventDefault() { prevented = true; }});
 assert.equal(prevented, false);
+assert.equal(confirmations, 1);
+assert.equal(selectAll.indeterminate, true);
+selectAll.checked = true;
+selectAll.onchange();
+assert.equal(unchecked.checked, true);
+assert.equal(selectAll.indeterminate, false);
+assert.equal(submitButton.textContent, 'Submit selected rows (2)');
+selectAll.checked = false;
+selectAll.onchange();
+assert.equal(submitButton.disabled, true);
+prevented = false;
+listeners.submit({preventDefault() { prevented = true; }});
+assert.equal(prevented, true);
 assert.equal(confirmations, 1);
 console.log('Order interaction checks passed');
