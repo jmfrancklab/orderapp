@@ -25,7 +25,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.16.8"
+__version__ = "0.16.9"
 
 EXPENDITURE_PERMISSION_MESSAGE = (
     "Expenditure authorization is required for this status transition."
@@ -1638,7 +1638,7 @@ def debug_health():
 
 @app.route("/orders")
 @login_required
-def orders(submission_error=None, selected_ids=()):
+def orders(submission_error=None, selected_ids=(), submission_mode="all"):
     db = get_db()
     email = current_user()
     drafts = db.execute(
@@ -1646,7 +1646,7 @@ def orders(submission_error=None, selected_ids=()):
         (email,)).fetchall()
     return render_template(
         "orders.html", tab="orders", drafts=drafts, submission_error=submission_error,
-        selected_ids=selected_ids,
+        selected_ids=selected_ids, submission_mode=submission_mode,
         vendors=fetch_vendors(db), projects=fetch_projects(db),
         trackers=trackers_for(db, [d["id"] for d in drafts]),
         tracker_email_choices=fetch_allowed_email_choices(db))
@@ -1707,22 +1707,34 @@ def api_delete_order(oid):
 def submit_orders():
     db = get_db()
     ts = now_iso()
-    try:
-        ids = set(int(value) for value in request.form.getlist("order_ids"))
-    except ValueError:
-        return orders(submission_error="Invalid row selection. Select your rows again."), 400
-    if not ids:
-        return orders(submission_error="Select at least one row to submit."), 400
+    submission_mode = request.form.get("submission_mode", "selected")
+    if submission_mode not in ("all", "selected"):
+        return orders(submission_error="Invalid submission mode."), 400
     drafts = db.execute(
         "SELECT id, order_status, project_id FROM orders WHERE user_email = ? AND status = 'draft'",
         (current_user(),)).fetchall()
-    if not ids.issubset({row["id"] for row in drafts}):
-        return orders(submission_error="Some selected rows are no longer available. Select your rows again."), 400
-    drafts = [row for row in drafts if row["id"] in ids]
+    draft_ids = {row["id"] for row in drafts}
+    if submission_mode == "all":
+        selected_ids = draft_ids
+    else:
+        try:
+            selected_ids = {int(value) for value in request.form.getlist("order_ids")}
+        except ValueError:
+            return orders(submission_error="Invalid row selection. Select your rows again.",
+                          submission_mode="selected"), 400
+    if not selected_ids:
+        return orders(submission_error="Select at least one row to submit.",
+                      submission_mode=submission_mode), 400
+    if not selected_ids.issubset(draft_ids):
+        return orders(submission_error="Some selected rows are no longer available. Select your rows again.",
+                      submission_mode="selected"), 400
+    drafts = [row for row in drafts if row["id"] in selected_ids]
     project_ids = {row["id"] for row in db.execute("SELECT id FROM projects")}
     if any(row["project_id"] not in project_ids for row in drafts):
-        return orders(submission_error="Select a project for every selected order before submitting.",
-                      selected_ids=ids), 400
+        message = ("Select a project for every order before submitting." if submission_mode == "all"
+                   else "Select a project for every selected order before submitting.")
+        return orders(submission_error=message, selected_ids=selected_ids,
+                      submission_mode=submission_mode), 400
     for row in drafts:
         log_change(db, row["id"], "status", "draft", "submitted")
         if row["order_status"] != "not ready":
@@ -1730,8 +1742,8 @@ def submit_orders():
     db.executemany(
         "UPDATE orders SET status = 'submitted', order_status = 'not ready', submitted_at = ? "
         "WHERE id = ? AND user_email = ? AND status = 'draft'",
-        [(ts, oid, current_user()) for oid in ids])
-    log_event(db, "orders_submitted", f"{len(ids)} order{'s' if len(ids) != 1 else ''} submitted")
+        [(ts, oid, current_user()) for oid in selected_ids])
+    log_event(db, "orders_submitted", f"{len(selected_ids)} order{'s' if len(selected_ids) != 1 else ''} submitted")
     db.commit()
     return redirect(url_for("submitted"))
 

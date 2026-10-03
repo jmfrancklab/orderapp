@@ -283,6 +283,7 @@
       if (data.workflow) ORDER_WORKFLOW = data.workflow;
       if (onOk) onOk(data);
       if (typeof applyWorkflow === "function") applyWorkflow(row);
+      if (typeof updateSubmittedColumnWidths === "function") updateSubmittedColumnWidths();
     }, function (error) {
       if (locationInput && (field === "location" || field === "order_status")) {
         statusInput.disabled = false;
@@ -729,7 +730,7 @@
   document.addEventListener("change", acceptTrackerSuggestion);
 
   function missingProject() {
-    return Array.from(document.querySelectorAll('.draft-select:checked'))
+    return draftsToSubmit()
       .map(function (checkbox) {
         return checkbox.closest('.order-row').querySelector('select[data-field="project_id"]');
       })
@@ -744,36 +745,69 @@
 
   var submitOrders = document.getElementById("submit-orders");
   var selectAllDrafts = document.getElementById("select-all-drafts");
-  var draftCheckboxes = Array.from(document.querySelectorAll('.draft-select'));
+  var draftSubmissionMode = document.getElementById("draft-submission-mode");
+  var selectForSubmission = document.getElementById("select-for-submission");
+  var draftSelectionControls = document.getElementById("draft-selection-controls");
+  var submitDraftsButton = document.getElementById("submit-selected-orders");
+
+  function draftCheckboxes() {
+    return Array.from(document.querySelectorAll('.draft-select'));
+  }
+
+  function selectingDrafts() {
+    return draftSubmissionMode && draftSubmissionMode.value === "selected";
+  }
+
+  function draftsToSubmit() {
+    return draftCheckboxes().filter(function (checkbox) {
+      return !selectingDrafts() || checkbox.checked;
+    });
+  }
+
   function updateDraftSelection() {
-    var count = draftCheckboxes.filter(function (checkbox) { return checkbox.checked; }).length;
-    var button = document.getElementById("submit-selected-orders");
-    if (button) {
-      button.textContent = "Submit selected rows (" + count + ")";
-      button.disabled = count === 0;
-    }
+    if (!submitOrders) return;
+    var selecting = selectingDrafts();
+    var checkboxes = draftCheckboxes();
+    var count = draftsToSubmit().length;
+    checkboxes.forEach(function (checkbox) {
+      checkbox.hidden = !selecting;
+      checkbox.disabled = !selecting;
+    });
+    submitDraftsButton.textContent = selecting ? "Submit selected rows (" + count + ")" : "Submit all";
+    submitDraftsButton.disabled = count === 0;
+    selectForSubmission.textContent = selecting ? "Cancel selection" : "Select for Submission";
+    selectForSubmission.setAttribute("aria-pressed", String(selecting));
+    draftSelectionControls.hidden = !selecting;
     if (selectAllDrafts) {
-      selectAllDrafts.checked = count > 0 && count === draftCheckboxes.length;
-      selectAllDrafts.indeterminate = count > 0 && count < draftCheckboxes.length;
+      selectAllDrafts.checked = selecting && count > 0 && count === checkboxes.length;
+      selectAllDrafts.indeterminate = selecting && count > 0 && count < checkboxes.length;
     }
   }
-  if (selectAllDrafts) selectAllDrafts.addEventListener("change", function () {
-    draftCheckboxes.forEach(function (checkbox) { checkbox.checked = selectAllDrafts.checked; });
+  if (selectForSubmission) selectForSubmission.addEventListener("click", function () {
+    draftSubmissionMode.value = selectingDrafts() ? "all" : "selected";
+    draftCheckboxes().forEach(function (checkbox) { checkbox.checked = false; });
     updateDraftSelection();
   });
-  draftCheckboxes.forEach(function (checkbox) {
+  if (selectAllDrafts) selectAllDrafts.addEventListener("change", function () {
+    draftCheckboxes().forEach(function (checkbox) { checkbox.checked = selectAllDrafts.checked; });
+    updateDraftSelection();
+  });
+  draftCheckboxes().forEach(function (checkbox) {
     checkbox.addEventListener("change", updateDraftSelection);
   });
   updateDraftSelection();
   if (submitOrders) submitOrders.addEventListener("submit", function (e) {
-    var count = draftCheckboxes.filter(function (checkbox) { return checkbox.checked; }).length;
+    var count = draftsToSubmit().length;
     if (!count) {
       e.preventDefault();
       window.alert("Select at least one row to submit.");
     } else if (missingProject()) {
       e.preventDefault();
-      showProjectError("Select a project for every selected order before submitting.");
-    } else if (!window.confirm("Submit " + count + " selected row(s)? They will move to the Submitted tab.")) {
+      showProjectError(selectingDrafts() ? "Select a project for every selected order before submitting." :
+        "Select a project for every order before submitting.");
+    } else if (!window.confirm(selectingDrafts() ?
+        "Submit " + count + " selected row(s)? They will move to the Submitted tab." :
+        "Submit all rows? They will move to the Submitted tab.")) {
       e.preventDefault();
     }
   });
@@ -1191,6 +1225,49 @@
     updateHeaderControls();
   }
 
+  /* Fit short Submitted columns to their values, leaving room for Use.
+     Caps prevent a long email, vendor, or project from consuming the row. */
+  function updateSubmittedColumnWidths() {
+    if (!submittedSheet) return;
+    var measure = document.createElement("canvas").getContext("2d");
+    var rem = parseFloat(window.getComputedStyle(document.documentElement).fontSize);
+    var columns = [
+      {name: "key", selector: ".item-key", min: 2.5, max: 5},
+      {name: "buyer", selector: '[data-field="user_email"]', min: 6, max: 12},
+      {name: "vendor", selector: '[data-field="vendor_id"]', min: 6, max: 10},
+      {name: "project", selector: '[data-field="project_id"]', min: 6, max: 12},
+      {name: "status", selector: '[data-field="order_status"]', min: 7, max: 8},
+      {name: "location", selector: '[data-field="location"]:not([hidden])', min: 5, max: 10},
+      {name: "invoice", selector: ".invoice-name", min: 6, max: 10}
+    ];
+    columns.forEach(function (column) {
+      var width = column.min * rem;
+      submittedSheet.querySelectorAll(".submitted-row " + column.selector).forEach(function (input) {
+        var style = window.getComputedStyle(input);
+        measure.font = style.font;
+        var texts = input.tagName === "SELECT" ? Array.from(
+          column.name === "status" ? input.options : input.selectedOptions
+        ).map(function (option) { return option.textContent.trim(); }) :
+          [input.value || input.textContent.trim()];
+        var padding = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight) + 2;
+        if (input.tagName === "SELECT") padding += 22; // native dropdown arrow
+        if (column.name === "vendor") padding += 20; // incomplete-vendor flag
+        texts.forEach(function (text) {
+          width = Math.max(width, measure.measureText(text).width + padding);
+        });
+      });
+      submittedSheet.style.setProperty("--" + column.name + "-width",
+        Math.min(width, column.max * rem) + "px");
+    });
+  }
+  if (submittedSheet) {
+    updateSubmittedColumnWidths();
+    submittedSheet.addEventListener("change", updateSubmittedColumnWidths);
+    submittedSheet.addEventListener("input", function (e) {
+      if (e.target.matches('[data-field="location"]')) updateSubmittedColumnWidths();
+    });
+  }
+
   /* --- lazy, read-only order details from History -------------------- */
 
   var _orderSummaryOverlay = null, _orderSummaryPopup = null;
@@ -1493,6 +1570,7 @@
         }
       });
       updateSelectionControls();
+      updateSubmittedColumnWidths();
     });
     document.querySelectorAll(".row-select").forEach(function (checkbox) {
       checkbox.addEventListener("change", function () {
@@ -1761,7 +1839,12 @@
     if (e.target.classList.contains("del-yes")) {
       var row = rowOf(e.target);
       post("/api/orders/" + row.dataset.id + "/delete", "POST", {},
-           function () { row.remove(); updateOrderTotals(); });
+           function () {
+             row.remove();
+             updateOrderTotals();
+             updateDraftSelection();
+             updateSubmittedColumnWidths();
+           });
       return;
     }
   });

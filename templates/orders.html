@@ -35,7 +35,8 @@ immediately and will still be here next time you sign in.</p>
 {% endmacro %}
 
 {% if drafts %}
-<p><label><input type="checkbox" id="select-all-drafts"> Select all rows</label>
+<p id="draft-selection-controls" {{ 'hidden' if submission_mode != 'selected' }}>
+  <label><input type="checkbox" id="select-all-drafts"> Select all rows</label>
   <span class="mini">Select the rows you want to submit. Other rows remain here.</span></p>
 {% endif %}
 <div class="sheet">
@@ -61,6 +62,7 @@ immediately and will still be here next time you sign in.</p>
       <div class="draft-description">
         <input type="checkbox" class="draft-select" name="order_ids" value="{{ d.id }}"
                form="submit-orders" aria-label="Select row {{ loop.index }} for submission"
+               {{ 'hidden disabled' if submission_mode != 'selected' }}
                {{ 'checked' if d.id in selected_ids }}>
         <textarea data-field="description" rows="{{ d.description | description_rows(32) }}"
                   placeholder="What is it?">{{ d.description }}</textarea>
@@ -125,7 +127,9 @@ immediately and will still be here next time you sign in.</p>
   </form>
   {% if drafts %}
   <form method="post" action="{{ url_for('submit_orders') }}" id="submit-orders">
-    <button type="submit" class="submit-btn" id="submit-selected-orders">Submit selected rows</button>
+    <input type="hidden" name="submission_mode" id="draft-submission-mode" value="{{ submission_mode }}">
+    <button type="submit" class="submit-btn" id="submit-selected-orders">{{ 'Submit selected rows' if submission_mode == 'selected' else 'Submit all' }}</button>
+    <button type="button" id="select-for-submission" aria-pressed="{{ 'true' if submission_mode == 'selected' else 'false' }}">{{ 'Cancel selection' if submission_mode == 'selected' else 'Select for Submission' }}</button>
   </form>
   <a href="{{ url_for('export_xlsx', view='drafts') }}" class="mini export-btn">Export to Excel</a>
   {% endif %}

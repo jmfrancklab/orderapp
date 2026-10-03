@@ -101,11 +101,21 @@ main { width: 100%; padding: 1.2rem 1.2rem 3rem; margin: 0 auto; }
   padding: .45rem .2rem;
   border-bottom: 1px solid var(--rule);
 }
+.submitted-sheet {
+  --key-width: 2.75rem;
+  --buyer-width: 8rem;
+  --vendor-width: 8rem;
+  --project-width: 8rem;
+  --status-width: 8rem;
+  --location-width: 5rem;
+  --invoice-width: 6rem;
+}
 .submitted-sheet .sheet-head, .submitted-row, .submitted-sheet .sheet-foot {
   grid-template-columns:
-    3.5rem 7rem minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1.4fr)
-    minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1.1fr)
-    5.5rem 3.5rem 9rem minmax(8rem, 1fr) 6rem minmax(0, 1.2fr) 2.2rem;
+    var(--key-width) 7rem var(--buyer-width) minmax(0, 1fr) minmax(0, .65fr)
+    var(--vendor-width) var(--project-width) minmax(12rem, 2fr)
+    5.5rem 3.5rem var(--status-width) var(--location-width) var(--invoice-width)
+    minmax(0, 1fr) 2.2rem;
 }
 .row-line { display: contents; }
 .draft-description { display: flex; align-items: center; gap: .4rem; min-width: 0; }
@@ -620,7 +630,7 @@ input[data-field="link"] { font-family: var(--mono); font-size: .8rem; }
    At the point useful columns would become too narrow, split every logical
    row into two aligned grid lines.  The same row-line wrappers are used by
    the header, so the headings wrap at exactly the same columns as the data. */
-@container order-sheet (max-width: 76rem) {
+@container order-sheet (max-width: 108rem) {
   .submitted-sheet .sheet-head,
   .submitted-sheet .submitted-row { display: block; }
 
@@ -629,12 +639,13 @@ input[data-field="link"] { font-family: var(--mono); font-size: .8rem; }
   }
   .submitted-sheet .row-line-primary {
     grid-template-columns:
-      3.5rem 7rem minmax(8rem, 1fr) minmax(11rem, 1.4fr) minmax(5rem, .65fr)
-      minmax(8rem, 1fr) minmax(8rem, 1fr) minmax(9rem, 1.1fr);
+      var(--key-width) 7rem var(--buyer-width) minmax(8rem, 1fr) minmax(5rem, .65fr)
+      var(--vendor-width) var(--project-width) minmax(12rem, 2fr);
   }
   .submitted-sheet .row-line-secondary {
     grid-template-columns:
-      5.5rem 3.5rem 12rem minmax(10rem, 1fr) 6rem minmax(12rem, 1fr) 2.2rem;
+      5.5rem 3.5rem var(--status-width) var(--location-width) var(--invoice-width)
+      minmax(12rem, 1fr) 2.2rem;
   }
 }
 
@@ -655,7 +666,7 @@ input[data-field="link"] { font-family: var(--mono); font-size: .8rem; }
   }
 }
 
-@container order-sheet (max-width: 76rem) {
+@container order-sheet (max-width: 108rem) {
   .submitted-sheet .row-line-secondary {
     position: relative; margin-top: .5rem; padding: .5rem 0 0 1.9rem;
     border-top: 1px dashed var(--rule);
