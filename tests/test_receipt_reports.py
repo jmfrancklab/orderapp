@@ -225,13 +225,64 @@ def test_public_download_rewrites_provider_and_rejects_private_redirects(monkeyp
             return self
         def __exit__(self, *args):
             pass
-    def get(url, **kwargs):
+    def get(self, url, **kwargs):
         requested.append(url)
         return Response()
-    monkeypatch.setattr(reports.requests, "get", get)
+    monkeypatch.setattr(reports.requests.Session, "get", get)
     def resolve(host, port):
         return [(2, 1, 6, "", ("127.0.0.1" if host == "127.0.0.1" else "8.8.8.8", port))]
     monkeypatch.setattr(reports.socket, "getaddrinfo", resolve)
     with pytest.raises(ValueError, match="public internet"):
         reports.download_document("https://www.dropbox.com/s/test/receipt.pdf?dl=0")
     assert requested == ["https://www.dropbox.com/s/test/receipt.pdf?dl=1"]
+
+
+@pytest.mark.parametrize("url,query_key,query_value,cookie", [
+    ("https://tenant-my.sharepoint.com/:b:/g/personal/buyer/example-token?e=share-key", "download", "1", "FedAuth"),
+    ("https://www.dropbox.com/scl/fi/example-token/receipt.pdf?rlkey=share-key&dl=0", "dl", "1", "share_session"),
+])
+def test_share_download_preserves_cookies_and_tokens_through_redirects(monkeypatch, url, query_key, query_value, cookie):
+    """Use real Requests cookie handling, with only its network transport replaced."""
+    from email.message import Message
+    from types import SimpleNamespace
+    from urllib.parse import parse_qs, urlparse
+    import requests
+
+    monkeypatch.setattr(reports.socket, "getaddrinfo", lambda *args: [(2, 1, 6, "", ("8.8.8.8", 443))])
+    pdf = source_pdf()
+    seen = []
+
+    def send(adapter, request, **kwargs):
+        seen.append(request)
+        response = requests.Response()
+        response.request, response.url = request, request.url
+        headers = Message()
+        parsed = urlparse(request.url)
+        if parsed.path != "/download/receipt.pdf":
+            # Each download starts with a fresh anonymous session.
+            assert "Cookie" not in request.headers
+            query = parse_qs(parsed.query)
+            assert query[query_key] == [query_value]
+            assert query.get("rlkey", query.get("e")) == ["share-key"]
+            response.status_code = 302
+            response.headers["Location"] = "/download/receipt.pdf"
+            headers["Set-Cookie"] = f"{cookie}=anonymous-share-access; Path=/; Secure; HttpOnly"
+            response.headers["Set-Cookie"] = headers["Set-Cookie"]
+            response.raw = BytesIO(b"")
+        elif request.headers.get("Cookie") == f"{cookie}=anonymous-share-access":
+            response.status_code = 200
+            response.headers["Content-Type"] = "application/pdf"
+            response.raw = BytesIO(pdf)
+        else:
+            # The previous implementation lost the cookie and reached this 403.
+            response.status_code = 403
+            response.raw = BytesIO(b"Access denied")
+        response.raw._original_response = SimpleNamespace(msg=headers)
+        return response
+
+    monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", send)
+    for _ in range(2):
+        downloaded = reports.download_document(url)
+        assert downloaded == pdf
+        assert len(reports.document_pages(downloaded)) == 2
+    assert len(seen) == 4

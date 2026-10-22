@@ -51,21 +51,24 @@ def download_document(url):
     provider = quotes.classify_link(url)
     if provider in quotes._DIRECT:
         url = quotes._DIRECT[provider](url)
-    for _ in range(6):
-        _public_url(url)
-        with requests.get(url, stream=True, timeout=(5, 20), allow_redirects=False,
-                          headers={"User-Agent": "ACERT-ordering/1.0"}) as response:
-            if response.is_redirect:
-                url = urljoin(url, response.headers["Location"])
-                continue
-            response.raise_for_status()
-            chunks, size = [], 0
-            for chunk in response.iter_content(65536):
-                size += len(chunk)
-                if size > MAX_FILE_BYTES:
-                    raise ValueError("Supporting document exceeds 25 MB.")
-                chunks.append(chunk)
-            return b"".join(chunks)
+    # Anonymous SharePoint links set FedAuth before redirecting to the PDF.
+    # Keep that cookie for this document's redirect chain, like a browser does.
+    with requests.Session() as session:
+        for _ in range(6):
+            _public_url(url)
+            with session.get(url, stream=True, timeout=(5, 20), allow_redirects=False,
+                             headers={"User-Agent": "ACERT-ordering/1.0"}) as response:
+                if response.is_redirect:
+                    url = urljoin(url, response.headers["Location"])
+                    continue
+                response.raise_for_status()
+                chunks, size = [], 0
+                for chunk in response.iter_content(65536):
+                    size += len(chunk)
+                    if size > MAX_FILE_BYTES:
+                        raise ValueError("Supporting document exceeds 25 MB.")
+                    chunks.append(chunk)
+                return b"".join(chunks)
     raise ValueError("Too many redirects; provide a direct file or public share link.")
 
 
