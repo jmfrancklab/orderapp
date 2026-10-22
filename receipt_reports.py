@@ -102,8 +102,15 @@ def document_pages(data):
 def _error(invoice, reason, document=True):
     action = ("Filter to rows with an accessible receipt or invoice, or provide a receipt for this row."
               if document else "Correct this purchase or filter out this invoice.")
-    return {"invoice_id": invoice["id"], "nickname": invoice["nickname"],
-            "message": f'Receipt #{invoice["id"]} ({invoice["nickname"]}): {reason} {action}'}
+    error = {"invoice_id": invoice["id"], "nickname": invoice["nickname"],
+             "kind": "document" if document else "purchase",
+             "message": f'Receipt #{invoice["id"]} ({invoice["nickname"]}): {reason} {action}'}
+    if document:
+        field = "receipt_url" if (invoice["receipt_url"] or "").strip() else "invoice_url"
+        if not (invoice[field] or "").strip():
+            field = "receipt_url"
+        error.update(source_field=field, source_url=invoice[field] or "")
+    return error
 
 
 def collect_receipts(db, invoices):

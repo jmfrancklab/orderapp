@@ -848,37 +848,204 @@
   var historySheet = document.getElementById("history-sheet");
   var invoicesSheet = document.getElementById("invoices-sheet");
   var reportActions = document.getElementById("receipt-report-actions");
+  var reportPopup = null, reportOverlay = null, reportReturnFocus = null;
+  var reportPopupBusy = false;
+
+  function closeReceiptReportPopup() {
+    if (reportPopupBusy) return;
+    if (reportPopup) reportPopup.remove();
+    if (reportOverlay) reportOverlay.remove();
+    document.removeEventListener("keydown", receiptReportPopupKey);
+    reportPopup = reportOverlay = null;
+    if (reportReturnFocus) reportReturnFocus.focus();
+  }
+
+  function receiptReportPopupKey(event) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeReceiptReportPopup();
+    } else if (event.key === "Tab" && reportPopup) {
+      var controls = Array.from(reportPopup.querySelectorAll("button, input, a[href]"))
+        .filter(function (item) { return !item.disabled; });
+      var first = controls[0], last = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault(); last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault(); first.focus();
+      }
+    }
+  }
+
+  function updateReceiptReportLink(invoiceId, field, value) {
+    document.querySelectorAll('.invoice-name[data-invoice-id="' + invoiceId + '"]').forEach(function (link) {
+      link.dataset[field === "receipt_url" ? "receiptUrl" : "invoiceUrl"] = value;
+      var cell = link.closest("tr").querySelector('[data-invoice-file="' + field + '"]');
+      if (!cell) return;
+      cell.textContent = "";
+      if (value) {
+        var open = document.createElement("a");
+        open.href = value; open.target = "_blank"; open.rel = "noopener";
+        open.textContent = "open ↗";
+        cell.appendChild(open);
+      } else {
+        cell.textContent = "—";
+      }
+    });
+  }
+
+  function showReceiptReportErrors(error, grouping) {
+    closeReceiptReportPopup();
+    reportReturnFocus = document.activeElement;
+    reportOverlay = document.createElement("div");
+    reportOverlay.className = "xl-overlay";
+    reportOverlay.onclick = closeReceiptReportPopup;
+    document.body.appendChild(reportOverlay);
+    reportPopup = document.createElement("div");
+    reportPopup.className = "xl-popup receipt-report-popup";
+    reportPopup.setAttribute("role", "dialog");
+    reportPopup.setAttribute("aria-modal", "true");
+    reportPopup.setAttribute("aria-labelledby", "receipt-report-error-title");
+    var head = document.createElement("div");
+    head.className = "xl-popup-head";
+    var title = document.createElement("strong");
+    title.id = "receipt-report-error-title";
+    title.textContent = "Could not generate receipt report";
+    var close = makePopupBtn("×", "vendor-popup-x", closeReceiptReportPopup);
+    close.setAttribute("aria-label", "Close");
+    head.appendChild(title); head.appendChild(close); reportPopup.appendChild(head);
+    var form = document.createElement("form");
+    var intro = document.createElement("p");
+    intro.textContent = "Correct the links below, or close this popup and change the page filters. Receipt links are used first; invoice links are used when no receipt is recorded.";
+    form.appendChild(intro);
+    var edits = [], seen = new Set();
+    var errors = error.reportErrors || [];
+    if (!errors.length) {
+      var message = document.createElement("p");
+      message.textContent = error.message;
+      form.appendChild(message);
+    }
+    errors.forEach(function (item) {
+      var section = document.createElement("section");
+      section.className = "vendor-popup-section";
+      var message = document.createElement("p");
+      message.textContent = item.message;
+      section.appendChild(message);
+      if (item.kind === "document" && !seen.has(item.invoice_id)) {
+        seen.add(item.invoice_id);
+        var label = document.createElement("label");
+        label.textContent = item.source_field === "invoice_url" ? "Offending invoice link" : "Offending receipt link";
+        var input = document.createElement("input");
+        input.type = "url";
+        input.value = item.source_url || "";
+        input.name = "report_link_" + item.invoice_id;
+        input.placeholder = "https://…";
+        input.readOnly = !item.can_edit;
+        label.appendChild(input);
+        section.appendChild(label);
+        if (item.can_edit) edits.push({error: item, input: input, original: input.value});
+        else {
+          var readonly = document.createElement("p");
+          readonly.textContent = "You do not have permission to edit this invoice. Ask an invoice editor to correct the link, or filter it out.";
+          section.appendChild(readonly);
+        }
+      }
+      form.appendChild(section);
+    });
+    var saveError = document.createElement("p");
+    saveError.setAttribute("role", "status");
+    saveError.className = "receipt-report-save-status";
+    form.appendChild(saveError);
+    var actions = document.createElement("div");
+    actions.className = "xl-popup-actions";
+    actions.appendChild(makePopupBtn("Close", "mini", closeReceiptReportPopup));
+    if (edits.length) {
+      var save = makePopupBtn("Save and retry", "submit-btn", function () {});
+      save.type = "submit";
+      actions.appendChild(save);
+    }
+    form.appendChild(actions);
+    form.addEventListener("submit", async function (event) {
+      event.preventDefault();
+      if (reportPopupBusy || !edits.length || !form.reportValidity()) return;
+      reportPopupBusy = true;
+      var controls = Array.from(reportPopup.querySelectorAll("button, input"));
+      var disabledBefore = controls.map(function (item) { return item.disabled; });
+      controls.forEach(function (item) { item.disabled = true; });
+      saveError.textContent = "Saving corrected links…";
+      var saved = false;
+      try {
+        for (var edit of edits) {
+          var value = edit.input.value.trim();
+          if (value === edit.original) continue;
+          var body = {};
+          body[edit.error.source_field] = value;
+          var response = await fetch("/api/invoices/" + edit.error.invoice_id, {
+            method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)
+          });
+          var data = await response.json().catch(function () { return {}; });
+          if (!response.ok || !data.ok) {
+            throw new Error("Receipt #" + edit.error.invoice_id + ": " + (data.error || "Could not save the link. Please try again."));
+          }
+          edit.original = value;
+          updateReceiptReportLink(edit.error.invoice_id, edit.error.source_field, value);
+        }
+        saved = true;
+      } catch (saveFailure) {
+        saveError.textContent = saveFailure.message;
+      } finally {
+        reportPopupBusy = false;
+        controls.forEach(function (item, index) { item.disabled = disabledBefore[index]; });
+      }
+      if (saved) {
+        closeReceiptReportPopup();
+        await downloadReceiptReport(grouping);
+      }
+    });
+    reportPopup.appendChild(form);
+    document.body.appendChild(reportPopup);
+    document.addEventListener("keydown", receiptReportPopupKey);
+    if (edits.length) edits[0].input.focus();
+    else close.focus();
+  }
+
+  async function downloadReceiptReport(grouping) {
+    var buttons = reportActions.querySelectorAll("button");
+    var status = reportActions.querySelector(".receipt-report-status");
+    buttons.forEach(function (item) { item.disabled = true; });
+    status.textContent = "Preparing PDF…";
+    var failure = null;
+    try {
+      var reportUrl = new URL(reportActions.dataset.reportUrl, window.location.origin);
+      reportUrl.search = window.location.search;
+      reportUrl.searchParams.set("group_by", grouping);
+      var response = await fetch(reportUrl, { headers: { Accept: "application/pdf" } });
+      if (!response.ok || !(response.headers.get("Content-Type") || "").includes("application/pdf")) {
+        var errorData = await response.json().catch(function () { return {}; });
+        var error = new Error(errorData.message || "Could not generate the report. Refresh the page and try again.");
+        error.reportErrors = errorData.errors;
+        throw error;
+      }
+      var blobUrl = URL.createObjectURL(await response.blob());
+      var link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = "receipts-by-" + grouping + ".pdf";
+      document.body.appendChild(link);
+      link.click(); link.remove();
+      setTimeout(function () { URL.revokeObjectURL(blobUrl); }, 1000);
+    } catch (error) {
+      failure = error;
+    } finally {
+      status.textContent = "";
+      buttons.forEach(function (item) { item.disabled = false; });
+    }
+    if (failure) showReceiptReportErrors(failure, grouping);
+  }
+
   if (reportActions) {
-    reportActions.addEventListener("click", async function (event) {
+    reportActions.addEventListener("click", function (event) {
       var button = event.target.closest("[data-receipt-report]");
       if (!button || button.disabled) return;
-      var buttons = reportActions.querySelectorAll("button");
-      var status = reportActions.querySelector(".receipt-report-status");
-      buttons.forEach(function (item) { item.disabled = true; });
-      status.textContent = "Preparing PDF…";
-      try {
-        var reportUrl = new URL(reportActions.dataset.reportUrl, window.location.origin);
-        reportUrl.search = window.location.search;
-        reportUrl.searchParams.set("group_by", button.dataset.receiptReport);
-        var response = await fetch(reportUrl, { headers: { Accept: "application/pdf" } });
-        if (!response.ok || !(response.headers.get("Content-Type") || "").includes("application/pdf")) {
-          var errorData = await response.json().catch(function () { return {}; });
-          throw new Error(errorData.message || "Could not generate the report. Refresh the page and try again.");
-        }
-        var blobUrl = URL.createObjectURL(await response.blob());
-        var link = document.createElement("a");
-        link.href = blobUrl;
-        link.download = "receipts-by-" + button.dataset.receiptReport + ".pdf";
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-        setTimeout(function () { URL.revokeObjectURL(blobUrl); }, 1000);
-      } catch (error) {
-        window.alert(error.message);
-      } finally {
-        status.textContent = "";
-        buttons.forEach(function (item) { item.disabled = false; });
-      }
+      return downloadReceiptReport(button.dataset.receiptReport);
     });
   }
   var filterSheet = submittedSheet || historySheet || invoicesSheet;

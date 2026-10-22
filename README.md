@@ -51,8 +51,11 @@ of dependency-free vanilla JS (autosave, vendor auto-detect, tracker chips).
   filters, with quantities, unit costs, line totals, project subtotals, and
   bordered supporting pages. Receipt links take precedence; invoice links are
   used when no receipt is recorded. Supporting files must be publicly accessible
-  PDF, PNG, or JPEG files. Missing files or costs produce a popup identifying the
-  affected invoice. Reports are generated in memory and never saved to server disk.
+  PDF, PNG, or JPEG files. Missing files or costs open an in-page popup identifying
+  the affected invoices, with each offending file link in an editable box and a
+  **Save and retry** action. **Export to Excel**, at the very bottom, exports the
+  currently filtered invoices. Reports are generated in memory and never saved
+  to server disk.
 - **Change history** — every field change, tracker add/remove, and submission
   is logged to the `order_history` table (who, when, field, old, new). No GUI
   for it yet; inspect with

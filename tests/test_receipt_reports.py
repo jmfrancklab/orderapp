@@ -100,6 +100,10 @@ def test_missing_and_failed_files_identify_rows(export_client, monkeypatch):
     assert "Receipt #11 (Mixed purchase)" in data["message"]
     assert "Filter to rows" in data["message"]
     assert "provide a receipt" in data["message"]
+    first, second = data["errors"]
+    assert (first["source_field"], first["source_url"], first["can_edit"]) == ("receipt_url", "", True)
+    assert (second["source_field"], second["source_url"], second["can_edit"]) == ("invoice_url", "https://files.example/invoice.pdf", True)
+    assert "receipt_url" not in second and "invoice_url" not in second
 
 
 def test_bad_receipt_does_not_silently_fallback(export_client, monkeypatch):
@@ -108,7 +112,47 @@ def test_bad_receipt_does_not_silently_fallback(export_client, monkeypatch):
     response = client.get("/invoices/receipt-report", query_string={"filter_reimbursement_status": "requires reimbursement"})
     assert response.status_code == 400
     assert len(response.get_json()["errors"]) == 1
+    error = response.get_json()["errors"][0]
+    assert error["source_field"] == "receipt_url"
+    assert error["source_url"] == "https://files.example/receipt.pdf"
     assert not downloads
+
+
+def test_fix_only_offending_link_then_retry(export_client, monkeypatch):
+    client, _ = export_client
+    def download(url):
+        if url == "https://files.example/receipt.pdf":
+            raise ValueError("Sharing permissions need fixing.")
+        return source_pdf()
+    monkeypatch.setattr(reports, "download_document", download)
+    query = {"group_by": "project", "filter_reimbursement_status": "requires reimbursement"}
+    response = client.get("/invoices/receipt-report", query_string=query)
+    assert response.status_code == 400
+    assert response.get_json()["errors"][0]["can_edit"]
+    assert client.post("/api/invoices/11", json={"receipt_url": "https://files.example/shared.pdf"}).status_code == 200
+    text = pdf_text(client.get("/invoices/receipt-report", query_string=query))
+    assert "Receipt #11" in text and "Receipt #12" not in text
+    with sqlite3.connect(app_module.DB_PATH) as db:
+        assert db.execute("SELECT invoice_url, nickname FROM invoices WHERE id=11").fetchone() == ("https://files.example/unused.pdf", "Mixed purchase")
+
+
+def test_excel_is_last_action_and_preserves_filters(export_client):
+    from openpyxl import load_workbook
+    import html
+    import re
+    client, _ = export_client
+    query = [("filter_reimbursement_status", "reimbursed"), ("filter_reimbursement_status", "requires reimbursement")]
+    page = client.get("/invoices", query_string=query).get_data(as_text=True)
+    href = html.unescape(re.search(r'href="([^"]+)" class="mini export-btn"', page)[1])
+    assert href.count("filter_reimbursement_status=") == 2
+    assert page.index("Export to Excel") > page.index('data-receipt-report="project"')
+    response = client.get(href)
+    assert response.status_code == 200
+    rows = list(load_workbook(BytesIO(response.data)).active.values)
+    assert {row[0] for row in rows[1:]} == {11, 12}
+    response = client.get("/export/invoices.xlsx?filter_reimbursement_status=reimbursed")
+    rows = list(load_workbook(BytesIO(response.data)).active.values)
+    assert [row[0] for row in rows[1:]] == [12]
 
 
 def test_missing_cost_and_empty_results(export_client):

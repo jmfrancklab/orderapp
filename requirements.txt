@@ -2,6 +2,7 @@ flask>=3.0
 requests>=2.31
 pypdf>=4.0
 reportlab>=4.0
+Pillow>=9.0   # receipt image loading (PIL)
 msal>=1.28
 openpyxl>=3.1
 curl-cffi>=0.5   # Chrome TLS impersonation for sites that block plain requests

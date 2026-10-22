@@ -25,7 +25,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.17.0"
+__version__ = "0.17.1"
 
 EXPENDITURE_PERMISSION_MESSAGE = (
     "Expenditure authorization is required for this status transition."
@@ -1825,6 +1825,10 @@ def invoice_receipt_report():
     try:
         report = receipt_reports.generate(db, rows, grouping)
     except receipt_reports.ReportError as exc:
+        for error in exc.errors:
+            if error.get("kind") == "document":
+                error["can_edit"] = invoice_visible_to(
+                    db, error["invoice_id"], current_user()) is not None
         return jsonify(ok=False, message=str(exc), errors=exc.errors), 400
     return send_file(BytesIO(report), mimetype="application/pdf", as_attachment=True,
                      download_name=f"receipts-by-{grouping}.pdf", max_age=0)
@@ -2886,6 +2890,18 @@ def export_xlsx(view):
                        invoice_map.get(r["invoice_id"], ""))
         wb = _make_workbook("Submitted Orders", headers, _rows())
         return _xlsx_response(wb, "submitted_orders.xlsx")
+
+    elif view == "invoices":
+        rows = filter_invoice_rows(fetch_visible_invoices(db, email), request.args)
+        headers = [("ID", 8), ("Invoice", 28), ("Created", 12), ("Created by", 28),
+                   ("Items", 10), ("Unique items", 12), ("Invoice file", 50),
+                   ("Receipt file", 50), ("Tracking info", 40), ("Reimbursement", 24)]
+        labels = dict(INVOICE_REIMBURSEMENT_CHOICES)
+        values = ((r["id"], r["nickname"], r["created_at"][:10], r["created_by"],
+                   r["item_count"], r["unique_items"], r["invoice_url"], r["receipt_url"],
+                   r["tracking_info"], labels.get(r["reimbursement_status"], r["reimbursement_status"]))
+                  for r in rows)
+        return _xlsx_response(_make_workbook("Invoices", headers, values), "invoices.xlsx")
 
     elif view == "drafts":
         vendor_map  = {v["id"]: v["name"] for v in fetch_vendors(db)}

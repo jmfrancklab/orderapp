@@ -46,8 +46,8 @@ Use the Reimbursement column filter to select reimbursement types.</p>
         <td>{{ invoice.created_by }}</td>
         <td>{{ invoice.item_count }} item{{ '' if invoice.item_count == 1 else 's' }}<br>
             <span class="invoice-item-count">{{ invoice.unique_items }} unique</span></td>
-        <td>{{ open_link(invoice.invoice_url) }}</td>
-        <td>{{ open_link(invoice.receipt_url) }}</td>
+        <td data-invoice-file="invoice_url">{{ open_link(invoice.invoice_url) }}</td>
+        <td data-invoice-file="receipt_url">{{ open_link(invoice.receipt_url) }}</td>
         <td>{{ open_link(invoice.tracking_info) }}</td>
         <td>{{ invoice_reimbursement_labels.get(invoice.reimbursement_status, invoice.reimbursement_status) }}</td>
         <td><a href="{{ url_for('submitted', filter_invoice_id=invoice.id) }}">view orders →</a></td>
@@ -76,6 +76,10 @@ Use the Reimbursement column filter to select reimbursement types.</p>
   <button type="button" data-receipt-report="receipt" {% if not invoices %}disabled{% endif %}>By receipt</button>
   <button type="button" data-receipt-report="project" {% if not invoices %}disabled{% endif %}>By project</button>
   <span role="status" aria-live="polite" class="receipt-report-status"></span>
+</div>
+
+<div class="sheet-actions">
+  <a href="{{ url_for('export_xlsx', view='invoices', **request.args.to_dict(flat=false)) }}" class="mini export-btn">Export to Excel</a>
 </div>
 
 {% endblock %}
