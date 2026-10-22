@@ -847,6 +847,40 @@
   var submittedSheet = document.getElementById("submitted-sheet");
   var historySheet = document.getElementById("history-sheet");
   var invoicesSheet = document.getElementById("invoices-sheet");
+  var reportActions = document.getElementById("receipt-report-actions");
+  if (reportActions) {
+    reportActions.addEventListener("click", async function (event) {
+      var button = event.target.closest("[data-receipt-report]");
+      if (!button || button.disabled) return;
+      var buttons = reportActions.querySelectorAll("button");
+      var status = reportActions.querySelector(".receipt-report-status");
+      buttons.forEach(function (item) { item.disabled = true; });
+      status.textContent = "Preparing PDF…";
+      try {
+        var reportUrl = new URL(reportActions.dataset.reportUrl, window.location.origin);
+        reportUrl.search = window.location.search;
+        reportUrl.searchParams.set("group_by", button.dataset.receiptReport);
+        var response = await fetch(reportUrl, { headers: { Accept: "application/pdf" } });
+        if (!response.ok || !(response.headers.get("Content-Type") || "").includes("application/pdf")) {
+          var errorData = await response.json().catch(function () { return {}; });
+          throw new Error(errorData.message || "Could not generate the report. Refresh the page and try again.");
+        }
+        var blobUrl = URL.createObjectURL(await response.blob());
+        var link = document.createElement("a");
+        link.href = blobUrl;
+        link.download = "receipts-by-" + button.dataset.receiptReport + ".pdf";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(function () { URL.revokeObjectURL(blobUrl); }, 1000);
+      } catch (error) {
+        window.alert(error.message);
+      } finally {
+        status.textContent = "";
+        buttons.forEach(function (item) { item.disabled = false; });
+      }
+    });
+  }
   var filterSheet = submittedSheet || historySheet || invoicesSheet;
   var FILTER_COLUMNS = submittedSheet
     ? SUBMITTED_FILTER_COLUMNS : invoicesSheet

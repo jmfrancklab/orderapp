@@ -47,6 +47,12 @@ of dependency-free vanilla JS (autosave, vendor auto-detect, tracker chips).
   **Madhur CC**.
 - **Invoices tab** — lists every visible invoice with its files and item counts;
   each invoice links back to a Submitted view filtered to its associated rows.
+  **By receipt** and **By project** download PDF reports for the current GET
+  filters, with quantities, unit costs, line totals, project subtotals, and
+  bordered supporting pages. Receipt links take precedence; invoice links are
+  used when no receipt is recorded. Supporting files must be publicly accessible
+  PDF, PNG, or JPEG files. Missing files or costs produce a popup identifying the
+  affected invoice. Reports are generated in memory and never saved to server disk.
 - **Change history** — every field change, tracker add/remove, and submission
   is logged to the `order_history` table (who, when, field, old, new). No GUI
   for it yet; inspect with

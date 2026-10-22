@@ -71,4 +71,11 @@ Use the Reimbursement column filter to select reimbursement types.</p>
 <p class="empty">No invoices yet. Mark in-cart orders as ordered from the Submitted tab to create one.</p>
 {% endif %}
 
+<div id="receipt-report-actions" class="receipt-report-actions" data-report-url="{{ url_for('invoice_receipt_report') }}">
+  <p>Download receipts for the currently filtered invoices:</p>
+  <button type="button" data-receipt-report="receipt" {% if not invoices %}disabled{% endif %}>By receipt</button>
+  <button type="button" data-receipt-report="project" {% if not invoices %}disabled{% endif %}>By project</button>
+  <span role="status" aria-live="polite" class="receipt-report-status"></span>
+</div>
+
 {% endblock %}

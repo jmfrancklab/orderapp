@@ -25,7 +25,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.16.9"
+__version__ = "0.17.0"
 
 EXPENDITURE_PERMISSION_MESSAGE = (
     "Expenditure authorization is required for this status transition."
@@ -1791,8 +1791,7 @@ def submitted():
 def invoices():
     all_invoices = fetch_visible_invoices(get_db(), current_user())
     selected = request.args.getlist("filter_reimbursement_status")
-    rows = [invoice for invoice in all_invoices
-            if not selected or invoice["reimbursement_status"] in selected]
+    rows = filter_invoice_rows(all_invoices, request.args)
     return render_template(
         "invoices.html", tab="invoices",
         invoices=rows, has_invoices=bool(all_invoices),
@@ -1801,6 +1800,34 @@ def invoices():
             {"value": value, "label": label}
             for value, label in INVOICE_REIMBURSEMENT_CHOICES
         ]})
+
+
+def filter_invoice_rows(rows, args):
+    selected = args.getlist("filter_reimbursement_status")
+    return [row for row in rows
+            if not selected or row["reimbursement_status"] in selected]
+
+
+@app.route("/invoices/receipt-report")
+@login_required
+def invoice_receipt_report():
+    from io import BytesIO
+    from flask import send_file
+    import receipt_reports
+
+    grouping = request.args.get("group_by", "receipt")
+    if grouping not in ("receipt", "project"):
+        return jsonify(ok=False, message="Choose receipt or project grouping."), 400
+    db = get_db()
+    rows = filter_invoice_rows(fetch_visible_invoices(db, current_user()), request.args)
+    if not rows:
+        return jsonify(ok=False, message="No invoices match the current filters."), 400
+    try:
+        report = receipt_reports.generate(db, rows, grouping)
+    except receipt_reports.ReportError as exc:
+        return jsonify(ok=False, message=str(exc), errors=exc.errors), 400
+    return send_file(BytesIO(report), mimetype="application/pdf", as_attachment=True,
+                     download_name=f"receipts-by-{grouping}.pdf", max_age=0)
 
 
 @app.route("/vendors", methods=["GET", "POST"])
