@@ -147,6 +147,42 @@ def test_exact_cost_without_name_is_successful_and_does_not_warn():
     assert lines[0] == [(400, 700, 470, 700)]
 
 
+def test_reordered_desk_pad_title_matches_printed_cost_despite_stored_price_difference():
+    description = ('Amazon.com : YSAGi Leather Office Desk Pad Protector, Large Mouse Pad, '
+                   'Non-Slip, PU Leather, Laptop Desk Blotter, Waterproof Writing Pad for '
+                   'Office and Home, Black, 23.6" x 13.8" : Office Products')
+    spans = [
+        {'text': 'Fireproof Accordion File Organizer, Expanding File Folder with 13 Pockets',
+         'height': 10, 'line': (40, 750, 400, 750)},
+        {'text': '$21.59', 'height': 10, 'line': (40, 720, 80, 720)},
+        {'text': 'YSAGi Large Extended PU Leather Desk Pad Protector – Non-Slip Waterproof Desk',
+         'height': 10, 'line': (40, 700, 450, 700)},
+        {'text': 'Mat for Office & Home, Easy Clean Mouse Pad & Laptop Writing Blotter 35.4"x17"',
+         'height': 10, 'line': (40, 686, 450, 686)},
+        {'text': 'Black', 'height': 10, 'line': (40, 672, 65, 672)},
+        {'text': 'Sold by: YSAGi', 'height': 10, 'line': (40, 658, 110, 658)},
+        {'text': 'Supplied by: Other', 'height': 10, 'line': (40, 644, 120, 644)},
+        {'text': '$15.99', 'height': 10, 'line': (40, 630, 80, 630)},
+    ]
+    lines, missing = markup.strike_through([object()], [description],
+        ['Fireproof Accordion File Organizer, Expanding File Folder with 13 Pockets'],
+        [{'native': spans}], costs=[(Decimal('14.39'), Decimal('14.39'))])
+    assert not missing
+    assert spans[2]['line'] in lines[0]
+    assert spans[7]['line'] in lines[0]
+    assert spans[1]['line'] not in lines[0]
+
+
+def test_three_word_phrase_shared_with_relevant_item_is_protected():
+    spans = [{'text': 'Large Extended Desk Pad Protector', 'height': 10, 'line': (40, 700, 200, 700)},
+             {'text': '$15.99', 'height': 10, 'line': (40, 670, 80, 670)}]
+    lines, missing = markup.strike_through([object()], ['Leather Office Desk Pad Protector'],
+        ['Large Extended Desk Pad Protector'], [{'native': spans}],
+        costs=[(Decimal('14.39'), Decimal('14.39'))])
+    assert missing
+    assert lines == [[]]
+
+
 def test_missing_cost_warns_even_when_name_is_found():
     spans = [{'text': 'SEESII NanoVNA-H4 Vector Network Analyzer', 'height': 12, 'line': (40, 700, 300, 700)}]
     _, missing = markup.strike_through([object()], ['SEESII NanoVNA-H4 Vector Network Analyzer'], [],
