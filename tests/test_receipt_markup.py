@@ -147,7 +147,8 @@ def test_exact_cost_without_name_is_successful_and_does_not_warn():
     assert lines[0] == [(400, 700, 470, 700)]
 
 
-def test_reordered_desk_pad_title_matches_printed_cost_despite_stored_price_difference():
+@pytest.mark.parametrize('stored_cost', ['14.39', '15.99'])
+def test_reordered_desk_pad_title_needs_exact_cost_fallback(stored_cost):
     description = ('Amazon.com : YSAGi Leather Office Desk Pad Protector, Large Mouse Pad, '
                    'Non-Slip, PU Leather, Laptop Desk Blotter, Waterproof Writing Pad for '
                    'Office and Home, Black, 23.6" x 13.8" : Office Products')
@@ -166,10 +167,13 @@ def test_reordered_desk_pad_title_matches_printed_cost_despite_stored_price_diff
     ]
     lines, missing = markup.strike_through([object()], [description],
         ['Fireproof Accordion File Organizer, Expanding File Folder with 13 Pockets'],
-        [{'native': spans}], costs=[(Decimal('14.39'), Decimal('14.39'))])
-    assert not missing
-    assert spans[2]['line'] in lines[0]
-    assert spans[7]['line'] in lines[0]
+        [{'native': spans}], costs=[(Decimal(stored_cost), Decimal(stored_cost))])
+    if stored_cost == '14.39':
+        assert missing == [description]
+        assert lines == [[]]
+    else:
+        assert not missing
+        assert spans[7]['line'] in lines[0]
     assert spans[1]['line'] not in lines[0]
 
 

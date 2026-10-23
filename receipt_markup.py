@@ -148,17 +148,9 @@ def _anchors(description, protected):
     for token in tokens:
         if len(token) >= 5 and re.search(r"[a-z]", token) and re.search(r"\d", token):
             candidates.add((token,))
-    for length in (3, 4, 5, 6):
+    for length in (4, 5, 6):
         for start in range(len(tokens) - length + 1):
-            candidate = tuple(tokens[start:start + length])
-            # Vendor titles often reorder adjectives. A distinctive three-word
-            # phrase ("desk pad protector") can survive when longer phrases do
-            # not; exclude short/generic connective and marketplace phrases.
-            if length == 3 and any(len(word) < 3 or word in {
-                    "amazon", "www", "com", "with", "for", "and", "the", "from"
-            } for word in candidate):
-                continue
-            candidates.add(candidate)
+            candidates.add(tuple(tokens[start:start + length]))
     if 1 < len(tokens) < 4:
         candidates.add(tuple(tokens))
     anchors = []
