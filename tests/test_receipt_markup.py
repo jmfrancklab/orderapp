@@ -4,6 +4,7 @@ from decimal import Decimal
 from datetime import date
 from types import SimpleNamespace
 
+import pytest
 from pypdf import PdfReader
 from reportlab.pdfgen import canvas
 
@@ -153,7 +154,17 @@ def test_missing_cost_warns_even_when_name_is_found():
     assert len(missing) == 1
 
 
-def test_split_price_commands_use_actual_pdf_coordinates():
+@pytest.mark.parametrize('encoding_api', ['legacy', 'current'])
+def test_split_price_commands_use_actual_pdf_coordinates(monkeypatch, encoding_api):
+    if encoding_api == 'current' and not hasattr(markup._cmap, 'get_encoding'):
+        legacy = markup._cmap.build_char_map_from_dict
+        monkeypatch.setattr(markup._cmap, 'get_encoding', lambda font: legacy(200, font)[2:], raising=False)
+        monkeypatch.delattr(markup._cmap, 'build_char_map_from_dict')
+    elif encoding_api == 'legacy' and not hasattr(markup._cmap, 'build_char_map_from_dict'):
+        current = markup._cmap.get_encoding
+        monkeypatch.setattr(markup._cmap, 'build_char_map_from_dict',
+                            lambda width, font: (None, None, *current(font)), raising=False)
+        monkeypatch.delattr(markup._cmap, 'get_encoding')
     buf = BytesIO()
     pdf = canvas.Canvas(buf, pagesize=(612, 792))
     text = pdf.beginText()

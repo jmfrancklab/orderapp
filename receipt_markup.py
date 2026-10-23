@@ -9,7 +9,7 @@ import subprocess
 import unicodedata
 
 from pypdf import PdfWriter
-from pypdf._cmap import build_char_map_from_dict
+from pypdf import _cmap
 from reportlab.pdfbase.pdfmetrics import stringWidth
 
 
@@ -37,7 +37,13 @@ def text_spans(page):
         try:
             key = id(font)
             if key not in font_maps:
-                font_maps[key] = build_char_map_from_dict(200, font)[2:]
+                # New pypdf releases replaced build_char_map_from_dict with
+                # get_encoding. Select the available API without requiring an
+                # upgrade/downgrade of the server's existing installation.
+                if hasattr(_cmap, "get_encoding"):
+                    font_maps[key] = _cmap.get_encoding(font)
+                else:
+                    font_maps[key] = _cmap.build_char_map_from_dict(200, font)[2:]
             encoding, mapping = font_maps[key]
             target = re.sub(r"\s+", "", text)
             for end in range(len(shown), 0, -1):

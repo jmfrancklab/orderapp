@@ -26,7 +26,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.18.4"
+__version__ = "0.18.5"
 
 EXPENDITURE_PERMISSION_MESSAGE = (
     "Expenditure authorization is required for this status transition."
@@ -1814,7 +1814,6 @@ def filter_invoice_rows(rows, args):
 def invoice_receipt_report():
     from io import BytesIO
     from flask import send_file
-    import receipt_reports
 
     grouping = request.args.get("group_by", "receipt")
     if grouping not in ("receipt", "project"):
@@ -1824,13 +1823,15 @@ def invoice_receipt_report():
     if not rows:
         return jsonify(ok=False, message="No invoices match the current filters."), 400
     try:
-        report = receipt_reports.generate(db, rows, grouping)
-    except receipt_reports.ReportError as exc:
-        for error in exc.errors:
-            if error.get("kind") == "document":
-                error["can_edit"] = invoice_visible_to(
-                    db, error["invoice_id"], current_user()) is not None
-        return jsonify(ok=False, message=str(exc), errors=exc.errors), 400
+        import receipt_reports
+        try:
+            report = receipt_reports.generate(db, rows, grouping)
+        except receipt_reports.ReportError as exc:
+            for error in exc.errors:
+                if error.get("kind") == "document":
+                    error["can_edit"] = invoice_visible_to(
+                        db, error["invoice_id"], current_user()) is not None
+            return jsonify(ok=False, message=str(exc), errors=exc.errors), 400
     except Exception:
         reference = uuid4().hex[:12]
         app.logger.exception("Receipt report failed [%s], grouping=%s, invoice_ids=%s",

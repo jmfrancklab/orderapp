@@ -136,6 +136,21 @@ def test_unexpected_generation_error_returns_log_reference(export_client, monkey
     assert "PDF layout failed" not in data["message"]
 
 
+def test_report_import_failure_returns_diagnostic_json(export_client, monkeypatch, caplog):
+    import builtins
+    client, _ = export_client
+    original = builtins.__import__
+    def importing(name, *args, **kwargs):
+        if name == "receipt_reports":
+            raise ImportError("Unavailable PDF library function")
+        return original(name, *args, **kwargs)
+    monkeypatch.setattr(builtins, "__import__", importing)
+    response = client.get("/invoices/receipt-report")
+    assert response.status_code == 500
+    assert "Error reference:" in response.get_json()["message"]
+    assert "Unavailable PDF library function" in caplog.text
+
+
 def test_missing_and_failed_files_identify_rows(export_client, monkeypatch):
     client, _ = export_client
     with sqlite3.connect(app_module.DB_PATH) as db:
