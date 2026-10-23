@@ -59,6 +59,9 @@ of dependency-free vanilla JS (autosave, vendor auto-detect, tracker chips).
   PDF bookmarks provide nested navigation through project and receipt headings
   and their supporting documents. The report requests the bookmarks pane on opening
   in viewers that support it.
+  Top-level sections use full-width black heading bars with white text and rules
+  separated by 2pt gaps. Purchase subsections use bordered gray bars; table header
+  shading is less than half as strong as the subsection shading.
   PDF reports start with centered totals by the selected grouping and an overall
   total. Project sections summarize their receipts; receipt sections summarize
   their project allocations. Both orders use the same receipt/project purchase

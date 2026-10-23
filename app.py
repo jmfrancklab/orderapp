@@ -26,7 +26,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.18.6"
+__version__ = "0.18.7"
 
 EXPENDITURE_PERMISSION_MESSAGE = (
     "Expenditure authorization is required for this status transition."

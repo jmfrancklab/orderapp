@@ -20,7 +20,7 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 from reportlab.platypus import (
-    Flowable, HRFlowable, KeepTogether, PageBreak, Paragraph, SimpleDocTemplate, Spacer,
+    Flowable, KeepTogether, PageBreak, Paragraph, SimpleDocTemplate, Spacer,
     Table, TableStyle,
 )
 
@@ -280,6 +280,46 @@ class SupportingPage(Flowable):
         self.canv.rect(0, 0, self.width, self.height)
 
 
+SUBSECTION_GRAY = colors.HexColor("#b8b8b8")
+TABLE_HEADER_GRAY = colors.HexColor("#ededed")
+
+
+class ReportHeading(Flowable):
+    """Full-width heading bars, preserving the paragraph's text and PDF outline."""
+    def __init__(self, text, style, level):
+        super().__init__()
+        self.outline_level = level
+        self.paragraph = Paragraph(text, ParagraphStyle(
+            "BarHeading", parent=style, textColor=colors.white if level == 0 else colors.black))
+        self.keepWithNext = True
+        self.spaceBefore = style.spaceBefore
+        self.spaceAfter = style.spaceAfter
+
+    def getPlainText(self):
+        return self.paragraph.getPlainText()
+
+    def wrap(self, available_width, available_height):
+        self.width = CONTENT_WIDTH
+        _, self.text_height = self.paragraph.wrap(self.width - 16, available_height)
+        self.height = self.text_height + 16 + (6 if self.outline_level == 0 else 0)
+        return self.width, self.height
+
+    def draw(self):
+        c = self.canv
+        c.saveState()
+        top_level = self.outline_level == 0
+        c.setFillColor(colors.black if top_level else SUBSECTION_GRAY)
+        c.rect(0, 3 if top_level else 0, self.width,
+               self.height - (6 if top_level else 0), fill=1, stroke=0)
+        c.setStrokeColor(colors.black)
+        c.setLineWidth(1)
+        # Each 1pt rule ends exactly 2pt from the black bar.
+        c.line(0, .5, self.width, .5)
+        c.line(0, self.height - .5, self.width, self.height - .5)
+        self.paragraph.drawOn(c, 8, 11 if top_level else 8)
+        c.restoreState()
+
+
 class NavigableReport(SimpleDocTemplate):
     """Register headings after layout, so bookmarks follow actual page breaks."""
 
@@ -299,7 +339,10 @@ def build_pdf(receipts, grouping):
     placements, story = [], []
 
     def paragraph(text, style="Normal", outline_level=None):
-        result = Paragraph(escape(str(text)).replace("\n", "<br/>"), styles[style])
+        text = escape(str(text)).replace("\n", "<br/>")
+        if outline_level in (0, 1):
+            return ReportHeading(text, styles[style], outline_level)
+        result = Paragraph(text, styles[style])
         result.outline_level = outline_level
         return result
 
@@ -316,6 +359,8 @@ def build_pdf(receipts, grouping):
                           if purchased_on else "")
         text = (escape(prefix) + receipt_label(receipt) + ": "
                 + escape(receipt.get("vendor", "Vendor not recorded")) + formatted_date)
+        if outline_level in (0, 1):
+            return ReportHeading(text, styles[style], outline_level)
         result = Paragraph(text, styles[style])
         result.outline_level = outline_level
         return result
@@ -337,7 +382,7 @@ def build_pdf(receipts, grouping):
         table.setStyle(TableStyle([
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
             ("ALIGN", (2 if other else 1, 0), (-1, -1), "RIGHT"),
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e9edf2")),
+            ("BACKGROUND", (0, 0), (-1, 0), TABLE_HEADER_GRAY),
             ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
             ("LINEBELOW", (0, 0), (-1, 0), 0.7, colors.black),
             ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#f7f8fa")]),
@@ -395,7 +440,7 @@ def build_pdf(receipts, grouping):
         table.setStyle(TableStyle([
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
             ("ALIGN", (1, 0), (1, -1), "RIGHT"),
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e9edf2")),
+            ("BACKGROUND", (0, 0), (-1, 0), TABLE_HEADER_GRAY),
             ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
             ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
             ("LINEABOVE", (0, -1), (-1, -1), .7, colors.black),
@@ -427,10 +472,6 @@ def build_pdf(receipts, grouping):
                   [item[1] for item in receipt["groups"][key]],
                   costs=[(item[0], item[3]) for item in other_items])
 
-    def section_rules():
-        for _ in range(2):
-            story.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=3))
-
     def receipt_total(receipt):
         return sum((item[0] for items in receipt["groups"].values() for item in items), Decimal(0))
 
@@ -442,7 +483,6 @@ def build_pdf(receipts, grouping):
         for receipt in receipts:
             story.append(PageBreak())
             story.append(receipt_title(receipt, style="Heading1", outline_level=0))
-            section_rules()
             keys = [key for key in ordered_projects if key in receipt["groups"]]
             summary_table(["Project", "Amount"], [
                 (key[1], sum((item[0] for item in receipt["groups"][key]), Decimal(0)))
@@ -458,7 +498,6 @@ def build_pdf(receipts, grouping):
         for key in ordered_projects:
             story.append(PageBreak())
             story.append(paragraph(key[1], "Heading1", outline_level=0))
-            section_rules()
             summary_table(["Receipt", "Amount"], [
                 (Paragraph(receipt_label(receipt, short=True), styles["Normal"]), sum((item[0] for item in receipt["groups"][key]), Decimal(0)))
                 for receipt in receipts if key in receipt["groups"]], "PROJECT TOTAL:", project_totals[key])
