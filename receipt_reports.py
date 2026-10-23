@@ -280,6 +280,18 @@ class SupportingPage(Flowable):
         self.canv.rect(0, 0, self.width, self.height)
 
 
+class NavigableReport(SimpleDocTemplate):
+    """Register headings after layout, so bookmarks follow actual page breaks."""
+
+    def afterFlowable(self, flowable):
+        level = getattr(flowable, "outline_level", None)
+        if level is None:
+            return
+        key = f"heading-{self.seq.nextf('outline')}"
+        self.canv.bookmarkHorizontalAbsolute(key, self.frame._y + flowable.height)
+        self.canv.addOutlineEntry(flowable.getPlainText(), key, level=level, closed=False)
+
+
 def build_pdf(receipts, grouping):
     styles = getSampleStyleSheet()
     styles.add(ParagraphStyle("OtherProject", parent=styles["Normal"], textColor=OTHER_PROJECT_COLOR))
@@ -287,8 +299,10 @@ def build_pdf(receipts, grouping):
     styles.add(ParagraphStyle("SummaryHeader", parent=styles["Normal"], fontName="Helvetica-Bold"))
     placements, story = [], []
 
-    def paragraph(text, style="Normal"):
-        return Paragraph(escape(str(text)).replace("\n", "<br/>"), styles[style])
+    def paragraph(text, style="Normal", outline_level=None):
+        result = Paragraph(escape(str(text)).replace("\n", "<br/>"), styles[style])
+        result.outline_level = outline_level
+        return result
 
     def receipt_label(receipt, short=False):
         label = f'{"" if short else "Receipt "}#{receipt["id"]}'
@@ -297,13 +311,15 @@ def build_pdf(receipts, grouping):
             label += f' <font size="9">({escape(receipt["nickname"])}: ${total:,.2f})</font>'
         return label
 
-    def receipt_title(receipt, prefix="", style="Heading2"):
+    def receipt_title(receipt, prefix="", style="Heading2", outline_level=None):
         purchased_on = receipt.get("transaction_date")
         formatted_date = (f" {purchased_on.month}/{purchased_on.day}/{purchased_on.year % 100:02d}"
                           if purchased_on else "")
         text = (escape(prefix) + receipt_label(receipt) + ": "
                 + escape(receipt.get("vendor", "Vendor not recorded")) + formatted_date)
-        return Paragraph(text, styles[style])
+        result = Paragraph(text, styles[style])
+        result.outline_level = outline_level
+        return result
 
     def purchases(items, project_names=None):
         other = project_names is not None
@@ -349,7 +365,8 @@ def build_pdf(receipts, grouping):
         if unmatched:
             story.append(paragraph("Automatic strike-through could not locate a cost for: " + "; ".join(unmatched)
                                    + ". These purchases remain listed in the red table above.", "OtherProject"))
-        heading = [receipt_title(receipt, "Supporting document — ", "Heading3"),
+        heading = [receipt_title(receipt, "Supporting document — ", "Heading3",
+                                 outline_level=1 if grouping == "receipt" or not receipt["groups"] else 2),
                    paragraph(f'provided by: {receipt.get("provided_by", "not recorded")}'), Spacer(1, 6)]
         for index in range(0, len(pages), 2):
             cells = [SupportingPage(pages[page_index], placements, strikes[page_index])
@@ -388,7 +405,7 @@ def build_pdf(receipts, grouping):
         ]))
         story.extend([table, Spacer(1, 16)])
 
-    story.append(paragraph("Report summary", "Heading1"))
+    story.append(paragraph("Report summary", "Heading1", outline_level=0))
     summary_table(["Project", "Amount"], [(key[1], project_totals[key]) for key in ordered_projects],
                   "OVERALL TOTAL:", sum(project_totals.values(), Decimal(0)))
 
@@ -396,7 +413,7 @@ def build_pdf(receipts, grouping):
         for receipt in receipts:
             if story:
                 story.append(PageBreak())
-            story.append(receipt_title(receipt))
+            story.append(receipt_title(receipt, outline_level=0))
             # Show each project's share here, alongside its total across the report.
             receipt_rows = [["Project", paragraph("This receipt", "SummaryHeader"), paragraph("Project total", "SummaryHeader")]]
             receipt_total = Decimal(0)
@@ -419,7 +436,7 @@ def build_pdf(receipts, grouping):
             story.extend([receipt_summary, Spacer(1, 16)])
             story.append(paragraph("This comprises receipts from the following projects:"))
             for (_, name), items in receipt["groups"].items():
-                story.append(paragraph(name + ":", "Heading3"))
+                story.append(paragraph(name + ":", "Heading3", outline_level=1))
                 purchases(items)
             if not receipt["groups"]:
                 story.append(paragraph("No purchases are attached to this receipt."))
@@ -428,7 +445,7 @@ def build_pdf(receipts, grouping):
         for key in ordered_projects:
             if story:
                 story.append(PageBreak())
-            story.append(paragraph(key[1], "Heading1"))
+            story.append(paragraph(key[1], "Heading1", outline_level=0))
             for _ in range(2):
                 story.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=3))
             summary_table(["Receipt", "Amount"], [
@@ -437,7 +454,7 @@ def build_pdf(receipts, grouping):
             for receipt in receipts:
                 if key not in receipt["groups"]:
                     continue
-                story.append(receipt_title(receipt))
+                story.append(receipt_title(receipt, outline_level=1))
                 statement = (f"All purchases on this receipt are relevant to {key[1]}."
                              if len(receipt["groups"]) == 1 else
                              f"Only the following purchases on this receipt are relevant to {key[1]}.")
@@ -458,17 +475,18 @@ def build_pdf(receipts, grouping):
         if orphans:
             if story:
                 story.append(PageBreak())
-            story.append(paragraph("Receipts without purchases", "Heading1"))
+            story.append(paragraph("Receipts without purchases", "Heading1", outline_level=0))
             for receipt in orphans:
                 documents(receipt)
 
     buf = BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=letter, rightMargin=MARGIN, leftMargin=MARGIN,
+    doc = NavigableReport(buf, pagesize=letter, rightMargin=MARGIN, leftMargin=MARGIN,
                             topMargin=MARGIN, bottomMargin=MARGIN,
                             title=f"Receipts by {grouping}")
     doc.build(story)
     writer = PdfWriter()
     writer.append(PdfReader(BytesIO(buf.getvalue())))
+    writer.page_mode = "/UseOutlines"
     for page_index, x, y, flowable in placements:
         source = deepcopy(flowable.page)
         transform = Transformation().translate(-float(source.cropbox.left), -float(source.cropbox.bottom))

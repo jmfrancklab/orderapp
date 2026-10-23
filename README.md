@@ -56,6 +56,9 @@ of dependency-free vanilla JS (autosave, vendor auto-detect, tracker chips).
   **Save and retry** action. **Export to Excel**, at the very bottom, exports the
   currently filtered invoices. Reports are generated in memory and never saved
   to server disk.
+  PDF bookmarks provide nested navigation through project and receipt headings
+  and their supporting documents. The report requests the bookmarks pane on opening
+  in viewers that support it.
   PDF reports start with centered project totals and an overall total. Project
   sections summarize their receipts; receipt sections summarize their project
   allocations and each project's total across the report. In project reports,

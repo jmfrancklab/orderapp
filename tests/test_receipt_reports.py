@@ -81,6 +81,37 @@ def test_export_amounts_sources_and_grouping(export_client, grouping):
     assert "attachment" in response.headers["Content-Disposition"]
 
 
+@pytest.mark.parametrize("grouping", ["receipt", "project"])
+def test_nested_bookmarks_survive_supporting_document_merge(export_client, grouping):
+    client, _ = export_client
+    response = client.get("/invoices/receipt-report", query_string={"group_by": grouping})
+    assert response.status_code == 200
+    reader = PdfReader(BytesIO(response.data))
+    outline = reader.outline
+    assert reader.page_mode == "/UseOutlines"
+    assert outline[0].title == "Report summary"
+    if grouping == "project":
+        assert outline[1].title == "Alpha"
+        assert outline[2][0].title.startswith("Receipt #11 (Mixed purchase: $37.35)")
+        assert outline[2][1][0].title.startswith("Supporting document")
+        assert outline[3].title == "Beta"
+        assert outline[4][0].title.startswith("Receipt #11")
+    else:
+        assert outline[1].title.startswith("Receipt #11")
+        assert [entry.title for entry in outline[2]][:2] == ["Alpha:", "Beta:"]
+        assert outline[2][-1].title.startswith("Supporting document")
+
+    def check_destinations(entries):
+        for entry in entries:
+            if isinstance(entry, list):
+                check_destinations(entry)
+            else:
+                page_number = reader.get_destination_page_number(entry)
+                assert page_number >= 0
+                assert entry.title in reader.pages[page_number].extract_text()
+    check_destinations(outline)
+
+
 @pytest.mark.parametrize("selected,ids", [(["reimbursed"], [12]), (["requires reimbursement", "reimbursed"], [11, 12])])
 def test_filter_matches_page_and_preserves_multiselect(export_client, selected, ids):
     client, _ = export_client
