@@ -75,8 +75,9 @@ def test_export_amounts_sources_and_grouping(export_client, grouping):
     assert text.count("Original supporting receipt") == (3 if grouping == "project" else 2)
     assert "Supporting receipt second page" in text
     if grouping == "project":
-        assert "All purchases on this receipt are relevant to this project" in text
-        assert "Only the following purchases on this receipt are relevant to this project." in text
+        assert "All purchases on this receipt are relevant to Alpha." in text
+        assert "Only the following purchases on this receipt are relevant to Alpha." in text
+        assert "this project" not in text
     assert "attachment" in response.headers["Content-Disposition"]
 
 
@@ -302,15 +303,19 @@ def test_share_download_preserves_cookies_and_tokens_through_redirects(monkeypat
     ('Orde r Date: 14-Aug-2026\nShip Date: 15-Aug-2026', '2026-08-14'),
     ('Order Date: 2025-08-01', '2025-08-01'),
     ('Invoice Date: 09/03/2026\n123456789', '2026-09-03'),
-    ('Document Date: 09/07/2026', None),
-    ('Docu ment Date: 09/07/2026', None),
+    ('Document Date: 09/07/2026', '2026-09-07'),
+    ('Docu ment Date: 09/07/2026', '2026-09-07'),
     ('Eligible through October 25, 2026', None),
     ('Order Date: 2/30/26', None),
-    ('2026-08-01\n2026-08-02', None),
-    ('Order Date: 8/1/25\nOrder Date: 8/2/25', None),
+    ('2026-08-01\n2026-08-02', '2026-08-01'),
+    ('Order Date: 8/1/25\nOrder Date: 8/2/25', '2025-08-01'),
+    ('Invoice DATE Order Status Comments 8/25/2026 Processing', '2026-08-25'),
+    ('Date: Purchase details and reference number ABC123\n9/11/26', '2026-09-11'),
+    ('Date\nOrder reference 123456789\n8/1/25', '2025-08-01'),
+    ('Reference ABC 8/1/25 and 8/2/25', '2025-08-01'),
     ('An image-only receipt', None),
 ])
-def test_transaction_date_uses_receipt_labels_and_validates_ambiguity(text, expected):
+def test_transaction_date_uses_date_regex_then_numeric_fallback(text, expected):
     from types import SimpleNamespace
     result = reports.transaction_date([SimpleNamespace(extract_text=lambda: text)])
     assert (result.isoformat() if result else None) == expected
@@ -345,9 +350,13 @@ def test_vendor_date_and_provider_are_in_both_report_modes(export_client, monkey
     monkeypatch.setattr(reports, 'download_document', dated_pdf)
     response = client.get('/invoices/receipt-report', query_string={'group_by': grouping})
     text = pdf_text(response)
-    assert 'Receipt #11: DigiKey 8/1/25' in text
-    assert 'Receipt #12: DigiKey 8/1/25' in text
+    assert 'Receipt #11 (Mixed purchase): DigiKey 8/1/25' in text
+    assert 'Receipt #12 (Single purchase): DigiKey 8/1/25' in text
     assert 'provided by: buyer@lab.org' in text
+    labels = []
+    for page in PdfReader(BytesIO(response.data)).pages:
+        page.extract_text(visitor_text=lambda text, cm, tm, font, size: labels.append((text, size)))
+    assert any('(Mixed purchase)' in label and size == 9 for label, size in labels)
     assert 'Report summary' in text and 'OVERALL TOTAL:' in text
     # The repeated red tables and supporting pages must not double-count purchases.
     summary = PdfReader(BytesIO(response.data)).pages[0].extract_text()
@@ -385,4 +394,4 @@ def test_other_project_names_and_totals_are_red_and_excluded(export_client):
     assert '0.30' in seen_red and '37.05' in seen_red
     # The single-project receipt is never listed as an excluded item.
     assert 'Bench supply' not in seen_red
-    assert 'date not found in receipt' in pdf_text(response)
+    assert 'date not found' not in pdf_text(response)

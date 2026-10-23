@@ -61,13 +61,17 @@ of dependency-free vanilla JS (autosave, vendor auto-detect, tracker chips).
   allocations and each project's total across the report. In project reports,
   purchases allocated elsewhere appear in a separate red table, with their
   project names and a separate subtotal. Receipt headings include the vendor
-  and a transaction date extracted from the supporting PDF; missing or ambiguous
-  dates are explicitly marked. Supporting pages show `provided by:` followed by
+  and a transaction date extracted by regex from the supporting PDF, preferring
+  a date label and falling back to a numeric date anywhere. Missing dates are
+  omitted. Receipt numbers are followed by the invoice nickname in smaller,
+  parenthesized text. Relevance statements name the project explicitly.
+  Supporting pages show `provided by:` followed by
   the invoice creator's email address.
   Project-specific supporting pages strike out purchases allocated elsewhere in
   red, using description and product-number regex matches against the PDF's text
-  positions. Relevant purchases stay unmarked; unmatched descriptions are called
-  out explicitly. Scanned pages use system `pdftoppm` and `tesseract` when available,
+  positions. Prices and amounts are struck as well as names; an exact cost match
+  alone counts as success. Relevant purchases stay unmarked; an unmatched cost is
+  called out explicitly. Scanned pages use system `pdftoppm` and `tesseract` when available,
   with input and output held in memory. No extra Python PDF/OCR packages are needed.
 - **Change history** — every field change, tracker add/remove, and submission
   is logged to the `order_history` table (who, when, field, old, new). No GUI

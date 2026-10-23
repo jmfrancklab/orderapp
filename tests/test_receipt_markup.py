@@ -112,3 +112,60 @@ def test_red_lines_are_only_on_project_receipt_images_and_sources_unchanged():
     assert len(red_strokes(reports.build_pdf(receipts, 'project'))) == 2
     assert not red_strokes(reports.build_pdf(receipts, 'receipt'))
     assert page.get_contents().get_data() == original
+
+
+def test_prices_beside_and_below_names_are_struck():
+    spans = [
+        {'text': 'KARACA stainless steel tea kettle', 'height': 10, 'line': (40, 700, 250, 700)},
+        {'text': '$44.99', 'height': 10, 'line': (40, 670, 80, 670)},
+        {'text': 'SEESII NanoVNA-H4 Vector Network Analyzer', 'height': 10, 'line': (40, 600, 300, 600)},
+        {'text': '79.18000', 'height': 10, 'line': (400, 600, 450, 600)},
+        {'text': '158.36', 'height': 10, 'line': (500, 600, 550, 600)},
+    ]
+    lines, missing = markup.strike_through([object()],
+        ['SEESII NanoVNA-H4 Vector Network Analyzer'], ['KARACA stainless steel tea kettle'],
+        [{'native': spans}], costs=[(Decimal('158.36'), Decimal('79.18'))])
+    assert not missing
+    assert len(lines[0]) == 3
+    assert any(x0 == 400 and x1 == 450 for x0, _, x1, _ in lines[0])
+    assert any(x0 == 500 and x1 == 550 for x0, _, x1, _ in lines[0])
+    assert not any(y == 670 for _, y, _, _ in lines[0])
+    lines, missing = markup.strike_through([object()],
+        ['KARACA stainless steel tea kettle'], ['SEESII NanoVNA-H4 Vector Network Analyzer'],
+        [{'native': spans}], costs=[(Decimal('44.99'), Decimal('44.99'))])
+    assert not missing
+    assert any(y == 670 for _, y, _, _ in lines[0])
+    assert not any(x0 >= 400 for x0, _, _, _ in lines[0])
+
+
+def test_exact_cost_without_name_is_successful_and_does_not_warn():
+    spans = [{'text': '$1,550.00', 'height': 12, 'line': (400, 700, 470, 700)}]
+    lines, missing = markup.strike_through([object()], ['Completely different product description'], [],
+        [{'native': spans}], costs=[(Decimal('1550'), Decimal('1550'))])
+    assert not missing
+    assert lines[0] == [(400, 700, 470, 700)]
+
+
+def test_missing_cost_warns_even_when_name_is_found():
+    spans = [{'text': 'SEESII NanoVNA-H4 Vector Network Analyzer', 'height': 12, 'line': (40, 700, 300, 700)}]
+    _, missing = markup.strike_through([object()], ['SEESII NanoVNA-H4 Vector Network Analyzer'], [],
+        [{'native': spans}], costs=[(Decimal('79.18'), Decimal('79.18'))])
+    assert len(missing) == 1
+
+
+def test_split_price_commands_use_actual_pdf_coordinates():
+    buf = BytesIO()
+    pdf = canvas.Canvas(buf, pagesize=(612, 792))
+    text = pdf.beginText()
+    text.setFont('Courier', 10)
+    text.setTextTransform(1, 0, 0, 1, 0, 0)
+    text.setTextTransform(1, 0, 0, 1, 400, 700)
+    text.textOut('139')
+    text.textOut('.86')
+    text.textOut('000')
+    pdf.drawText(text)
+    pdf.save()
+    spans = markup.text_spans(reports.document_pages(buf.getvalue())[0])
+    price = next(item for item in markup._prices(spans) if item['value'] == Decimal('139.86'))
+    assert abs(price['line'][0] - 400) < .1
+    assert abs(price['line'][1] - 703) < .1
