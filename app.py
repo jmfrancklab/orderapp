@@ -11,6 +11,7 @@ import tomllib
 from datetime import datetime, timedelta, timezone
 from functools import cmp_to_key
 from urllib.parse import unquote, urlparse
+from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from flask import (Flask, g, jsonify, redirect, render_template, request,
@@ -25,7 +26,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 
 # Increment this (major.minor.patch) whenever you deploy a meaningful change.
-__version__ = "0.18.3"
+__version__ = "0.18.4"
 
 EXPENDITURE_PERMISSION_MESSAGE = (
     "Expenditure authorization is required for this status transition."
@@ -1830,6 +1831,13 @@ def invoice_receipt_report():
                 error["can_edit"] = invoice_visible_to(
                     db, error["invoice_id"], current_user()) is not None
         return jsonify(ok=False, message=str(exc), errors=exc.errors), 400
+    except Exception:
+        reference = uuid4().hex[:12]
+        app.logger.exception("Receipt report failed [%s], grouping=%s, invoice_ids=%s",
+                             reference, grouping, [row["id"] for row in rows])
+        return jsonify(ok=False, message=(
+            f"The server could not generate the PDF. Error reference: {reference}. "
+            "Check the PythonAnywhere error log for the traceback with this reference.")), 500
     return send_file(BytesIO(report), mimetype="application/pdf", as_attachment=True,
                      download_name=f"receipts-by-{grouping}.pdf", max_age=0)
 

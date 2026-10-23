@@ -915,10 +915,13 @@
     head.appendChild(title); head.appendChild(close); reportPopup.appendChild(head);
     var form = document.createElement("form");
     var intro = document.createElement("p");
-    intro.textContent = "Correct the links below, or close this popup and change the page filters. Receipt links are used first; invoice links are used when no receipt is recorded.";
+    var errors = error.reportErrors || [];
+    var hasDocumentErrors = errors.some(function (item) { return item.kind === "document"; });
+    intro.textContent = hasDocumentErrors
+      ? "Correct the links below, or close this popup and change the page filters. Receipt links are used first; invoice links are used when no receipt is recorded."
+      : "Report generation failed. The details below explain the error; no links have been identified for correction.";
     form.appendChild(intro);
     var edits = [], seen = new Set();
-    var errors = error.reportErrors || [];
     if (!errors.length) {
       var message = document.createElement("p");
       message.textContent = error.message;
@@ -1021,7 +1024,10 @@
       var response = await fetch(reportUrl, { headers: { Accept: "application/pdf" } });
       if (!response.ok || !(response.headers.get("Content-Type") || "").includes("application/pdf")) {
         var errorData = await response.json().catch(function () { return {}; });
-        var error = new Error(errorData.message || "Could not generate the report. Refresh the page and try again.");
+        var fallback = response.status === 500
+          ? "The server could not generate the PDF (HTTP 500). Check the PythonAnywhere error log for the traceback from this attempt."
+          : "Could not download the report" + (response.status ? " (HTTP " + response.status + ")" : "") + ". Refresh the page and try again.";
+        var error = new Error(errorData.message || fallback);
         error.reportErrors = errorData.errors;
         throw error;
       }

@@ -65,8 +65,11 @@ async function run(mode) {
       }
       requested = url; getCount++;
       const failure = mode !== 'success' && getCount === 1;
-      return {ok: !failure, headers: {get: () => failure ? 'application/json' : 'application/pdf'},
-        json: async () => mode === 'generic-error' ? {message: 'Please reload and try again.'} : {message: 'Fix the links.', errors},
+      return {ok: !failure, status: failure ? 500 : 200, headers: {get: () => failure ? 'application/json' : 'application/pdf'},
+        json: async () => {
+          if (mode === 'html-error') throw new Error('HTML response');
+          return mode === 'generic-error' ? {message: 'Please reload and try again.'} : {message: 'Fix the links.', errors};
+        },
         blob: async () => ({})};
     }
   };
@@ -85,8 +88,14 @@ async function run(mode) {
   assert.ok(popup);
   assert.equal(popup.attributes['aria-modal'], 'true');
   const inputs = popup.querySelectorAll('input');
-  if (mode === 'generic-error') {
+  const form = popup.children.find(child => child.tag === 'form');
+  if (mode === 'generic-error' || mode === 'html-error') {
     assert.equal(inputs.length, 0);
+    assert.ok(!form.children.some(child => /Correct the links/.test(child.textContent)));
+    assert.ok(form.children.some(child => /no links have been identified/.test(child.textContent)));
+    if (mode === 'html-error') {
+      assert.ok(form.children.some(child => /HTTP 500.*PythonAnywhere error log/.test(child.textContent)));
+    }
     return;
   }
   // Only the two offending URLs, with no extra invoice or receipt fields.
@@ -94,7 +103,6 @@ async function run(mode) {
   assert.deepEqual(inputs.map(input => input.value), errors.map(error => error.source_url));
   inputs[0].value = 'https://files.example/fixed-11.pdf';
   inputs[1].value = 'https://files.example/fixed-12.pdf';
-  const form = popup.children.find(child => child.tag === 'form');
   await form.listeners.submit({preventDefault() {}});
   assert.deepEqual(posts[0], {url: '/api/invoices/11', body: {receipt_url: inputs[0].value}});
   if (mode === 'save-failure') {
@@ -111,6 +119,6 @@ async function run(mode) {
   assert.ok(!document.body.children.includes(popup));
 }
 (async () => {
-  for (const mode of ['success', 'failure', 'save-failure', 'generic-error']) await run(mode);
+  for (const mode of ['success', 'failure', 'save-failure', 'generic-error', 'html-error']) await run(mode);
   console.log('Receipt report interactions passed');
 })().catch(error => {console.error(error); process.exitCode = 1;});

@@ -120,6 +120,22 @@ def test_filter_matches_page_and_preserves_multiselect(export_client, selected, 
         assert (f"Receipt #{number}" in text) == (number in ids)
 
 
+def test_unexpected_generation_error_returns_log_reference(export_client, monkeypatch, caplog):
+    client, _ = export_client
+    def fail(*args):
+        raise RuntimeError("PDF layout failed")
+    monkeypatch.setattr(reports, "generate", fail)
+    response = client.get("/invoices/receipt-report", query_string={"group_by": "project"})
+    assert response.status_code == 500
+    data = response.get_json()
+    reference = data["message"].split("Error reference: ")[1].split(".")[0]
+    assert reference in caplog.text
+    assert "PDF layout failed" in caplog.text
+    assert "grouping=project" in caplog.text
+    assert "errors" not in data
+    assert "PDF layout failed" not in data["message"]
+
+
 def test_missing_and_failed_files_identify_rows(export_client, monkeypatch):
     client, _ = export_client
     with sqlite3.connect(app_module.DB_PATH) as db:
