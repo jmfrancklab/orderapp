@@ -293,7 +293,8 @@ def build_pdf(receipts, grouping):
     def receipt_label(receipt, short=False):
         label = f'{"" if short else "Receipt "}#{receipt["id"]}'
         if receipt.get("nickname"):
-            label += f' <font size="9">({escape(receipt["nickname"])})</font>'
+            total = sum((item[0] for items in receipt["groups"].values() for item in items), Decimal(0))
+            label += f' <font size="9">({escape(receipt["nickname"])}: ${total:,.2f})</font>'
         return label
 
     def receipt_title(receipt, prefix="", style="Heading2"):

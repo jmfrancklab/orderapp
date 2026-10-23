@@ -63,8 +63,9 @@ of dependency-free vanilla JS (autosave, vendor auto-detect, tracker chips).
   project names and a separate subtotal. Receipt headings include the vendor
   and a transaction date extracted by regex from the supporting PDF, preferring
   a date label and falling back to a numeric date anywhere. Missing dates are
-  omitted. Receipt numbers are followed by the invoice nickname in smaller,
-  parenthesized text. Relevance statements name the project explicitly.
+  omitted. Receipt numbers are followed by the invoice nickname and full invoice
+  total in smaller, parenthesized text, summed across all projects using quantity
+  times unit cost. Relevance statements name the project explicitly.
   Supporting pages show `provided by:` followed by
   the invoice creator's email address.
   Project-specific supporting pages strike out purchases allocated elsewhere in

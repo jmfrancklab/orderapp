@@ -350,19 +350,23 @@ def test_vendor_date_and_provider_are_in_both_report_modes(export_client, monkey
     monkeypatch.setattr(reports, 'download_document', dated_pdf)
     response = client.get('/invoices/receipt-report', query_string={'group_by': grouping})
     text = pdf_text(response)
-    assert 'Receipt #11 (Mixed purchase): DigiKey 8/1/25' in text
-    assert 'Receipt #12 (Single purchase): DigiKey 8/1/25' in text
+    # Invoice #11 spans two projects: its label must include both allocations.
+    assert 'Receipt #11 (Mixed purchase: $37.35): DigiKey 8/1/25' in text
+    assert 'Receipt #12 (Single purchase: $2,000.20): DigiKey 8/1/25' in text
     assert 'provided by: buyer@lab.org' in text
     labels = []
     for page in PdfReader(BytesIO(response.data)).pages:
         page.extract_text(visitor_text=lambda text, cm, tm, font, size: labels.append((text, size)))
-    assert any('(Mixed purchase)' in label and size == 9 for label, size in labels)
+    assert any('(Mixed purchase: $37.35)' in label and size == 9 for label, size in labels)
     assert 'Report summary' in text and 'OVERALL TOTAL:' in text
     # The repeated red tables and supporting pages must not double-count purchases.
     summary = PdfReader(BytesIO(response.data)).pages[0].extract_text()
     for amount in ('2,037.25', '0.30', '2,037.55'):
         assert amount in summary
     if grouping == 'project':
+        assert '#11 (Mixed purchase: $37.35)' in text
+        assert '(Mixed purchase: $37.05)' not in text
+        assert '(Mixed purchase: $0.30)' not in text
         assert text.count('OTHER PROJECTS TOTAL:') == 2
         assert 'PROJECT TOTAL:' in text
         assert 'Purchases for other projects' in text
