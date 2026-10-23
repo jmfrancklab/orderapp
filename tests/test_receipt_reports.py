@@ -72,12 +72,11 @@ def test_export_amounts_sources_and_grouping(export_client, grouping):
     for label in ("Quantity", "Unit cost", "Line total", "37.05", "0.30", "2,000.20"):
         assert label in text
     assert downloads == ["https://files.example/receipt.pdf", "https://files.example/invoice.pdf"]
-    assert text.count("Original supporting receipt") == (3 if grouping == "project" else 2)
+    assert text.count("Original supporting receipt") == 3
     assert "Supporting receipt second page" in text
-    if grouping == "project":
-        assert "All purchases on this receipt are relevant to Alpha." in text
-        assert "Only the following purchases on this receipt are relevant to Alpha." in text
-        assert "this project" not in text
+    assert "All purchases on this receipt are relevant to Alpha." in text
+    assert "Only the following purchases on this receipt are relevant to Alpha." in text
+    assert "this project" not in text
     assert "attachment" in response.headers["Content-Disposition"]
 
 
@@ -98,8 +97,10 @@ def test_nested_bookmarks_survive_supporting_document_merge(export_client, group
         assert outline[4][0].title.startswith("Receipt #11")
     else:
         assert outline[1].title.startswith("Receipt #11")
-        assert [entry.title for entry in outline[2]][:2] == ["Alpha:", "Beta:"]
-        assert outline[2][-1].title.startswith("Supporting document")
+        assert outline[2][0].title == "Alpha"
+        assert outline[2][1][0].title.startswith("Supporting document")
+        assert outline[2][2].title == "Beta"
+        assert outline[2][3][0].title.startswith("Supporting document")
 
     def check_destinations(entries):
         for entry in entries:
@@ -423,7 +424,8 @@ def test_vendor_date_and_provider_are_in_both_report_modes(export_client, monkey
     assert 'Report summary' in text and 'OVERALL TOTAL:' in text
     # The repeated red tables and supporting pages must not double-count purchases.
     summary = PdfReader(BytesIO(response.data)).pages[0].extract_text()
-    for amount in ('2,037.25', '0.30', '2,037.55'):
+    for amount in (('2,037.25', '0.30', '2,037.55') if grouping == 'project'
+                   else ('37.35', '2,000.20', '2,037.55')):
         assert amount in summary
     if grouping == 'project':
         assert '#11 (Mixed purchase: $37.35)' in text
@@ -433,14 +435,15 @@ def test_vendor_date_and_provider_are_in_both_report_modes(export_client, monkey
         assert 'PROJECT TOTAL:' in text
         assert 'Purchases for other projects' in text
     else:
-        assert 'OTHER PROJECTS TOTAL:' not in text
-        assert 'This receipt' in text and 'Project total' in text
+        assert text.count('OTHER PROJECTS TOTAL:') == 2
+        assert 'Purchases for other projects' in text
         assert 'RECEIPT TOTAL:' in text
 
 
-def test_other_project_names_and_totals_are_red_and_excluded(export_client):
+@pytest.mark.parametrize('grouping', ['receipt', 'project'])
+def test_other_project_names_and_totals_are_red_and_excluded(export_client, grouping):
     client, _ = export_client
-    response = client.get('/invoices/receipt-report?group_by=project')
+    response = client.get('/invoices/receipt-report', query_string={'group_by': grouping})
     reader = PdfReader(BytesIO(response.data))
     seen_red = []
     for page in reader.pages:
@@ -461,3 +464,36 @@ def test_other_project_names_and_totals_are_red_and_excluded(export_client):
     # The single-project receipt is never listed as an excluded item.
     assert 'Bench supply' not in seen_red
     assert 'date not found' not in pdf_text(response)
+
+
+def test_both_orders_use_identical_project_specific_support_and_cost_strikes(export_client, monkeypatch):
+    client, _ = export_client
+    def supporting_pdf(url):
+        buf = BytesIO()
+        pdf = canvas.Canvas(buf, pagesize=(612, 792))
+        pdf.drawString(40, 700, 'Precision cable <shielded>')
+        pdf.drawString(400, 700, '$37.05')
+        pdf.drawString(40, 650, 'Adapter')
+        pdf.drawString(400, 650, '$0.30')
+        pdf.save()
+        return buf.getvalue()
+    monkeypatch.setattr(reports, 'download_document', supporting_pdf)
+    original = reports.receipt_markup.strike_through
+    calls = []
+    def strike(pages, excluded, relevant, geometry, costs=None):
+        lines, missing = original(pages, excluded, relevant, geometry, costs=costs)
+        calls.append((excluded, relevant, costs, lines))
+        assert not missing
+        return lines, missing
+    monkeypatch.setattr(reports.receipt_markup, 'strike_through', strike)
+    rendered = []
+    for grouping in ('project', 'receipt'):
+        calls.clear()
+        text = pdf_text(client.get('/invoices/receipt-report', query_string={'group_by': grouping}))
+        assert text.count('Supporting document') == 3
+        assert len(calls) == 2
+        # Each allocation crosses out the other allocation's exact cost.
+        for _, _, _, pages in calls:
+            assert any(x0 >= 399 for page in pages for x0, _, _, _ in page)
+        rendered.append(list(calls))
+    assert rendered[0] == rendered[1]

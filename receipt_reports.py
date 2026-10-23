@@ -296,7 +296,6 @@ def build_pdf(receipts, grouping):
     styles = getSampleStyleSheet()
     styles.add(ParagraphStyle("OtherProject", parent=styles["Normal"], textColor=OTHER_PROJECT_COLOR))
     styles.add(ParagraphStyle("OtherProjectHeading", parent=styles["Heading3"], textColor=OTHER_PROJECT_COLOR))
-    styles.add(ParagraphStyle("SummaryHeader", parent=styles["Normal"], fontName="Helvetica-Bold"))
     placements, story = [], []
 
     def paragraph(text, style="Normal", outline_level=None):
@@ -366,7 +365,7 @@ def build_pdf(receipts, grouping):
             story.append(paragraph("Automatic strike-through could not locate a cost for: " + "; ".join(unmatched)
                                    + ". These purchases remain listed in the red table above.", "OtherProject"))
         heading = [receipt_title(receipt, "Supporting document — ", "Heading3",
-                                 outline_level=1 if grouping == "receipt" or not receipt["groups"] else 2),
+                                 outline_level=2 if receipt["groups"] else 1),
                    paragraph(f'provided by: {receipt.get("provided_by", "not recorded")}'), Spacer(1, 6)]
         for index in range(0, len(pages), 2):
             cells = [SupportingPage(pages[page_index], placements, strikes[page_index])
@@ -405,72 +404,67 @@ def build_pdf(receipts, grouping):
         ]))
         story.extend([table, Spacer(1, 16)])
 
-    story.append(paragraph("Report summary", "Heading1", outline_level=0))
-    summary_table(["Project", "Amount"], [(key[1], project_totals[key]) for key in ordered_projects],
-                  "OVERALL TOTAL:", sum(project_totals.values(), Decimal(0)))
+    def purchase_section(receipt, key):
+        # Both report orders render exactly the same receipt/project purchase.
+        if grouping == "project":
+            story.append(receipt_title(receipt, outline_level=1))
+        else:
+            story.append(paragraph(key[1], "Heading2", outline_level=1))
+        statement = (f"All purchases on this receipt are relevant to {key[1]}."
+                     if len(receipt["groups"]) == 1 else
+                     f"Only the following purchases on this receipt are relevant to {key[1]}.")
+        story.extend([paragraph(statement), Spacer(1, 10)])
+        purchases(receipt["groups"][key])
+        other_items, other_projects = [], []
+        for other_key, items in receipt["groups"].items():
+            if other_key != key:
+                other_items.extend(items)
+                other_projects.extend([other_key[1]] * len(items))
+        if other_items:
+            story.append(paragraph(f"Purchases for other projects (excluded from total for {key[1]})", "OtherProjectHeading"))
+            purchases(other_items, other_projects)
+        documents(receipt, [item[1] for item in other_items],
+                  [item[1] for item in receipt["groups"][key]],
+                  costs=[(item[0], item[3]) for item in other_items])
 
+    def section_rules():
+        for _ in range(2):
+            story.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=3))
+
+    def receipt_total(receipt):
+        return sum((item[0] for items in receipt["groups"].values() for item in items), Decimal(0))
+
+    story.append(paragraph("Report summary", "Heading1", outline_level=0))
     if grouping == "receipt":
+        summary_table(["Receipt", "Amount"], [
+            (Paragraph(receipt_label(receipt, short=True), styles["Normal"]), receipt_total(receipt))
+            for receipt in receipts], "OVERALL TOTAL:", sum(project_totals.values(), Decimal(0)))
         for receipt in receipts:
-            if story:
-                story.append(PageBreak())
-            story.append(receipt_title(receipt, outline_level=0))
-            # Show each project's share here, alongside its total across the report.
-            receipt_rows = [["Project", paragraph("This receipt", "SummaryHeader"), paragraph("Project total", "SummaryHeader")]]
-            receipt_total = Decimal(0)
-            for key, items in receipt["groups"].items():
-                amount = sum((item[0] for item in items), Decimal(0))
-                receipt_total += amount
-                receipt_rows.append([paragraph(key[1]), f"{amount:,.2f}", f"{project_totals[key]:,.2f}"])
-            receipt_rows.append(["RECEIPT TOTAL:", f"{receipt_total:,.2f}", ""])
-            receipt_summary = Table(receipt_rows, colWidths=[130, 70, 70], hAlign="CENTER", repeatRows=1, splitInRow=1)
-            receipt_summary.setStyle(TableStyle([
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e9edf2")),
-                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
-                ("LINEABOVE", (0, -1), (-1, -1), .7, colors.black),
-                ("TOPPADDING", (0, 0), (-1, -1), 7),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
-            ]))
-            story.extend([receipt_summary, Spacer(1, 16)])
-            story.append(paragraph("This comprises receipts from the following projects:"))
-            for (_, name), items in receipt["groups"].items():
-                story.append(paragraph(name + ":", "Heading3", outline_level=1))
-                purchases(items)
-            if not receipt["groups"]:
+            story.append(PageBreak())
+            story.append(receipt_title(receipt, style="Heading1", outline_level=0))
+            section_rules()
+            keys = [key for key in ordered_projects if key in receipt["groups"]]
+            summary_table(["Project", "Amount"], [
+                (key[1], sum((item[0] for item in receipt["groups"][key]), Decimal(0)))
+                for key in keys], "RECEIPT TOTAL:", receipt_total(receipt))
+            for key in keys:
+                purchase_section(receipt, key)
+            if not keys:
                 story.append(paragraph("No purchases are attached to this receipt."))
-            documents(receipt)
+                documents(receipt)
     else:
+        summary_table(["Project", "Amount"], [(key[1], project_totals[key]) for key in ordered_projects],
+                      "OVERALL TOTAL:", sum(project_totals.values(), Decimal(0)))
         for key in ordered_projects:
-            if story:
-                story.append(PageBreak())
+            story.append(PageBreak())
             story.append(paragraph(key[1], "Heading1", outline_level=0))
-            for _ in range(2):
-                story.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=3))
+            section_rules()
             summary_table(["Receipt", "Amount"], [
                 (Paragraph(receipt_label(receipt, short=True), styles["Normal"]), sum((item[0] for item in receipt["groups"][key]), Decimal(0)))
                 for receipt in receipts if key in receipt["groups"]], "PROJECT TOTAL:", project_totals[key])
             for receipt in receipts:
-                if key not in receipt["groups"]:
-                    continue
-                story.append(receipt_title(receipt, outline_level=1))
-                statement = (f"All purchases on this receipt are relevant to {key[1]}."
-                             if len(receipt["groups"]) == 1 else
-                             f"Only the following purchases on this receipt are relevant to {key[1]}.")
-                story.extend([paragraph(statement), Spacer(1, 10)])
-                purchases(receipt["groups"][key])
-                other_items, other_projects = [], []
-                for other_key, items in receipt["groups"].items():
-                    if other_key != key:
-                        other_items.extend(items)
-                        other_projects.extend([other_key[1]] * len(items))
-                if other_items:
-                    story.append(paragraph(f"Purchases for other projects (excluded from total for {key[1]})", "OtherProjectHeading"))
-                    purchases(other_items, other_projects)
-                documents(receipt, [item[1] for item in other_items],
-                          [item[1] for item in receipt["groups"][key]],
-                          costs=[(item[0], item[3]) for item in other_items])
+                if key in receipt["groups"]:
+                    purchase_section(receipt, key)
         orphans = [receipt for receipt in receipts if not receipt["groups"]]
         if orphans:
             if story:

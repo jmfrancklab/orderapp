@@ -92,7 +92,7 @@ def test_ocr_pipeline_uses_memory_and_maps_pixel_coordinates(monkeypatch):
     assert calls[1][1] == image.getvalue()
 
 
-def test_red_lines_are_only_on_project_receipt_images_and_sources_unchanged():
+def test_both_report_orders_strike_supporting_images_and_leave_sources_unchanged():
     page = sample_page()
     receipts = [{'id': 20, 'vendor': 'Amazon', 'transaction_date': date(2026, 10, 6),
         'provided_by': 'person@email.com', 'pages': [page], 'groups': {
@@ -111,7 +111,7 @@ def test_red_lines_are_only_on_project_receipt_images_and_sources_unchanged():
                 elif operator == b'l' and red: strokes.append(operands)
         return strokes
     assert len(red_strokes(reports.build_pdf(receipts, 'project'))) == 2
-    assert not red_strokes(reports.build_pdf(receipts, 'receipt'))
+    assert len(red_strokes(reports.build_pdf(receipts, 'receipt'))) == 2
     assert page.get_contents().get_data() == original
 
 

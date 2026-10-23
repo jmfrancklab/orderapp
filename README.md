@@ -59,9 +59,10 @@ of dependency-free vanilla JS (autosave, vendor auto-detect, tracker chips).
   PDF bookmarks provide nested navigation through project and receipt headings
   and their supporting documents. The report requests the bookmarks pane on opening
   in viewers that support it.
-  PDF reports start with centered project totals and an overall total. Project
-  sections summarize their receipts; receipt sections summarize their project
-  allocations and each project's total across the report. In project reports,
+  PDF reports start with centered totals by the selected grouping and an overall
+  total. Project sections summarize their receipts; receipt sections summarize
+  their project allocations. Both orders use the same receipt/project purchase
+  section, including project-specific supporting pages and strike-throughs:
   purchases allocated elsewhere appear in a separate red table, with their
   project names and a separate subtotal. Receipt headings include the vendor
   and a transaction date extracted by regex from the supporting PDF, preferring
@@ -71,7 +72,7 @@ of dependency-free vanilla JS (autosave, vendor auto-detect, tracker chips).
   times unit cost. Relevance statements name the project explicitly.
   Supporting pages show `provided by:` followed by
   the invoice creator's email address.
-  Project-specific supporting pages strike out purchases allocated elsewhere in
+  Project-specific supporting pages in both report orders strike out purchases allocated elsewhere in
   red, using description and product-number regex matches against the PDF's text
   positions. Prices and amounts are struck as well as names; an exact cost match
   alone counts as success. Relevant purchases stay unmarked; an unmatched cost is
