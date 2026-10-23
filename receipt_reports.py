@@ -1,9 +1,11 @@
 """Filtered receipt summaries with original supporting pages embedded as PDF content."""
 from collections import OrderedDict
 from copy import deepcopy
+from datetime import date
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from io import BytesIO
 import ipaddress
+import re
 import socket
 from urllib.parse import urljoin, urlparse
 from xml.sax.saxutils import escape
@@ -14,14 +16,16 @@ from pypdf import PdfReader, PdfWriter, Transformation
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 from reportlab.platypus import (
-    Flowable, HRFlowable, PageBreak, Paragraph, SimpleDocTemplate, Spacer,
+    Flowable, HRFlowable, KeepTogether, PageBreak, Paragraph, SimpleDocTemplate, Spacer,
     Table, TableStyle,
 )
 
 import quotes
+import receipt_markup
 
 PAGE_WIDTH, PAGE_HEIGHT = letter
 MARGIN = 36
@@ -29,6 +33,88 @@ CONTENT_WIDTH = PAGE_WIDTH - 2 * MARGIN
 MAX_FILE_BYTES = 25 * 1024 * 1024
 MAX_DOCUMENT_PAGES = 100
 CENT = Decimal("0.01")
+OTHER_PROJECT_COLOR = colors.HexColor("#b00020")
+
+_MONTH = r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
+_DATE_PATTERNS = (
+    ("iso", re.compile(r"(?<!\d)(20\d{2}|19\d{2})\s*[-/]\s*(\d{1,2})\s*[-/]\s*(\d{1,2})(?!\d)")),
+    ("numeric", re.compile(r"(?<![\d/])(\d{1,2})\s*[/\-]\s*(\d{1,2})\s*[/\-]\s*((?:20|19)\d{2}|\d{2})(?!\d)")),
+    ("month_first", re.compile(rf"\b({_MONTH})\.?\s+(\d{{1,2}})(?:st|nd|rd|th)?\s*,?\s*(20\d{{2}}|19\d{{2}})(?!\d)", re.I)),
+    ("day_first", re.compile(rf"(?<!\d)(\d{{1,2}})\s*[- ]\s*({_MONTH})\.?\s*[- ,]\s*(20\d{{2}}|19\d{{2}})", re.I)),
+)
+_MONTH_NUMBERS = {name: index for index, name in enumerate(
+    ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"), 1)}
+
+
+def _date_label(label):
+    # PDF extraction can split labels into fragments such as "Orde r Date".
+    return r"\b" + r"\s*".join(re.escape(char) for char in label if char != " ")
+
+
+_DATE_LABELS = [
+    (100, "transaction date|payment date|date paid|paid on|purchase date|purchased on"),
+    (90, "order date|order placed|placed on|placed|submitted on|submitted"),
+    (80, "invoice date|receipt date"),
+    (60, "date"),
+]
+_DATE_LABEL_PATTERNS = [
+    (priority, re.compile(
+        "(?:" + "|".join(_date_label(label) for label in labels.split("|")) + ")"
+        r"\s*:?\s*(?:(?:Mon(?:day)?|Tue(?:sday)?|Wed(?:nesday)?|Thu(?:rsday)?|Fri(?:day)?|Sat(?:urday)?|Sun(?:day)?)\s*,?\s*)?$", re.I))
+    for priority, labels in _DATE_LABELS
+]
+_NON_TRANSACTION_LABEL = re.compile(
+    "(?:" + "|".join(_date_label(label) for label in (
+        "eligible through", "return by", "return until", "arriving", "arrival date",
+        "delivery date", "delivered", "ship date", "shipping date", "document date",
+        "due date", "expires", "expiration", "expiration date")) + r")\s*:?\s*$", re.I)
+
+
+def transaction_date(pages, geometry=None):
+    """Find a labeled receipt date; never guess between unrelated dates."""
+    candidates = []
+    for page_index, page in enumerate(pages or []):
+        try:
+            text = page.extract_text() or ""
+        except Exception:
+            text = ""
+        if not text.strip():
+            data = geometry[page_index] if geometry is not None else {}
+            if "ocr" not in data:
+                data["ocr"] = receipt_markup.ocr_spans(page)
+            text = " ".join(span["text"] for span in data["ocr"])
+        # Some PDFs wrap a digit mid-date (e.g. Order Date: 0\n8/24/2026).
+        text = re.sub(r"(?<=\d)[ \t]*\n[ \t]*(?=\d[ \t]*[/\-])", "", text)
+        for kind, pattern in _DATE_PATTERNS:
+            for match in pattern.finditer(text):
+                a, b, c = match.groups()
+                if kind == "iso":
+                    year, month, day = int(a), int(b), int(c)
+                else:
+                    year = int(c)
+                    if year < 100:
+                        year += 2000 if year < 70 else 1900
+                    if kind == "numeric":
+                        month, day = int(a), int(b)
+                    elif kind == "month_first":
+                        month, day = _MONTH_NUMBERS[a[:3].lower()], int(b)
+                    else:
+                        month, day = _MONTH_NUMBERS[b[:3].lower()], int(a)
+                try:
+                    value = date(year, month, day)
+                except ValueError:
+                    continue
+                before = text[max(0, match.start() - 100):match.start()]
+                if _NON_TRANSACTION_LABEL.search(before):
+                    continue
+                priority = max((score for score, label in _DATE_LABEL_PATTERNS
+                                if label.search(before)), default=0)
+                candidates.append((priority, value))
+    if not candidates:
+        return None
+    best = max(score for score, _ in candidates)
+    dates = {value for score, value in candidates if score == best}
+    return next(iter(dates)) if len(dates) == 1 else None
 
 
 class ReportError(Exception):
@@ -120,9 +206,10 @@ def collect_receipts(db, invoices):
     receipts, errors, cache = [], [], {}
     for invoice in invoices:
         rows = db.execute(
-            """SELECT o.id, o.description, o.cost, o.quantity, o.project_id,
+            """SELECT o.id, o.description, o.cost, o.quantity, o.project_id, v.name AS vendor_name,
                       COALESCE(p.name, 'Unassigned project') AS project_name
                FROM orders o LEFT JOIN projects p ON p.id = o.project_id
+               LEFT JOIN vendors v ON v.id = o.vendor_id
                WHERE o.invoice_id = ? ORDER BY o.id""", (invoice["id"],)).fetchall()
         groups = OrderedDict()
         for row in rows:
@@ -141,15 +228,21 @@ def collect_receipts(db, invoices):
             try:
                 if not url:
                     raise ValueError("No receipt or invoice URL is recorded.")
-                cache[url] = (document_pages(download_document(url)), None)
+                pages = document_pages(download_document(url))
+                geometry = [{} for _ in pages]
+                cache[url] = (pages, transaction_date(pages, geometry), geometry, None)
             except Exception as exc:
                 # Do not expose share URLs/tokens or remote exception bodies.
                 reason = str(exc) if isinstance(exc, ValueError) else "Could not download or read the supporting file. Check its sharing permissions and file format."
-                cache[url] = (None, reason)
-        pages, failure = cache[url]
+                cache[url] = (None, None, None, reason)
+        pages, purchased_on, geometry, failure = cache[url]
         if failure:
             errors.append(_error(invoice, failure))
-        receipts.append({"id": invoice["id"], "groups": groups, "pages": pages})
+        vendors = list(dict.fromkeys(row["vendor_name"] for row in rows if row["vendor_name"]))
+        receipts.append({"id": invoice["id"], "groups": groups, "pages": pages,
+                         "vendor": ", ".join(vendors) or "Vendor not recorded",
+                         "transaction_date": purchased_on, "provided_by": invoice["created_by"],
+                         "text_geometry": geometry})
     if errors:
         raise ReportError(errors)
     return receipts
@@ -157,9 +250,10 @@ def collect_receipts(db, invoices):
 
 class SupportingPage(Flowable):
     """Reserve layout space, then merge the source page after pagination."""
-    def __init__(self, page, placements):
+    def __init__(self, page, placements, strikes=()):
         super().__init__()
         self.page, self.placements = page, placements
+        self.strikes = strikes
         width, height = float(page.cropbox.width), float(page.cropbox.height)
         self.scale = min(1, (CONTENT_WIDTH / 2 - 12) / width, 600 / height)
         self.width, self.height = width * self.scale, height * self.scale
@@ -167,6 +261,18 @@ class SupportingPage(Flowable):
     def draw(self):
         x, y = self.canv.absolutePosition(0, 0)
         self.placements.append((self.canv.getPageNumber() - 1, x, y, self))
+        if self.strikes:
+            self.canv.saveState()
+            clip = self.canv.beginPath()
+            clip.rect(0, 0, self.width, self.height)
+            self.canv.clipPath(clip, stroke=0)
+            self.canv.setStrokeColor(OTHER_PROJECT_COLOR)
+            self.canv.setLineWidth(.8)
+            left, bottom = float(self.page.cropbox.left), float(self.page.cropbox.bottom)
+            for x0, y0, x1, y1 in self.strikes:
+                self.canv.line((x0 - left) * self.scale, (y0 - bottom) * self.scale,
+                               (x1 - left) * self.scale, (y1 - bottom) * self.scale)
+            self.canv.restoreState()
         self.canv.setStrokeColor(colors.black)
         self.canv.setLineWidth(1)
         self.canv.rect(0, 0, self.width, self.height)
@@ -174,51 +280,133 @@ class SupportingPage(Flowable):
 
 def build_pdf(receipts, grouping):
     styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle("OtherProject", parent=styles["Normal"], textColor=OTHER_PROJECT_COLOR))
+    styles.add(ParagraphStyle("OtherProjectHeading", parent=styles["Heading3"], textColor=OTHER_PROJECT_COLOR))
+    styles.add(ParagraphStyle("SummaryHeader", parent=styles["Normal"], fontName="Helvetica-Bold"))
     placements, story = [], []
 
     def paragraph(text, style="Normal"):
         return Paragraph(escape(str(text)).replace("\n", "<br/>"), styles[style])
 
-    def purchases(items):
-        rows = [["Description", "Quantity", "Unit cost", "Line total"]]
-        rows.extend([[paragraph(description), str(quantity), f"{cost:,.2f}", f"{amount:,.2f}"]
-                     for amount, description, quantity, cost in items])
+    def receipt_title(receipt):
+        purchased_on = receipt.get("transaction_date")
+        formatted_date = (f"{purchased_on.month}/{purchased_on.day}/{purchased_on.year % 100:02d}"
+                          if purchased_on else "date not found in receipt")
+        return f'Receipt #{receipt["id"]}: {receipt.get("vendor", "Vendor not recorded")} {formatted_date}'
+
+    def purchases(items, project_names=None):
+        other = project_names is not None
+        style = "OtherProject" if other else "Normal"
+        rows = [["Description"] + (["Project"] if other else []) + ["Quantity", "Unit cost", "Line total"]]
+        for index, (amount, description, quantity, cost) in enumerate(items):
+            rows.append([paragraph(description, style)]
+                        + ([paragraph(project_names[index], style)] if other else [])
+                        + [str(quantity), f"{cost:,.2f}", f"{amount:,.2f}"])
         total = sum((item[0] for item in items), Decimal(0))
-        rows.append(["TOTAL:", "", "", f"{total:,.2f}"])
-        table = Table(rows, colWidths=[CONTENT_WIDTH - 230, 60, 80, 90],
+        rows.append(["OTHER PROJECTS TOTAL:" if other else "TOTAL:"]
+                    + [""] * (len(rows[0]) - 2) + [f"{total:,.2f}"])
+        widths = [210, 110, 60, 75, 85] if other else [CONTENT_WIDTH - 230, 60, 80, 90]
+        table = Table(rows, colWidths=widths,
                       hAlign="LEFT", repeatRows=1, splitInRow=1)
         table.setStyle(TableStyle([
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+            ("ALIGN", (2 if other else 1, 0), (-1, -1), "RIGHT"),
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e9edf2")),
             ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
             ("LINEBELOW", (0, 0), (-1, 0), 0.7, colors.black),
             ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#f7f8fa")]),
             ("LINEABOVE", (0, -1), (-1, -1), 0.7, colors.black),
             ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
-            ("SPAN", (0, -1), (2, -1)),
+            ("SPAN", (0, -1), (-2, -1)),
+            ("TEXTCOLOR", (0, 0), (-1, -1), OTHER_PROJECT_COLOR if other else colors.black),
             ("TOPPADDING", (0, 0), (-1, -1), 7),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
         ]))
         story.extend([table, Spacer(1, 12)])
 
-    def documents(receipt):
-        story.append(paragraph(f'Supporting document — Receipt #{receipt["id"]}', "Heading3"))
+    def documents(receipt, excluded=(), relevant=()):
         pages = receipt["pages"]
+        strikes, unmatched = [[] for _ in pages], []
+        if excluded:
+            if "text_geometry" not in receipt:
+                receipt["text_geometry"] = [{} for _ in pages]
+            for page, data in zip(pages, receipt["text_geometry"]):
+                if "native" not in data:
+                    data["native"] = receipt_markup.text_spans(page)
+            strikes, unmatched = receipt_markup.strike_through(
+                pages, excluded, relevant, receipt["text_geometry"])
+        if unmatched:
+            story.append(paragraph("Automatic strike-through could not locate: " + "; ".join(unmatched)
+                                   + ". These purchases remain listed in the red table above.", "OtherProject"))
+        heading = [paragraph(f'Supporting document — {receipt_title(receipt)}', "Heading3"),
+                   paragraph(f'provided by: {receipt.get("provided_by", "not recorded")}'), Spacer(1, 6)]
         for index in range(0, len(pages), 2):
-            cells = [SupportingPage(page, placements) for page in pages[index:index + 2]]
+            cells = [SupportingPage(pages[page_index], placements, strikes[page_index])
+                     for page_index in range(index, min(index + 2, len(pages)))]
             if len(cells) == 1:
                 cells.append("")
             table = Table([cells], colWidths=[CONTENT_WIDTH / 2] * 2, hAlign="LEFT")
             table.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"),
                                        ("BOTTOMPADDING", (0, 0), (-1, -1), 12)]))
-            story.append(table)
+            if index == 0:
+                story.append(KeepTogether(heading + [table]))
+            else:
+                story.append(table)
+
+    project_totals = {}
+    for receipt in receipts:
+        for project, items in receipt["groups"].items():
+            project_totals[project] = project_totals.get(project, Decimal(0)) + sum(
+                (item[0] for item in items), Decimal(0))
+    ordered_projects = sorted(project_totals, key=lambda item: (item[1].casefold(), item[0] or 0))
+
+    def summary_table(headings, rows, total_label, total):
+        data = [headings] + [[paragraph(label), f"{amount:,.2f}"] for label, amount in rows]
+        data.append([total_label, f"{total:,.2f}"])
+        table = Table(data, colWidths=[CONTENT_WIDTH * .32, CONTENT_WIDTH * .18],
+                      hAlign="CENTER", repeatRows=1, splitInRow=1)
+        table.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e9edf2")),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+            ("LINEABOVE", (0, -1), (-1, -1), .7, colors.black),
+            ("TOPPADDING", (0, 0), (-1, -1), 7),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+        ]))
+        story.extend([table, Spacer(1, 16)])
+
+    story.append(paragraph("Report summary", "Heading1"))
+    summary_table(["Project", "Amount"], [(key[1], project_totals[key]) for key in ordered_projects],
+                  "OVERALL TOTAL:", sum(project_totals.values(), Decimal(0)))
 
     if grouping == "receipt":
         for receipt in receipts:
             if story:
                 story.append(PageBreak())
-            story.append(paragraph(f'Receipt #{receipt["id"]}: This comprises receipts from the following projects:', "Heading2"))
+            story.append(paragraph(receipt_title(receipt), "Heading2"))
+            # Show each project's share here, alongside its total across the report.
+            receipt_rows = [["Project", paragraph("This receipt", "SummaryHeader"), paragraph("Project total", "SummaryHeader")]]
+            receipt_total = Decimal(0)
+            for key, items in receipt["groups"].items():
+                amount = sum((item[0] for item in items), Decimal(0))
+                receipt_total += amount
+                receipt_rows.append([paragraph(key[1]), f"{amount:,.2f}", f"{project_totals[key]:,.2f}"])
+            receipt_rows.append(["RECEIPT TOTAL:", f"{receipt_total:,.2f}", ""])
+            receipt_summary = Table(receipt_rows, colWidths=[130, 70, 70], hAlign="CENTER", repeatRows=1, splitInRow=1)
+            receipt_summary.setStyle(TableStyle([
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e9edf2")),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+                ("LINEABOVE", (0, -1), (-1, -1), .7, colors.black),
+                ("TOPPADDING", (0, 0), (-1, -1), 7),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+            ]))
+            story.extend([receipt_summary, Spacer(1, 16)])
+            story.append(paragraph("This comprises receipts from the following projects:"))
             for (_, name), items in receipt["groups"].items():
                 story.append(paragraph(name + ":", "Heading3"))
                 purchases(items)
@@ -226,23 +414,34 @@ def build_pdf(receipts, grouping):
                 story.append(paragraph("No purchases are attached to this receipt."))
             documents(receipt)
     else:
-        projects = {key for receipt in receipts for key in receipt["groups"]}
-        for key in sorted(projects, key=lambda item: (item[1].casefold(), item[0] or 0)):
+        for key in ordered_projects:
             if story:
                 story.append(PageBreak())
             story.append(paragraph(key[1], "Heading1"))
             for _ in range(2):
                 story.append(HRFlowable(width="100%", thickness=1, color=colors.black, spaceAfter=3))
+            summary_table(["Receipt", "Amount"], [
+                (f'#{receipt["id"]}', sum((item[0] for item in receipt["groups"][key]), Decimal(0)))
+                for receipt in receipts if key in receipt["groups"]], "PROJECT TOTAL:", project_totals[key])
             for receipt in receipts:
                 if key not in receipt["groups"]:
                     continue
-                story.append(paragraph(f'Receipt #{receipt["id"]}', "Heading2"))
+                story.append(paragraph(receipt_title(receipt), "Heading2"))
                 statement = ("All purchases on this receipt are relevant to this project"
                              if len(receipt["groups"]) == 1 else
                              "Only the following purchases on this receipt are relevant to this project.")
                 story.extend([paragraph(statement), Spacer(1, 10)])
                 purchases(receipt["groups"][key])
-                documents(receipt)
+                other_items, other_projects = [], []
+                for other_key, items in receipt["groups"].items():
+                    if other_key != key:
+                        other_items.extend(items)
+                        other_projects.extend([other_key[1]] * len(items))
+                if other_items:
+                    story.append(paragraph("Purchases for other projects (excluded from this project's total)", "OtherProjectHeading"))
+                    purchases(other_items, other_projects)
+                documents(receipt, [item[1] for item in other_items],
+                          [item[1] for item in receipt["groups"][key]])
         orphans = [receipt for receipt in receipts if not receipt["groups"]]
         if orphans:
             if story:

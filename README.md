@@ -56,6 +56,19 @@ of dependency-free vanilla JS (autosave, vendor auto-detect, tracker chips).
   **Save and retry** action. **Export to Excel**, at the very bottom, exports the
   currently filtered invoices. Reports are generated in memory and never saved
   to server disk.
+  PDF reports start with centered project totals and an overall total. Project
+  sections summarize their receipts; receipt sections summarize their project
+  allocations and each project's total across the report. In project reports,
+  purchases allocated elsewhere appear in a separate red table, with their
+  project names and a separate subtotal. Receipt headings include the vendor
+  and a transaction date extracted from the supporting PDF; missing or ambiguous
+  dates are explicitly marked. Supporting pages show `provided by:` followed by
+  the invoice creator's email address.
+  Project-specific supporting pages strike out purchases allocated elsewhere in
+  red, using description and product-number regex matches against the PDF's text
+  positions. Relevant purchases stay unmarked; unmatched descriptions are called
+  out explicitly. Scanned pages use system `pdftoppm` and `tesseract` when available,
+  with input and output held in memory. No extra Python PDF/OCR packages are needed.
 - **Change history** — every field change, tracker add/remove, and submission
   is logged to the `order_history` table (who, when, field, old, new). No GUI
   for it yet; inspect with

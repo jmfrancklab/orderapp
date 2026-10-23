@@ -286,3 +286,103 @@ def test_share_download_preserves_cookies_and_tokens_through_redirects(monkeypat
         assert downloaded == pdf
         assert len(reports.document_pages(downloaded)) == 2
     assert len(seen) == 4
+
+
+@pytest.mark.parametrize('text,expected', [
+    ('Order placed October 6, 2026\nReturn or replace items: Eligible through October 25, 2026', '2026-10-06'),
+    ('Return or replace items: Eligible through October 25, 2026\nOrder SummaryOrder placed September 23, 2026', '2026-09-23'),
+    ('Order Date\n9/11/26\nDelivers Sep 14', '2026-09-11'),
+    ('Order Date: 0\n8/24/2026Bill To:', '2026-08-24'),
+    ('Payment Date: August 28, 2026\nOrder Date: August 20, 2026', '2026-08-28'),
+    ('Order Date Order Date 09/03/2026\nShipping Date: 09/07/2026', '2026-09-03'),
+    ('Submitted 09/03/2026 10:27:25\n9/3/26, 11:27 AM DigiKey - Print', '2026-09-03'),
+    ('INVOICE DATE\nSeptember 14, 2026 01:24 PM', '2026-09-14'),
+    ('Placed September 14, 2026 $70.08\nEstimated Pick-up Date Today', '2026-09-14'),
+    ('Date Fri 8/28/2026 3:33 PM', '2026-08-28'),
+    ('Orde r Date: 14-Aug-2026\nShip Date: 15-Aug-2026', '2026-08-14'),
+    ('Order Date: 2025-08-01', '2025-08-01'),
+    ('Invoice Date: 09/03/2026\n123456789', '2026-09-03'),
+    ('Document Date: 09/07/2026', None),
+    ('Docu ment Date: 09/07/2026', None),
+    ('Eligible through October 25, 2026', None),
+    ('Order Date: 2/30/26', None),
+    ('2026-08-01\n2026-08-02', None),
+    ('Order Date: 8/1/25\nOrder Date: 8/2/25', None),
+    ('An image-only receipt', None),
+])
+def test_transaction_date_uses_receipt_labels_and_validates_ambiguity(text, expected):
+    from types import SimpleNamespace
+    result = reports.transaction_date([SimpleNamespace(extract_text=lambda: text)])
+    assert (result.isoformat() if result else None) == expected
+
+
+def test_date_uses_cached_ocr_for_scanned_receipts(monkeypatch):
+    from types import SimpleNamespace
+    calls = []
+    def ocr(page):
+        calls.append(page)
+        return [{"text": "Payment Date: August 1, 2025", "line": (1, 2, 3, 2)}]
+    monkeypatch.setattr(reports.receipt_markup, 'ocr_spans', ocr)
+    page = SimpleNamespace(extract_text=lambda: '')
+    geometry = [{}]
+    assert reports.transaction_date([page], geometry).isoformat() == '2025-08-01'
+    assert reports.transaction_date([page], geometry).isoformat() == '2025-08-01'
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize('grouping', ['receipt', 'project'])
+def test_vendor_date_and_provider_are_in_both_report_modes(export_client, monkeypatch, grouping):
+    client, _ = export_client
+    with sqlite3.connect(app_module.DB_PATH) as db:
+        db.execute("INSERT INTO vendors (id, name) VALUES (100, 'DigiKey')")
+        db.execute('UPDATE orders SET vendor_id=100')
+    def dated_pdf(url):
+        buf = BytesIO()
+        pdf = canvas.Canvas(buf)
+        pdf.drawString(40, 740, 'Payment Date: August 1, 2025')
+        pdf.save()
+        return buf.getvalue()
+    monkeypatch.setattr(reports, 'download_document', dated_pdf)
+    response = client.get('/invoices/receipt-report', query_string={'group_by': grouping})
+    text = pdf_text(response)
+    assert 'Receipt #11: DigiKey 8/1/25' in text
+    assert 'Receipt #12: DigiKey 8/1/25' in text
+    assert 'provided by: buyer@lab.org' in text
+    assert 'Report summary' in text and 'OVERALL TOTAL:' in text
+    # The repeated red tables and supporting pages must not double-count purchases.
+    summary = PdfReader(BytesIO(response.data)).pages[0].extract_text()
+    for amount in ('2,037.25', '0.30', '2,037.55'):
+        assert amount in summary
+    if grouping == 'project':
+        assert text.count('OTHER PROJECTS TOTAL:') == 2
+        assert 'PROJECT TOTAL:' in text
+        assert 'Purchases for other projects' in text
+    else:
+        assert 'OTHER PROJECTS TOTAL:' not in text
+        assert 'This receipt' in text and 'Project total' in text
+        assert 'RECEIPT TOTAL:' in text
+
+
+def test_other_project_names_and_totals_are_red_and_excluded(export_client):
+    client, _ = export_client
+    response = client.get('/invoices/receipt-report?group_by=project')
+    reader = PdfReader(BytesIO(response.data))
+    seen_red = []
+    for page in reader.pages:
+        fill = (0, 0, 0)
+        stack = []
+        for operands, operator in page.get_contents().operations:
+            if operator == b'q':
+                stack.append(fill)
+            elif operator == b'Q':
+                fill = stack.pop() if stack else (0, 0, 0)
+            elif operator == b'rg':
+                fill = tuple(float(value) for value in operands)
+            elif operator == b'Tj' and fill[0] > .6 and fill[1] == 0:
+                seen_red.append(str(operands[0]))
+    assert 'Beta' in seen_red and 'Alpha' in seen_red
+    assert 'OTHER PROJECTS TOTAL:' in seen_red
+    assert '0.30' in seen_red and '37.05' in seen_red
+    # The single-project receipt is never listed as an excluded item.
+    assert 'Bench supply' not in seen_red
+    assert 'date not found in receipt' in pdf_text(response)
