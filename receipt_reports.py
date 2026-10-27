@@ -245,6 +245,11 @@ def collect_receipts(db, invoices):
                          "vendor": ", ".join(vendors) or "Vendor not recorded",
                          "transaction_date": purchased_on, "provided_by": invoice["created_by"],
                          "text_geometry": geometry})
+        if not failure:
+            try:
+                receipt_markup.reconcile(receipts[-1])
+            except ValueError as exc:
+                errors.append(_error(invoice, str(exc)))
     if errors:
         raise ReportError(errors)
     return receipts
@@ -252,10 +257,11 @@ def collect_receipts(db, invoices):
 
 class SupportingPage(Flowable):
     """Reserve layout space, then merge the source page after pagination."""
-    def __init__(self, page, placements, strikes=()):
+    def __init__(self, page, placements, strikes=(), annotations=()):
         super().__init__()
         self.page, self.placements = page, placements
         self.strikes = strikes
+        self.annotations = annotations
         width, height = float(page.cropbox.width), float(page.cropbox.height)
         self.scale = min(1, (CONTENT_WIDTH / 2 - 12) / width, 600 / height)
         self.width, self.height = width * self.scale, height * self.scale
@@ -275,6 +281,27 @@ class SupportingPage(Flowable):
                 self.canv.line((x0 - left) * self.scale, (y0 - bottom) * self.scale,
                                (x1 - left) * self.scale, (y1 - bottom) * self.scale)
             self.canv.restoreState()
+        self.canv.saveState()
+        left, bottom = float(self.page.cropbox.left), float(self.page.cropbox.bottom)
+        for annotation in self.annotations:
+            x0, y0, x1, y1 = annotation["line"]
+            x0, y0, x1, y1 = ((x0-left)*self.scale, (y0-bottom)*self.scale,
+                              (x1-left)*self.scale, (y1-bottom)*self.scale)
+            ok = annotation["status"] == "ok"
+            self.canv.setStrokeColor(colors.HexColor("#008000") if ok else OTHER_PROJECT_COLOR)
+            self.canv.setFillColor(colors.HexColor("#008000") if ok else OTHER_PROJECT_COLOR)
+            self.canv.setLineWidth(.8)
+            self.canv.setFont("Helvetica", 4)
+            self.canv.drawString(x0, y0+4, annotation["id"])
+            if annotation["status"] == "strike":
+                self.canv.line(x0, y0, x1, y1)
+            elif ok:
+                self.canv.line(x1+1, y1, x1+3, y1-2)
+                self.canv.line(x1+3, y1-2, x1+6, y1+3)
+            else:
+                self.canv.setFont("Helvetica-Bold", 7)
+                self.canv.drawString(x1+1, y1-2, "?")
+        self.canv.restoreState()
         self.canv.setStrokeColor(colors.black)
         self.canv.setLineWidth(1)
         self.canv.rect(0, 0, self.width, self.height)
@@ -333,6 +360,16 @@ class NavigableReport(SimpleDocTemplate):
 
 
 def build_pdf(receipts, grouping):
+    # Work on report data only; original supporting pages and database stay intact.
+    receipts = [dict(receipt) if "verification" in receipt else receipt_markup.reconcile(dict(receipt))
+                for receipt in receipts]
+    def item_total(receipt, key, index, item):
+        return item[0] + sum(receipt["allocations"][key, index].values(), Decimal(0))
+
+    def group_total(receipt, key):
+        return sum((item_total(receipt, key, index, item)
+                    for index, item in enumerate(receipt["groups"][key])), Decimal(0))
+
     styles = getSampleStyleSheet()
     styles.add(ParagraphStyle("OtherProject", parent=styles["Normal"], textColor=OTHER_PROJECT_COLOR))
     styles.add(ParagraphStyle("OtherProjectHeading", parent=styles["Heading3"], textColor=OTHER_PROJECT_COLOR))
@@ -349,7 +386,7 @@ def build_pdf(receipts, grouping):
     def receipt_label(receipt, short=False):
         label = f'{"" if short else "Receipt "}#{receipt["id"]}'
         if receipt.get("nickname"):
-            total = sum((item[0] for items in receipt["groups"].values() for item in items), Decimal(0))
+            total = receipt["allocated_total"]
             label += f' <font size="9">({escape(receipt["nickname"])}: ${total:,.2f})</font>'
         return label
 
@@ -365,18 +402,22 @@ def build_pdf(receipts, grouping):
         result.outline_level = outline_level
         return result
 
-    def purchases(items, project_names=None):
+    def purchases(items, project_names=None, allocations=None):
         other = project_names is not None
         style = "OtherProject" if other else "Normal"
-        rows = [["Description"] + (["Project"] if other else []) + ["Quantity", "Unit cost", "Line total"]]
+        rows = [["Description"] + (["Project"] if other else []) + ["Quantity", "Unit cost", "Item price", "Shipping", "Other", "Line total"]]
         for index, (amount, description, quantity, cost) in enumerate(items):
             rows.append([paragraph(description, style)]
                         + ([paragraph(project_names[index], style)] if other else [])
-                        + [str(quantity), f"{cost:,.2f}", f"{amount:,.2f}"])
-        total = sum((item[0] for item in items), Decimal(0))
+                        + [str(quantity), f"{cost:,.5f}".rstrip("0").rstrip(".") if cost.as_tuple().exponent < -2 else f"{cost:,.2f}",
+                           f"{amount:,.2f}", f"{allocations[index]['shipping']:,.2f}",
+                           f"{allocations[index]['other']:,.2f}",
+                           f"{amount + sum(allocations[index].values(), Decimal(0)):,.2f}"])
+        total = sum((item[0] + sum(allocations[index].values(), Decimal(0))
+                     for index, item in enumerate(items)), Decimal(0))
         rows.append(["OTHER PROJECTS TOTAL:" if other else "TOTAL:"]
                     + [""] * (len(rows[0]) - 2) + [f"{total:,.2f}"])
-        widths = [210, 110, 60, 75, 85] if other else [CONTENT_WIDTH - 230, 60, 80, 90]
+        widths = [160, 65, 35, 55, 55, 55, 55, 60] if other else [225, 35, 55, 55, 55, 55, 60]
         table = Table(rows, colWidths=widths,
                       hAlign="LEFT", repeatRows=1, splitInRow=1)
         table.setStyle(TableStyle([
@@ -395,7 +436,7 @@ def build_pdf(receipts, grouping):
         ]))
         story.extend([table, Spacer(1, 12)])
 
-    def documents(receipt, excluded=(), relevant=(), costs=None):
+    def documents(receipt, excluded=(), relevant=(), costs=None, project=None):
         pages = receipt["pages"]
         strikes, unmatched = [[] for _ in pages], []
         if excluded:
@@ -409,11 +450,16 @@ def build_pdf(receipts, grouping):
         if unmatched:
             story.append(paragraph("Automatic strike-through could not locate a cost for: " + "; ".join(unmatched)
                                    + ". These purchases remain listed in the red table above.", "OtherProject"))
+        annotations = receipt_markup.verify_amounts(receipt, project)
+        # Legacy description strikes remain, but monetary decisions have a single owner.
+        strikes = [[line for line in lines if not any(
+                abs(line[1] - mark["line"][1]) < 2 and
+                line[0] < mark["line"][2] and line[2] > mark["line"][0] for mark in marks)] for lines, marks in zip(strikes, annotations)]
         heading = [receipt_title(receipt, "Supporting document — ", "Heading3",
                                  outline_level=2 if receipt["groups"] else 1),
                    paragraph(f'provided by: {receipt.get("provided_by", "not recorded")}'), Spacer(1, 6)]
         for index in range(0, len(pages), 2):
-            cells = [SupportingPage(pages[page_index], placements, strikes[page_index])
+            cells = [SupportingPage(pages[page_index], placements, strikes[page_index], annotations[page_index])
                      for page_index in range(index, min(index + 2, len(pages)))]
             if len(cells) == 1:
                 cells.append("")
@@ -425,11 +471,18 @@ def build_pdf(receipts, grouping):
             else:
                 story.append(table)
 
+        story.append(paragraph("Monetary verification: green check = verified; strike = excluded; red ? = unresolved.", "Normal"))
+        for marks in annotations:
+            for mark in marks:
+                symbol = {"ok": "Verified", "strike": "Excluded", "?": "?"}[mark["status"]]
+                story.append(paragraph(
+                    f"{mark['id']} | {mark['value']} | {symbol}: {mark['reason']} | Source: {mark['context']}",
+                    "Normal" if mark["status"] == "ok" else "OtherProject"))
+
     project_totals = {}
     for receipt in receipts:
         for project, items in receipt["groups"].items():
-            project_totals[project] = project_totals.get(project, Decimal(0)) + sum(
-                (item[0] for item in items), Decimal(0))
+            project_totals[project] = project_totals.get(project, Decimal(0)) + group_total(receipt, project)
     ordered_projects = sorted(project_totals, key=lambda item: (item[1].casefold(), item[0] or 0))
 
     def summary_table(headings, rows, total_label, total):
@@ -459,23 +512,39 @@ def build_pdf(receipts, grouping):
                      if len(receipt["groups"]) == 1 else
                      f"Only the following purchases on this receipt are relevant to {key[1]}.")
         story.extend([paragraph(statement), Spacer(1, 10)])
-        purchases(receipt["groups"][key])
-        other_items, other_projects = [], []
+        purchases(receipt["groups"][key], allocations=[receipt["allocations"][key, i]
+                  for i in range(len(receipt["groups"][key]))])
+        # Reconciliation explicitly preserves the source total and excluded tax.
+        rows = [("Stored item extensions", sum((item[0] for items in receipt["groups"].values() for item in items), Decimal(0)))]
+        rows.extend((f"{ref}: {role}", value) for ref, role, value in receipt["charges"])
+        rows.append(("Sales tax excluded (never reimbursable)", receipt["excluded_tax"]))
+        if receipt["original_total"] is not None:
+            rows.append(("Original receipt total", receipt["original_total"]))
+            rows.append(("Unresolved difference: original less tax less allocations", receipt["unresolved"]))
+        if receipt["reimbursable_total"] is not None:
+            rows.append(("Reimbursable receipt total (original less sales tax)", receipt["reimbursable_total"]))
+        summary_table(["Receipt reconciliation", "Amount"], rows, "ALLOCATED TOTAL:", receipt["allocated_total"])
+        if receipt["original_total"] is None or receipt["unresolved"] != 0:
+            story.append(paragraph("? Reimbursement is UNVERIFIED. Correct unresolved item prices, quantities, or charges before reimbursement. Original receipt total less excluded sales tax must equal allocations.", "OtherProject"))
+        other_items, other_projects, other_allocations = [], [], []
         for other_key, items in receipt["groups"].items():
             if other_key != key:
                 other_items.extend(items)
                 other_projects.extend([other_key[1]] * len(items))
+                other_allocations.extend(receipt["allocations"][other_key, i] for i in range(len(items)))
         if other_items:
             story.append(paragraph(f"Purchases for other projects (excluded from total for {key[1]})", "OtherProjectHeading"))
-            purchases(other_items, other_projects)
+            purchases(other_items, other_projects, other_allocations)
         documents(receipt, [item[1] for item in other_items],
                   [item[1] for item in receipt["groups"][key]],
-                  costs=[(item[0], item[3]) for item in other_items])
+                  costs=[(item[0], item[3]) for item in other_items], project=key)
 
     def receipt_total(receipt):
-        return sum((item[0] for items in receipt["groups"].values() for item in items), Decimal(0))
+        return receipt["allocated_total"]
 
     story.append(paragraph("Report summary", "Heading1", outline_level=0))
+    if any(receipt["unresolved"] != 0 for receipt in receipts):
+        story.append(paragraph("? Allocation totals are UNVERIFIED. Receipt reconciliation below identifies differences from original totals after excluding sales tax.", "OtherProject"))
     if grouping == "receipt":
         summary_table(["Receipt", "Amount"], [
             (Paragraph(receipt_label(receipt, short=True), styles["Normal"]), receipt_total(receipt))
@@ -485,7 +554,7 @@ def build_pdf(receipts, grouping):
             story.append(receipt_title(receipt, style="Heading1", outline_level=0))
             keys = [key for key in ordered_projects if key in receipt["groups"]]
             summary_table(["Project", "Amount"], [
-                (key[1], sum((item[0] for item in receipt["groups"][key]), Decimal(0)))
+                (key[1], group_total(receipt, key))
                 for key in keys], "RECEIPT TOTAL:", receipt_total(receipt))
             for key in keys:
                 purchase_section(receipt, key)
@@ -499,7 +568,7 @@ def build_pdf(receipts, grouping):
             story.append(PageBreak())
             story.append(paragraph(key[1], "Heading1", outline_level=0))
             summary_table(["Receipt", "Amount"], [
-                (Paragraph(receipt_label(receipt, short=True), styles["Normal"]), sum((item[0] for item in receipt["groups"][key]), Decimal(0)))
+                (Paragraph(receipt_label(receipt, short=True), styles["Normal"]), group_total(receipt, key))
                 for receipt in receipts if key in receipt["groups"]], "PROJECT TOTAL:", project_totals[key])
             for receipt in receipts:
                 if key in receipt["groups"]:

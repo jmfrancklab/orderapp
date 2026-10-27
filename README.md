@@ -75,11 +75,19 @@ of dependency-free vanilla JS (autosave, vendor auto-detect, tracker chips).
   times unit cost. Relevance statements name the project explicitly.
   Supporting pages show `provided by:` followed by
   the invoice creator's email address.
-  Project-specific supporting pages in both report orders strike out purchases allocated elsewhere in
-  red, using description and product-number regex matches against the PDF's text
-  positions. Prices and amounts are struck as well as names; an exact cost match
-  alone counts as success. Relevant purchases stay unmarked; an unmatched cost is
-  called out explicitly. Scanned pages use system `pdftoppm` and `tesseract` when available,
+  Shipping is prorated by item extension with cent-exact rounding; insurance,
+  discounts, and tariffs are shown separately from original item prices. Sales
+  tax is never allocated or reimbursed. Each receipt shows its original total,
+  excluded tax, tax-excluded reimbursable total, allocated total, and any unresolved
+  difference. Stored price or quantity discrepancies require correction before
+  reimbursement; reports do not change purchase records.
+  Every decimal or currency-denominated amount on each supporting page is searched
+  by regex and annotated once: a green check for a contextual table/calculation
+  match, a strike for an accounted exclusion, or a red question mark for an
+  unresolved correspondence. Page/occurrence IDs connect marks to the verification
+  ledger. Identical numbers alone do not verify a purchase. A final independent
+  regex pass checks coverage; generation fails if an amount cannot be positioned.
+  Scanned pages use system `pdftoppm` and `tesseract` when available,
   with input and output held in memory. No extra Python PDF/OCR packages are needed.
 - **Change history** — every field change, tracker add/remove, and submission
   is logged to the `order_history` table (who, when, field, old, new). No GUI
