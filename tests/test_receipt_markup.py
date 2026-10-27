@@ -12,6 +12,11 @@ import receipt_markup as markup
 import receipt_reports as reports
 
 
+@pytest.fixture(autouse=True)
+def synthetic_ocr(monkeypatch):
+    monkeypatch.setattr(markup, "ocr_spans", lambda page: markup.text_spans(page))
+
+
 def sample_page():
     buf = BytesIO()
     pdf = canvas.Canvas(buf, pagesize=(612, 792))
@@ -67,29 +72,8 @@ def test_no_confident_match_is_reported_and_scans_use_optional_ocr(monkeypatch):
         assert lines == [[(40, 700, 190, 700)]]
         assert not missing
     assert len(calls) == 1
-    monkeypatch.setattr(markup.shutil, 'which', lambda name: None)
     assert real_ocr(object()) == []
 
-
-def test_ocr_pipeline_uses_memory_and_maps_pixel_coordinates(monkeypatch):
-    from PIL import Image
-    image = BytesIO()
-    Image.new('RGB', (100, 200), 'white').save(image, format='PNG')
-    tsv = 'level\tleft\ttop\twidth\theight\tconf\ttext\n5\t20\t30\t50\t10\t95\tDS18B20\n'
-    calls = []
-    def run(command, **kwargs):
-        calls.append((command, kwargs['input']))
-        return SimpleNamespace(stdout=image.getvalue() if len(calls) == 1 else tsv.encode())
-    monkeypatch.setattr(markup.shutil, 'which', lambda name: '/usr/bin/' + name)
-    monkeypatch.setattr(markup.subprocess, 'run', run)
-    spans = markup.ocr_spans(sample_page())
-    assert spans[0]['text'] == 'DS18B20'
-    assert abs(spans[0]['line'][0] - 122.4) < .01
-    assert abs(spans[0]['line'][1] - 651.42) < .01
-    assert calls[0][0][-1] == '-'
-    assert calls[0][1].startswith(b'%PDF')
-    assert calls[1][0][1:3] == ['stdin', 'stdout']
-    assert calls[1][1] == image.getvalue()
 
 
 def test_both_report_orders_strike_supporting_images_and_leave_sources_unchanged():

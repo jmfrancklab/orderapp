@@ -5,6 +5,7 @@ from datetime import date
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from io import BytesIO
 import ipaddress
+from pathlib import Path
 import re
 import socket
 from urllib.parse import urljoin, urlparse
@@ -18,6 +19,8 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 from reportlab.platypus import (
     Flowable, KeepTogether, PageBreak, Paragraph, SimpleDocTemplate, Spacer,
@@ -34,6 +37,8 @@ MAX_FILE_BYTES = 25 * 1024 * 1024
 MAX_DOCUMENT_PAGES = 100
 CENT = Decimal("0.01")
 OTHER_PROJECT_COLOR = colors.HexColor("#b00020")
+pdfmetrics.registerFont(TTFont("ReceiptSymbols", str(
+    Path(__file__).with_name("report_fonts") / "ReceiptSymbols.ttf")))
 
 _MONTH = r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
 _DATE_PATTERNS = (
@@ -75,15 +80,8 @@ def transaction_date(pages, geometry=None):
     candidates = []
     numeric_fallback = []
     for page_index, page in enumerate(pages or []):
-        try:
-            text = page.extract_text() or ""
-        except Exception:
-            text = ""
-        if not text.strip():
-            data = geometry[page_index] if geometry is not None else {}
-            if "ocr" not in data:
-                data["ocr"] = receipt_markup.ocr_spans(page)
-            text = " ".join(span["text"] for span in data["ocr"])
+        data = geometry[page_index] if geometry is not None else {}
+        text = "\n".join(span["text"] for span in receipt_markup.receipt_spans(page, data))
         # Match dates in the original text: joining numeric lines can merge an
         # order/reference number into the following date and hide valid matches.
         for kind, pattern in _DATE_PATTERNS:
@@ -272,38 +270,56 @@ class SupportingPage(Flowable):
             clip.rect(0, 0, self.width, self.height)
             self.canv.clipPath(clip, stroke=0)
             self.canv.setStrokeColor(OTHER_PROJECT_COLOR)
+            self.canv.setStrokeAlpha(.5)
             self.canv.setLineWidth(.8)
             left, bottom = float(self.page.cropbox.left), float(self.page.cropbox.bottom)
             for x0, y0, x1, y1 in self.strikes:
                 self.canv.line((x0 - left) * self.scale, (y0 - bottom) * self.scale,
                                (x1 - left) * self.scale, (y1 - bottom) * self.scale)
+                # Description strikes share the nearby excluded amount's ID.
+                nearby = [a for a in self.annotations if a["line"] is not None
+                          and a["status"] == "strike" and a.get("item_ref") is not None]
+                if nearby:
+                    ref = min(nearby, key=lambda a: abs(a["line"][1] - y0))
+                    self.canv.setFillColor(colors.HexColor("#008000"))
+                    self.canv.setFillAlpha(.5)
+                    self.draw_reference((x1-left)*self.scale + 2,
+                                        (y1-bottom)*self.scale - 2, ref["id"], True)
             self.canv.restoreState()
         self.canv.saveState()
         left, bottom = float(self.page.cropbox.left), float(self.page.cropbox.bottom)
+        self.canv.setFillAlpha(.5)
+        self.canv.setStrokeAlpha(.5)
         for annotation in self.annotations:
             if annotation["line"] is None:
                 continue
             x0, y0, x1, y1 = annotation["line"]
             x0, y0, x1, y1 = ((x0-left)*self.scale, (y0-bottom)*self.scale,
                               (x1-left)*self.scale, (y1-bottom)*self.scale)
-            ok = annotation["status"] == "ok"
-            self.canv.setStrokeColor(colors.HexColor("#008000") if ok else OTHER_PROJECT_COLOR)
-            self.canv.setFillColor(colors.HexColor("#008000") if ok else OTHER_PROJECT_COLOR)
-            self.canv.setLineWidth(.8)
-            self.canv.setFont("Helvetica", 4)
-            self.canv.drawString(x0, y0+4, annotation["id"])
+            successful = annotation["status"] in ("ok", "strike")
+            self.canv.setFillColor(colors.HexColor("#008000") if successful else OTHER_PROJECT_COLOR)
+            self.canv.setFillAlpha(.5)
+            # A single baseline: reference immediately precedes its Unicode mark.
+            self.draw_reference(x1 + 2, y1 - 2, annotation["id"], successful)
             if annotation["status"] == "strike":
+                self.canv.setStrokeColor(OTHER_PROJECT_COLOR)
+                self.canv.setStrokeAlpha(.5)
+                self.canv.setLineWidth(.8)
                 self.canv.line(x0, y0, x1, y1)
-            elif ok:
-                self.canv.line(x1+1, y1, x1+3, y1-2)
-                self.canv.line(x1+3, y1-2, x1+6, y1+3)
-            else:
-                self.canv.setFont("Helvetica-Bold", 7)
-                self.canv.drawString(x1+1, y1-2, "?")
         self.canv.restoreState()
         self.canv.setStrokeColor(colors.black)
         self.canv.setLineWidth(1)
         self.canv.rect(0, 0, self.width, self.height)
+
+    def draw_reference(self, x, y, reference, successful):
+        symbol = "✓" if successful else "❓"
+        width = self.canv.stringWidth(reference + " ", "Helvetica", 5)
+        total_width = width + self.canv.stringWidth(symbol, "ReceiptSymbols", 5)
+        x = min(x, self.width - total_width)
+        self.canv.setFont("Helvetica", 5)
+        self.canv.drawString(x, y, reference + " ")
+        self.canv.setFont("ReceiptSymbols", 5)
+        self.canv.drawString(x + width, y, symbol)
 
 
 SUBSECTION_GRAY = colors.HexColor("#b8b8b8")
@@ -401,14 +417,14 @@ def build_pdf(receipts, grouping):
         result.outline_level = outline_level
         return result
 
-    def purchases(items, project_names=None, allocations=None):
+    def purchases(items, project_names=None, allocations=None, locations=None):
         other = project_names is not None
         style = "OtherProject" if other else "Normal"
-        rows = [["Description"] + (["Project"] if other else []) + ["Quantity", "Unit cost", "Item price", "Shipping", "Other", "Line total"]]
+        rows = [["Description"] + (["Project"] if other else []) + ["Location", "Quantity", "Unit cost", "Item price", "Shipping", "Other", "Line total"]]
         for index, (amount, description, quantity, cost) in enumerate(items):
             rows.append([paragraph(description, style)]
                         + ([paragraph(project_names[index], style)] if other else [])
-                        + [str(quantity), f"{cost:,.5f}".rstrip("0").rstrip(".") if cost.as_tuple().exponent < -2 else f"{cost:,.2f}",
+                        + [locations[index] if locations else paragraph("Not found", "OtherProject"), str(quantity), f"{cost:,.5f}".rstrip("0").rstrip(".") if cost.as_tuple().exponent < -2 else f"{cost:,.2f}",
                            f"{amount:,.2f}", f"{allocations[index]['shipping']:,.2f}",
                            f"{allocations[index]['other']:,.2f}",
                            f"{amount + sum(allocations[index].values(), Decimal(0)):,.2f}"])
@@ -416,12 +432,13 @@ def build_pdf(receipts, grouping):
                      for index, item in enumerate(items)), Decimal(0))
         rows.append(["OTHER PROJECTS TOTAL:" if other else "TOTAL:"]
                     + [""] * (len(rows[0]) - 2) + [f"{total:,.2f}"])
-        widths = [160, 65, 35, 55, 55, 55, 55, 60] if other else [225, 35, 55, 55, 55, 55, 60]
+        widths = [125, 55, 60, 35, 50, 50, 50, 50, 65] if other else [180, 60, 35, 50, 50, 50, 50, 65]
         table = Table(rows, colWidths=widths,
                       hAlign="LEFT", repeatRows=1, splitInRow=1)
         table.setStyle(TableStyle([
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ("ALIGN", (2 if other else 1, 0), (-1, -1), "RIGHT"),
+            ("ALIGN", (3 if other else 2, 0), (-1, -1), "RIGHT"),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
             ("BACKGROUND", (0, 0), (-1, 0), TABLE_HEADER_GRAY),
             ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
             ("LINEBELOW", (0, 0), (-1, 0), 0.7, colors.black),
@@ -441,9 +458,6 @@ def build_pdf(receipts, grouping):
         if excluded:
             if "text_geometry" not in receipt:
                 receipt["text_geometry"] = [{} for _ in pages]
-            for page, data in zip(pages, receipt["text_geometry"]):
-                if "native" not in data:
-                    data["native"] = receipt_markup.text_spans(page)
             strikes, unmatched = receipt_markup.strike_through(
                 pages, excluded, relevant, receipt["text_geometry"], costs=costs)
         if unmatched:
@@ -473,13 +487,44 @@ def build_pdf(receipts, grouping):
             else:
                 story.append(table)
 
-        story.append(paragraph("Monetary verification: green check = verified; strike = excluded; red ? = unresolved.", "Normal"))
+        story.append(paragraph("Green reference + ✓ = matched or successfully excluded; red reference + ? = needs review. Red strikeouts exclude purchases or sales tax."))
+        errors = [["Location", "Problem"]]
         for marks in annotations:
             for mark in marks:
-                symbol = {"ok": "Verified", "strike": "Excluded", "?": "?"}[mark["status"]]
-                story.append(paragraph(
-                    f"{mark['id']} | {mark['value']} | {symbol}: {mark['reason']} | Source: {mark['context']}",
-                    "Normal" if mark["status"] == "ok" else "OtherProject"))
+                if mark["status"] == "?":
+                    errors.append([paragraph(mark["id"], "OtherProject"), paragraph(mark["reason"])])
+        matched_refs = {mark.get("item_ref") for marks in annotations for mark in marks}
+        for key, items in receipt["groups"].items():
+            for i, item in enumerate(items):
+                if (key, i) not in matched_refs:
+                    errors.append([paragraph("Not found", "OtherProject"), paragraph(
+                        f"{item[1]}: listed in database as ${item[0]:,.2f}; no matching receipt item was found.")])
+        if len(errors) > 1:
+            story.append(paragraph("Receipt errors", "Heading3"))
+            table = Table(errors, colWidths=[65, CONTENT_WIDTH - 65], repeatRows=1, splitInRow=1)
+            table.setStyle(TableStyle([
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("BACKGROUND", (0, 0), (-1, 0), TABLE_HEADER_GRAY),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ]))
+            story.extend([table, Spacer(1, 12)])
+
+    def item_locations(receipt, keys, project):
+        marks = [mark for page in receipt_markup.verify_amounts(receipt, project) for mark in page]
+        locations = []
+        for key, i in keys:
+            matching = [mark for mark in marks if mark.get("item_ref") == (key, i)]
+            labels = []
+            for mark in matching:
+                color = "#008000" if mark["status"] in ("ok", "strike") else "#b00020"
+                symbol = "✓" if mark["status"] in ("ok", "strike") else "❓"
+                label = escape(mark["id"]) + f' <font name="ReceiptSymbols">{symbol}</font>'
+                if mark["status"] == "?":
+                    label += f" (${mark['value']:,.2f})"
+                labels.append(f'<font color="{color}">{label}</font>')
+            locations.append(Paragraph("<br/>".join(labels) if labels else '<font color="#b00020">Not found</font>', styles["Normal"]))
+        return locations
 
     project_totals = {}
     for receipt in receipts:
@@ -515,7 +560,8 @@ def build_pdf(receipts, grouping):
                      f"Only the following purchases on this receipt are relevant to {key[1]}.")
         story.extend([paragraph(statement), Spacer(1, 10)])
         purchases(receipt["groups"][key], allocations=[receipt["allocations"][key, i]
-                  for i in range(len(receipt["groups"][key]))])
+                  for i in range(len(receipt["groups"][key]))],
+                  locations=item_locations(receipt, [(key, i) for i in range(len(receipt["groups"][key]))], key))
         # Reconciliation explicitly preserves the source total and excluded tax.
         rows = [("Stored item extensions", sum((item[0] for items in receipt["groups"].values() for item in items), Decimal(0)))]
         rows.extend((f"{ref}: {role}", value) for ref, role, value in receipt["charges"])
@@ -528,15 +574,17 @@ def build_pdf(receipts, grouping):
         summary_table(["Receipt reconciliation", "Amount"], rows, "ALLOCATED TOTAL:", receipt["allocated_total"])
         if receipt["original_total"] is None or receipt["unresolved"] != 0:
             story.append(paragraph("? Reimbursement is UNVERIFIED. Correct unresolved item prices, quantities, or charges before reimbursement. Original receipt total less excluded sales tax must equal allocations.", "OtherProject"))
-        other_items, other_projects, other_allocations = [], [], []
+        other_items, other_projects, other_allocations, other_keys = [], [], [], []
         for other_key, items in receipt["groups"].items():
             if other_key != key:
                 other_items.extend(items)
+                other_keys.extend((other_key, i) for i in range(len(items)))
                 other_projects.extend([other_key[1]] * len(items))
                 other_allocations.extend(receipt["allocations"][other_key, i] for i in range(len(items)))
         if other_items:
             story.append(paragraph(f"Purchases for other projects (excluded from total for {key[1]})", "OtherProjectHeading"))
-            purchases(other_items, other_projects, other_allocations)
+            purchases(other_items, other_projects, other_allocations,
+                      item_locations(receipt, other_keys, key))
         documents(receipt, [item[1] for item in other_items],
                   [item[1] for item in receipt["groups"][key]],
                   costs=[(item[0], item[3]) for item in other_items], project=key)

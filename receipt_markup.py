@@ -1,12 +1,12 @@
 """Locate excluded purchases in supporting PDFs without changing the source files."""
-import csv
 from decimal import Decimal, ROUND_HALF_UP
-from io import BytesIO, StringIO
+from io import BytesIO
 import math
 import re
-import shutil
-import subprocess
 import unicodedata
+import logging
+from pathlib import Path
+from threading import Lock
 
 from pypdf import PdfWriter
 from pypdf import _cmap
@@ -107,37 +107,69 @@ def text_spans(page):
     return spans
 
 
+_ocr_lock = Lock()
+_ocr_engine = None
+
+
 def ocr_spans(page):
-    """Use system Poppler/Tesseract via stdin/stdout; create no receipt files."""
-    if not shutil.which("pdftoppm") or not shutil.which("tesseract"):
-        return []
-    writer = PdfWriter()
-    writer.add_page(page)
-    pdf = BytesIO()
-    writer.write(pdf)
+    """Render and OCR in memory using pip wheels; no system executables or API."""
+    global _ocr_engine
     try:
-        image = subprocess.run(
-            ["pdftoppm", "-singlefile", "-cropbox", "-scale-to", "2400", "-png", "-"],
-            input=pdf.getvalue(), capture_output=True, check=True, timeout=30).stdout
-        result = subprocess.run(
-            ["tesseract", "stdin", "stdout", "--psm", "3", "tsv"],
-            input=image, capture_output=True, check=True, timeout=45).stdout.decode("utf-8")
-        from PIL import Image
-        width, height = Image.open(BytesIO(image)).size
-        box = page.cropbox
-        scale_x, scale_y = float(box.width) / width, float(box.height) / height
-        spans = []
-        for word in csv.DictReader(StringIO(result), delimiter="\t"):
-            if not word.get("text", "").strip():
-                continue
-            left, top, w, h = (int(word[key]) for key in ("left", "top", "width", "height"))
-            y = float(box.top) - (top + h * .55) * scale_y
-            spans.append({"text": word["text"], "confidence": float(word.get("conf", -1)), "height": h * scale_y, "line": (
-                float(box.left) + left * scale_x, y,
-                float(box.left) + (left + w) * scale_x, y)})
-        return spans
-    except (OSError, ValueError, subprocess.SubprocessError):
+        import pypdfium2 as pdfium
+        from tesserocr import PyTessBaseAPI, PSM, RIL, iterate_level
+        writer = PdfWriter()
+        writer.add_page(page)
+        pdf = BytesIO()
+        writer.write(pdf)
+        # PDFium and a Tesseract API instance must not be shared concurrently.
+        # Reuse the English model; neither library needs network I/O.
+        with _ocr_lock:
+            if _ocr_engine is None:
+                _ocr_engine = PyTessBaseAPI(
+                    path=str(Path(__file__).with_name("ocr_data")),
+                    lang="eng", psm=PSM.AUTO)
+            with pdfium.PdfDocument(pdf.getvalue()) as document:
+                rendered = document[0]
+                bitmap = rendered.render(scale=min(3, 3000 / max(rendered.get_size())))
+                try:
+                    image = bitmap.to_pil().copy()
+                finally:
+                    bitmap.close()
+                width, height = image.size
+                box = page.cropbox
+                sx, sy = float(box.width) / width, float(box.height) / height
+                spans = []
+                try:
+                    _ocr_engine.SetImage(image)
+                    _ocr_engine.Recognize()
+                    iterator = _ocr_engine.GetIterator()
+                    for word in iterate_level(iterator, RIL.WORD) if iterator else ():
+                        text = word.GetUTF8Text(RIL.WORD)
+                        if not text or not text.strip():
+                            continue
+                        left, top, right, bottom = word.BoundingBox(RIL.WORD)
+                        _, line_top, _, line_bottom = word.BoundingBox(RIL.TEXTLINE)
+                        # Words on one OCR line share a baseline, even when a
+                        # dollar sign or descender has a different box height.
+                        y = float(box.top) - (line_top + (line_bottom-line_top) * .55) * sy
+                        spans.append({"text": text.strip(), "confidence": word.Confidence(RIL.WORD),
+                                      "height": (bottom-top) * sy,
+                                      "line": (float(box.left) + left*sx, y,
+                                               float(box.left) + right*sx, y)})
+                finally:
+                    _ocr_engine.Clear()
+                    image.close()
+        return sorted(spans, key=lambda s: (-round(s["line"][1] / 3), s["line"][0]))
+    except Exception:
+        logging.getLogger(__name__).exception("Receipt OCR failed")
         return []
+
+
+def receipt_spans(page, data):
+    """One OCR pass shared by matching, strikes, dates and coverage checks."""
+    if "ocr" not in data:
+        data["ocr"] = ocr_spans(page)
+    return data["ocr"]
 
 
 def _anchors(description, protected):
@@ -153,11 +185,14 @@ def _anchors(description, protected):
             candidates.add(tuple(tokens[start:start + length]))
     if 1 < len(tokens) < 4:
         candidates.add(tuple(tokens))
+    # Some vendors omit the maker prefix of a model, e.g. DEV-20359 is
+    # printed as 20359 / 1568-20359-ND. Keep numeric suffixes exact.
+    candidates.update((m.group(1),) for m in re.finditer(r"\b[a-z]{2,}-(\d{4,})\b", description.casefold()))
     anchors = []
     for candidate in candidates:
         # A short device name such as TLV333 / AD7902 is commonly printed with
         # its package suffix (TLV333IDRCT / AD7902SDZ) on the vendor's receipt.
-        suffix = r"[a-z0-9]*" if len(candidate) == 1 else ""
+        suffix = r"[a-z0-9]*" if len(candidate) == 1 and not candidate[0].isdigit() else ""
         pattern = re.compile(r"\b" + r"\s+".join(re.escape(token) for token in candidate) + suffix + r"\b")
         # Never use an anchor also present in this project's purchases.
         if not any(pattern.search(text) for text in protected):
@@ -199,6 +234,17 @@ def _prices(spans):
     for index, span in enumerate(spans):
         text = span["text"]
         matches = list(_PRICE.finditer(text))
+        # OCR may put a currency sign or charge label in a separate word box.
+        # Recover labeled whole-dollar amounts without treating quantities,
+        # phone numbers, or order numbers as money.
+        if not matches and re.fullmatch(r"[+-]?\d[\d,]*", text):
+            x, y = span["line"][:2]
+            left = sorted((s for s in spans if s["line"][2] <= x
+                           and abs(s["line"][1]-y) <= span.get("height", 10)*.65),
+                          key=lambda s: s["line"][0])
+            prefix = " ".join(s["text"] for s in left)
+            if re.search(r"(?:[$£€]|\b(?:" + "|".join(_WHOLE_AMOUNT_LABELS) + r"))\s*:?\s*$", prefix, re.I):
+                matches = [re.match(r"[+-]?\d[\d,]*", text)]
         width = stringWidth(text, "Helvetica", 1) or 1
         x0, y0, x1, y1 = span["line"]
         for match in matches:
@@ -221,9 +267,12 @@ def _row_prices(spans, selected, product_lines, prices):
         # Other known product titles bound a vertically stacked receipt card.
         lower = max((spans[index]["line"][1] for index in product_lines - selected
                      if spans[index]["line"][1] < y - height), default=-float("inf"))
+        upper = min((spans[index]["line"][1] for index in product_lines - selected
+                     if spans[index]["line"][1] > y + height), default=float("inf"))
         candidates = [(index, price) for index, price in enumerate(prices)
                       if price["line"][0] >= x - height
-                      and lower < price["line"][1] <= y + height*.65
+                      and lower < price["line"][1] < upper
+                      and price["line"][1] <= y + height*2.5
                       and y - price["line"][1] <= height*14]
         same_row = [(index, price) for index, price in candidates
                     if abs(price["line"][1] - y) <= height*.65]
@@ -239,7 +288,7 @@ def _row_prices(spans, selected, product_lines, prices):
 def strike_through(pages, excluded, relevant, geometry=None, costs=None):
     """Strike descriptions AND costs; an exact cost alone is a successful match."""
     if geometry is None:
-        geometry = [{"native": text_spans(page)} for page in pages]
+        geometry = [{"ocr": ocr_spans(page)} for page in pages]
     protected = [" ".join(_tokens(description)) for description in relevant]
     patterns = [_anchors(description, protected) for description in excluded]
     protected_patterns = [_anchors(description, []) for description in relevant]
@@ -270,69 +319,34 @@ def strike_through(pages, excluded, relevant, geometry=None, costs=None):
                 found.add(item_index)
 
     for page_index, (page, data) in enumerate(zip(pages, geometry)):
-        mark(data["native"], page_index)
-        if len(found) < len(excluded) and sum(len(span["text"]) for span in data["native"]) < 40:
-            if "ocr" not in data:
-                data["ocr"] = ocr_spans(page)
-            mark(data["ocr"], page_index)
+        spans = data["ocr"] if "ocr" in data else data.get("native", [])
+        mark(spans, page_index)
+        if not spans:
+            mark(receipt_spans(page, data), page_index)
     return [sorted(page_lines) for page_lines in lines], [
         description for index, description in enumerate(excluded) if index not in found]
 
 
 def monetary_pages(pages, geometry):
     """Regex every page, retaining occurrence identity and source geometry."""
-    from collections import Counter
     result = []
     for page_index, (page, data) in enumerate(zip(pages, geometry)):
         data["verification_issues"] = []
-        try:
-            raw = page.extract_text() or ""
-        except Exception:
-            raw = ""
+        spans = receipt_spans(page, data)
+        if not spans:
             data["verification_issues"].append(
-                f"Supporting page {page_index + 1}: the PDF text could not be extracted; "
-                "review the original page manually.")
-        if "native" not in data:
-            data["native"] = text_spans(page)
-        spans = data["native"]
-        if not spans and (not raw.strip() or _PRICE.search(raw)):
-            if "ocr" not in data:
-                data["ocr"] = ocr_spans(page)
-            spans = data["ocr"]
-            if not spans:
-                data["verification_issues"].append(
-                    f"Supporting page {page_index + 1}: automatic monetary verification is incomplete; "
-                    "no readable text or OCR was available. Review the original page manually.")
-        # This second search covers the complete original extraction, including
-        # strings the geometry visitor may have been unable to position.
-        raw_values = Counter(Decimal(re.sub(r"[^0-9.+-]", "", m.group()))
-                             for m in _PRICE.finditer(raw))
+                f"Page {page_index + 1}: OCR could not read this receipt. "
+                "Retry with a clearer copy, or compare the database items "
+                "with the receipt manually.")
         prices = _prices(spans)
-        positioned = Counter(p["value"] for p in prices)
         for index, price in enumerate(prices):
-            owner = price["owner"]
-            span = spans[owner]
-            x, y = price["line"][:2]
+            span = spans[price["owner"]]
+            y = price["line"][1]
             height = span.get("height", 10)
-            row = [s["text"] for s in spans if abs(s["line"][1] - y) <= height * .65]
-            context = " ".join(row)
-            # OCR produces individual words; row geometry reunites labels.
-            price.update(id=f"P{page_index + 1}.{index + 1}", page=page_index,
-                         context=context, spans=spans)
-        missing = raw_values - positioned
-        if missing:
-            data["verification_issues"].append(
-                f"Supporting page {page_index + 1}: some monetary amounts could not be positioned "
-                "on the original page. They are listed with red question marks in the verification ledger.")
-            for match in _PRICE.finditer(raw):
-                value = Decimal(re.sub(r"[^0-9.+-]", "", match.group()))
-                if not missing[value]:
-                    continue
-                missing[value] -= 1
-                prices.append({"id": f"P{page_index + 1}.{len(prices) + 1}",
-                               "page": page_index, "value": value, "line": None,
-                               "owner": None, "confidence": 0, "spans": spans,
-                               "context": f"Text offset {match.start()}: " + raw[max(0, match.start()-60):match.end()+60]})
+            row = sorted((s for s in spans if abs(s["line"][1] - y) <= height * .65),
+                         key=lambda s: s["line"][0])
+            price.update(id=f"p{page_index + 1}.{index + 1}", page=page_index,
+                         context=" ".join(s["text"] for s in row), spans=spans)
         result.append(prices)
     return result
 
@@ -409,6 +423,7 @@ def reconcile(receipt):
             previous = share
     reimbursable = base + sum((v for _, _, v in charges), Decimal(0))
     residual = total - tax - reimbursable if total is not None else None
+    receipt.pop("item_candidates", None)
     receipt.update(verification=evidence, charges=charges, excluded_tax=tax,
                    original_total=total, reimbursable_total=total - tax if total is not None else None,
                    allocated_total=reimbursable, unresolved=residual, allocations=allocations)
@@ -424,12 +439,12 @@ def verify_amounts(receipt, project=None):
         decisions = []
         for price in page_prices:
             role, value = price["role"], price["value"]
-            status, reason = "?", "No contextual correspondence to a purchase or calculation"
+            status, reason = "?", "No matching database item was found for this receipt amount."
             if role == "tax":
                 status, reason = "strike", "Excluded sales tax; included only in original receipt total"
             elif role in charge_refs:
                 row_refs = [(ref, value) for ref, value in charge_refs[role]
-                            if ref.startswith(f'P{price["page"] + 1}.')]
+                            if ref.startswith(f'p{price["page"] + 1}.')]
                 if any(abs(value) == abs(price["value"]) for _, value in row_refs):
                     references = "; ".join(f"{ref} = {value:,.2f}" for ref, value in row_refs)
                     status, reason = "ok", f"Receipt adjustment {role}: {references}"
@@ -449,9 +464,16 @@ def verify_amounts(receipt, project=None):
                         if (key, index) not in matched_items:
                             expected += item[0]
                             matched_items.add((key, index))
-                    else: accounted = False
+                    else:
+                        accounted = False
+                        likely = _item_candidates(receipt, candidate)
+                        if len(likely) == 1:
+                            key, index, item, _ = likely[0]
+                            if (key, index) not in matched_items:
+                                expected += item[0]
+                                matched_items.add((key, index))
                 page_charges = {kind: sum((v for ref, kind2, v in receipt["charges"]
-                                          if kind2 == kind and ref.startswith(f'P{price["page"] + 1}.')), Decimal(0))
+                                          if kind2 == kind and ref.startswith(f'p{price["page"] + 1}.')), Decimal(0))
                                 for kind in charge_refs}
                 if role != "subtotal":
                     expected += sum(page_charges.values(), Decimal(0))
@@ -461,7 +483,11 @@ def verify_amounts(receipt, project=None):
                 if matched_items and accounted and expected == value and receipt["unresolved"] == 0:
                     status, reason = "ok", f"Page {price['page'] + 1} {role}: item extensions plus applicable adjustments = {expected}"
                 else:
-                    reason = f"Page {price['page'] + 1} {role}: receipt {value}; contextually verified calculation {expected}; unresolved item evidence={not accounted}"
+                    reason = (f"{role.replace('_', ' ').capitalize()}: listed in database as ${expected:,.2f}, "
+                              f"but on receipt as ${value:,.2f}."
+                              + (" Some receipt items could not be matched to database items." if not accounted else "")
+                              + (" The receipt total does not balance with the database items and charges."
+                                 if receipt["unresolved"] != 0 else ""))
             else:
                 match = _item_correspondence(receipt, price)
                 if match:
@@ -473,7 +499,25 @@ def verify_amounts(receipt, project=None):
                 status, reason = "?", "Could not position this amount on the original page; correspondence requires manual review"
             elif price["confidence"] < 60:
                 status, reason = "?", "Low-confidence OCR; " + reason
-            decisions.append(dict(price, status=status, reason=reason))
+            candidates = _item_candidates(receipt, price) if role == "item" else []
+            item_ref = (match[0], match[1]) if role == "item" and match else None
+            if role == "item" and not match and len(candidates) == 1:
+                key, index, item, row_prices = candidates[0]
+                item_ref = (key, index)
+                expected = item[0] if price["value"] != item[3] else item[3]
+                if price["value"] not in (item[0], item[3]):
+                    # When a row prints both unit and extended prices, compare
+                    # each with its corresponding database field.
+                    field = "unit cost" if len(row_prices) > 1 and price["line"][0] == min(p["line"][0] for p in row_prices) else "item price"
+                    expected = item[3] if field == "unit cost" else item[0]
+                    reason = (f"{item[1]} ({field}): listed in database as ${expected:,.2f}, "
+                              f"but on receipt as ${value:,.2f}.")
+                else:
+                    reason = (f"{item[1]}: the price ${value:,.2f} was found, but the quantity "
+                              f"does not confirm the database quantity of {item[2]}.")
+                if price["confidence"] < 60:
+                    reason += " OCR is uncertain; check the receipt."
+            decisions.append(dict(price, status=status, reason=reason, item_ref=item_ref))
         result.append(decisions)
     # Re-search every original page after classification, comparing occurrences
     # (page/index/coordinates/value), so repeated equal numbers stay distinct.
@@ -487,30 +531,66 @@ def verify_amounts(receipt, project=None):
     return result
 
 
-def _item_correspondence(receipt, price):
+def _item_candidates(receipt, price):
     if price["line"] is None:
-        return None
+        return []
+    cache = receipt.setdefault("item_candidates", {})
+    identity = (price["page"], price["id"], price["line"], price["value"])
+    if identity in cache:
+        return cache[identity]
     spans = price["spans"]
     matches = []
     all_items = [(key, i, item) for key, items in receipt["groups"].items() for i, item in enumerate(items)]
-    selections = [_matches(spans, _anchors(item[1], [])) for _, _, item in all_items]
+    selections = [_description_matches(spans, item[1]) for _, _, item in all_items]
     product_lines = set().union(*selections) if selections else set()
     prices = _prices(spans)
     position = next((i for i, p in enumerate(prices) if p["line"] == price["line"]), None)
     for (key, index, item), selected in zip(all_items, selections):
         if not selected or position not in _row_prices(spans, selected, product_lines, prices): continue
+        row = [prices[j] for j in _row_prices(spans, selected, product_lines, prices)
+               if amount_role(dict(prices[j], spans=spans, context="")) == "item"]
+        if not any(p["line"] == price["line"] for p in row):
+            continue
+        matches.append((key, index, item, row))
+    cache[identity] = matches
+    return matches
+
+
+def _description_matches(spans, description):
+    selected = _matches(spans, _anchors(description, []))
+    if selected:
+        return selected
+    # Changed/reordered vendor titles can still supply a likely match. Require
+    # several substantial words so generic product terms do not suffice.
+    wanted = {t for t in _tokens(description) if len(t) >= 4}
+    rows = {}
+    for i, span in enumerate(spans):
+        rows.setdefault(round(span["line"][1], 1), []).append(i)
+    scores = []
+    for owners in rows.values():
+        words = {t for i in owners for t in _tokens(spans[i]["text"]) if len(t) >= 4}
+        overlap = wanted & words
+        if len(overlap) >= 3 and len(overlap) / min(len(wanted), len(words)) >= .6:
+            selected = {i for i in owners if wanted & set(_tokens(spans[i]["text"]))}
+            scores.append((len(overlap), selected))
+    best = max((score for score, _ in scores), default=0)
+    return set().union(*(owners for score, owners in scores if score == best))
+
+
+def _item_correspondence(receipt, price):
+    matches = []
+    for key, index, item, row in _item_candidates(receipt, price):
         amount, description, quantity, cost = item
         if (cost * quantity).quantize(Decimal('.01'), rounding=ROUND_HALF_UP) != amount: continue
         # If the source prints a quantity, it must agree with the purchase.
         row_text = price["context"]
-        row_indices = _row_prices(spans, selected, product_lines, prices)
-        row_text += " " + " ".join(spans[prices[j]["owner"]]["text"] for j in row_indices)
+        row_text += " " + " ".join(price["spans"][p["owner"]]["text"] for p in row)
         quantities = re.findall(r"(?:qty|quantity)\s*:?\s*(\d+)\b", row_text, re.I)
         if quantities and any(Decimal(q) != quantity for q in quantities): continue
         if quantity != 1 and not quantities:
             # A unit price alone cannot validate a multi-unit purchase. Require
             # its extension or an explicit source quantity in the product card.
-            source_extensions = [prices[j]["value"] for j in row_indices if prices[j]["value"] == amount]
+            source_extensions = [p["value"] for p in row if p["value"] == amount]
             if not source_extensions: continue
         field = "unit cost" if price["value"] == cost else "extended price" if price["value"] == amount else None
         if field: matches.append((key, index, item, field))

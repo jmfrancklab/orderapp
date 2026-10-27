@@ -12,6 +12,16 @@ import app as app_module
 import receipt_reports as reports
 
 
+@pytest.fixture(autouse=True)
+def synthetic_ocr(monkeypatch):
+    # Unit tests control recognized text; real rendering/OCR is tested separately.
+    def recognize(page):
+        if not hasattr(page, "cropbox"):
+            return [{"text": page.extract_text(), "line": (0, 1, 10, 1)}]
+        return reports.receipt_markup.text_spans(page)
+    monkeypatch.setattr(reports.receipt_markup, "ocr_spans", recognize)
+
+
 def source_pdf():
     buf = BytesIO()
     pdf = canvas.Canvas(buf, pagesize=(612, 792))
@@ -514,7 +524,7 @@ def test_unpositioned_amounts_download_report_instead_of_link_error(export_clien
     monkeypatch.setattr(reports.receipt_markup, 'text_spans', lambda page: original_spans(page)[:1])
     response = client.get('/invoices/receipt-report', query_string={'group_by': grouping})
     text = pdf_text(response)
-    assert 'could not be positioned' in text
-    assert 'Could not position this amount' in text
+    assert 'Receipt errors' in text
+    assert 'no matching receipt item was found' in text
     assert 'Total $37.05' in text
     assert 'attachment' in response.headers['Content-Disposition']

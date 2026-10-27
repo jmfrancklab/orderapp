@@ -81,16 +81,23 @@ of dependency-free vanilla JS (autosave, vendor auto-detect, tracker chips).
   excluded tax, tax-excluded reimbursable total, allocated total, and any unresolved
   difference. Stored price or quantity discrepancies require correction before
   reimbursement; reports do not change purchase records.
-  Every decimal or currency-denominated amount on each supporting page is searched
-  by regex and annotated once: a green check for a contextual table/calculation
-  match, a strike for an accounted exclusion, or a red question mark for an
-  unresolved correspondence. Page/occurrence IDs connect marks to the verification
-  ledger. Identical numbers alone do not verify a purchase. A final independent
-  regex pass checks coverage. Amounts that cannot be positioned are listed with
-  red question marks and a manual-review notice inside the PDF; verification
-  problems do not block downloading the report.
-  Scanned pages use system `pdftoppm` and `tesseract` when available,
-  with input and output held in memory. No extra Python PDF/OCR packages are needed.
+  Every supporting page is rendered to an image and read with OCR, including
+  PDFs with a text layer (some vendor text layers contain gibberish). Rendering
+  uses pypdfium2 and OCR uses the tesserocr wheel with bundled Tesseract runtime libraries.
+  These install from pip wheels in the app virtualenv on PythonAnywhere; no
+  apt-get, system Tesseract/Poppler installation, root privileges, external OCR service, or runtime
+  model downloads are required. English language data ships in `ocr_data/`.
+  Receipts stay in memory. OCR runs once per page
+  per report and shares its coordinates with matching and strike-throughs.
+  The item table's Location column links matches to lowercase references such
+  as `p1.8` on the receipt. Likely name matches with different prices show a red
+  reference and the receipt price. The Receipt errors table spells out database
+  versus receipt amounts and missing items. Equal numbers alone do not verify
+  an item. Successful matches and exclusions have green references and Unicode
+  checks; unresolved matches have red references and question marks. References
+  immediately precede their symbols on one line. All receipt overlays, including
+  red strikeouts, use 50% opacity. An OCR failure produces a manual-review notice
+  instead of matching against the PDF's potentially corrupt text layer.
 - **Change history** — every field change, tracker add/remove, and submission
   is logged to the `order_history` table (who, when, field, old, new). No GUI
   for it yet; inspect with
@@ -122,6 +129,19 @@ push to GitHub, pull on PythonAnywhere. One-time setup:
     git clone https://github.com/jmfrancklab/orderapp.git
     mkvirtualenv --python=python3.12 orderapp
     pip install -r orderapp/requirements.txt
+
+For an existing deployment, activate that same virtualenv and rerun
+`pip install -r requirements.txt` before reloading the web app. Receipt OCR
+requires the new rendering/OCR wheels. Check them in the PythonAnywhere Bash
+console (using the web app's virtualenv):
+
+    python -c "import pypdfium2; from tesserocr import PyTessBaseAPI; PyTessBaseAPI(path='ocr_data', lang='eng')"
+
+The English model ships in `ocr_data/`; the pinned tesserocr wheel bundles
+Tesseract and Leptonica. No OS package installation is
+needed. The first OCR call in each worker loads those models; subsequent pages
+reuse them. Large reports take additional CPU
+and request time because every supporting page is rendered and read.
 
 **3. Web tab** → Add a new web app → **Manual configuration** → Python 3.12. Then
 on the web app's config page set:
