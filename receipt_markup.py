@@ -284,24 +284,31 @@ def monetary_pages(pages, geometry):
     from collections import Counter
     result = []
     for page_index, (page, data) in enumerate(zip(pages, geometry)):
+        data["verification_issues"] = []
+        try:
+            raw = page.extract_text() or ""
+        except Exception:
+            raw = ""
+            data["verification_issues"].append(
+                f"Supporting page {page_index + 1}: the PDF text could not be extracted; "
+                "review the original page manually.")
         if "native" not in data:
             data["native"] = text_spans(page)
         spans = data["native"]
-        if not spans and (not (page.extract_text() or "").strip() or _PRICE.search(page.extract_text() or "")):
+        if not spans and (not raw.strip() or _PRICE.search(raw)):
             if "ocr" not in data:
                 data["ocr"] = ocr_spans(page)
             spans = data["ocr"]
             if not spans:
-                raise ValueError(f"Cannot verify supporting page {page_index + 1}: no readable text or OCR.")
+                data["verification_issues"].append(
+                    f"Supporting page {page_index + 1}: automatic monetary verification is incomplete; "
+                    "no readable text or OCR was available. Review the original page manually.")
         # This second search covers the complete original extraction, including
         # strings the geometry visitor may have been unable to position.
-        raw = page.extract_text() or ""
         raw_values = Counter(Decimal(re.sub(r"[^0-9.+-]", "", m.group()))
                              for m in _PRICE.finditer(raw))
         prices = _prices(spans)
         positioned = Counter(p["value"] for p in prices)
-        if raw_values - positioned:
-            raise ValueError(f"Cannot position every monetary amount on supporting page {page_index + 1}.")
         for index, price in enumerate(prices):
             owner = price["owner"]
             span = spans[owner]
@@ -312,6 +319,20 @@ def monetary_pages(pages, geometry):
             # OCR produces individual words; row geometry reunites labels.
             price.update(id=f"P{page_index + 1}.{index + 1}", page=page_index,
                          context=context, spans=spans)
+        missing = raw_values - positioned
+        if missing:
+            data["verification_issues"].append(
+                f"Supporting page {page_index + 1}: some monetary amounts could not be positioned "
+                "on the original page. They are listed with red question marks in the verification ledger.")
+            for match in _PRICE.finditer(raw):
+                value = Decimal(re.sub(r"[^0-9.+-]", "", match.group()))
+                if not missing[value]:
+                    continue
+                missing[value] -= 1
+                prices.append({"id": f"P{page_index + 1}.{len(prices) + 1}",
+                               "page": page_index, "value": value, "line": None,
+                               "owner": None, "confidence": 0, "spans": spans,
+                               "context": f"Text offset {match.start()}: " + raw[max(0, match.start()-60):match.end()+60]})
         result.append(prices)
     return result
 
@@ -329,6 +350,8 @@ _SUMMARY_LABELS = (
 
 
 def amount_role(price):
+    if price["line"] is None:
+        return "item"
     text = price["context"].casefold()
     # A price cell often shares its row with unrelated summary columns. Only
     # the nearest label to its left supplies the role.
@@ -446,7 +469,9 @@ def verify_amounts(receipt, project=None):
                     status = "strike" if project is not None and key != project else "ok"
                     reason = f"{key[1]}, item {index + 1}, {field}: {item[2]} x {item[3]} = {item[0]}"
                     if status == "strike": reason += "; allocated to another project"
-            if price["confidence"] < 60:
+            if price["line"] is None:
+                status, reason = "?", "Could not position this amount on the original page; correspondence requires manual review"
+            elif price["confidence"] < 60:
                 status, reason = "?", "Low-confidence OCR; " + reason
             decisions.append(dict(price, status=status, reason=reason))
         result.append(decisions)
@@ -455,13 +480,16 @@ def verify_amounts(receipt, project=None):
     final = monetary_pages(receipt["pages"], receipt["text_geometry"])
     for matches, decisions in zip(final, result):
         identity = lambda p: (p["id"], p["line"], p["value"])
-        if ([identity(p) for p in matches] != [identity(p) for p in decisions]
-                or len({p["id"] for p in decisions}) != len(matches)):
-            raise ValueError("Incomplete monetary annotation coverage")
+        previous = {identity(p): p for p in decisions}
+        decisions[:] = [previous.get(identity(p), dict(
+            p, status="?", reason="Final coverage check found an amount without a verification decision; manual review required"))
+            for p in matches]
     return result
 
 
 def _item_correspondence(receipt, price):
+    if price["line"] is None:
+        return None
     spans = price["spans"]
     matches = []
     all_items = [(key, i, item) for key, items in receipt["groups"].items() for i, item in enumerate(items)]

@@ -86,7 +86,9 @@ of dependency-free vanilla JS (autosave, vendor auto-detect, tracker chips).
   match, a strike for an accounted exclusion, or a red question mark for an
   unresolved correspondence. Page/occurrence IDs connect marks to the verification
   ledger. Identical numbers alone do not verify a purchase. A final independent
-  regex pass checks coverage; generation fails if an amount cannot be positioned.
+  regex pass checks coverage. Amounts that cannot be positioned are listed with
+  red question marks and a manual-review notice inside the PDF; verification
+  problems do not block downloading the report.
   Scanned pages use system `pdftoppm` and `tesseract` when available,
   with input and output held in memory. No extra Python PDF/OCR packages are needed.
 - **Change history** — every field change, tracker add/remove, and submission

@@ -497,3 +497,24 @@ def test_both_orders_use_identical_project_specific_support_and_cost_strikes(exp
             assert any(x0 >= 399 for page in pages for x0, _, _, _ in page)
         rendered.append(list(calls))
     assert rendered[0] == rendered[1]
+
+
+@pytest.mark.parametrize('grouping', ['receipt', 'project'])
+def test_unpositioned_amounts_download_report_instead_of_link_error(export_client, monkeypatch, grouping):
+    client, _ = export_client
+    def supporting_pdf(url):
+        buf = BytesIO()
+        pdf = canvas.Canvas(buf)
+        pdf.drawString(40, 700, 'Precision cable $37.05')
+        pdf.drawString(40, 650, 'Total $37.05')
+        pdf.save()
+        return buf.getvalue()
+    monkeypatch.setattr(reports, 'download_document', supporting_pdf)
+    original_spans = reports.receipt_markup.text_spans
+    monkeypatch.setattr(reports.receipt_markup, 'text_spans', lambda page: original_spans(page)[:1])
+    response = client.get('/invoices/receipt-report', query_string={'group_by': grouping})
+    text = pdf_text(response)
+    assert 'could not be positioned' in text
+    assert 'Could not position this amount' in text
+    assert 'Total $37.05' in text
+    assert 'attachment' in response.headers['Content-Disposition']

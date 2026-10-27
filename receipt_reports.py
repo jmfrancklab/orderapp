@@ -246,10 +246,7 @@ def collect_receipts(db, invoices):
                          "transaction_date": purchased_on, "provided_by": invoice["created_by"],
                          "text_geometry": geometry})
         if not failure:
-            try:
-                receipt_markup.reconcile(receipts[-1])
-            except ValueError as exc:
-                errors.append(_error(invoice, str(exc)))
+            receipt_markup.reconcile(receipts[-1])
     if errors:
         raise ReportError(errors)
     return receipts
@@ -284,6 +281,8 @@ class SupportingPage(Flowable):
         self.canv.saveState()
         left, bottom = float(self.page.cropbox.left), float(self.page.cropbox.bottom)
         for annotation in self.annotations:
+            if annotation["line"] is None:
+                continue
             x0, y0, x1, y1 = annotation["line"]
             x0, y0, x1, y1 = ((x0-left)*self.scale, (y0-bottom)*self.scale,
                               (x1-left)*self.scale, (y1-bottom)*self.scale)
@@ -453,11 +452,14 @@ def build_pdf(receipts, grouping):
         annotations = receipt_markup.verify_amounts(receipt, project)
         # Legacy description strikes remain, but monetary decisions have a single owner.
         strikes = [[line for line in lines if not any(
-                abs(line[1] - mark["line"][1]) < 2 and
+                mark["line"] is not None and abs(line[1] - mark["line"][1]) < 2 and
                 line[0] < mark["line"][2] and line[2] > mark["line"][0] for mark in marks)] for lines, marks in zip(strikes, annotations)]
         heading = [receipt_title(receipt, "Supporting document — ", "Heading3",
                                  outline_level=2 if receipt["groups"] else 1),
                    paragraph(f'provided by: {receipt.get("provided_by", "not recorded")}'), Spacer(1, 6)]
+        for data in receipt["text_geometry"]:
+            for issue in data.get("verification_issues", []):
+                story.append(paragraph("? " + issue, "OtherProject"))
         for index in range(0, len(pages), 2):
             cells = [SupportingPage(pages[page_index], placements, strikes[page_index], annotations[page_index])
                      for page_index in range(index, min(index + 2, len(pages)))]
