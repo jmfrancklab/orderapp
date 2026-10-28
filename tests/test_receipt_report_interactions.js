@@ -196,3 +196,13 @@ async function run(mode) {
     await assert.rejects(context.readReceiptReport(response(data, 5), () => {}), /interrupted/);
   }
 })().catch(error => {console.error(error); process.exitCode = 1;});
+
+// Fetched unit costs can include sub-cent tariff allocations.
+{
+  const formatSource = source.slice(source.indexOf('  function fmtCurrency('),
+    source.indexOf('  function setCostInput('));
+  const context = {};
+  vm.runInNewContext(formatSource, context);
+  assert.equal(context.fmtCurrency('0.64667'), '0.64667');
+  assert.equal(context.fmtCurrency('1234.56'), '1,234.56');
+}

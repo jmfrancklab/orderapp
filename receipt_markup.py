@@ -113,16 +113,47 @@ _ocr_lock = Lock()
 _ocr_engine = None
 
 
+class RecognizedPage(list):
+    """OCR spans plus a JPEG encoding of the raster that was recognized."""
+    def __init__(self, spans, jpeg):
+        super().__init__(spans)
+        self.jpeg = jpeg
+
+
+def page_raster(page):
+    """Render the bitmap shared by OCR and supporting-page display."""
+    import pypdfium2 as pdfium
+    writer = PdfWriter()
+    writer.add_page(page)
+    pdf = BytesIO()
+    writer.write(pdf)
+    with pdfium.PdfDocument(pdf.getvalue()) as document:
+        rendered = document[0]
+        bitmap = rendered.render(scale=min(5, 5000 / max(rendered.get_size())))
+        try:
+            image = bitmap.to_pil().convert("RGB")
+        finally:
+            bitmap.close()
+        return image
+
+
+def _jpeg(image):
+    output = BytesIO()
+    image.save(output, format="JPEG", quality=85, optimize=True, subsampling=0)
+    return output.getvalue()
+
+
+def page_jpeg(page):
+    with _ocr_lock:
+        with page_raster(page) as image:
+            return _jpeg(image)
+
+
 def ocr_spans(page):
     """Render and OCR in memory using pip wheels; no system executables or API."""
     global _ocr_engine
     try:
-        import pypdfium2 as pdfium
         from tesserocr import PyTessBaseAPI, PSM, RIL, iterate_level
-        writer = PdfWriter()
-        writer.add_page(page)
-        pdf = BytesIO()
-        writer.write(pdf)
         # PDFium and a Tesseract API instance must not be shared concurrently.
         # Reuse the English model; neither library needs network I/O.
         with _ocr_lock:
@@ -130,16 +161,8 @@ def ocr_spans(page):
                 _ocr_engine = PyTessBaseAPI(
                     path=str(Path(__file__).with_name("ocr_data")),
                     lang="eng", psm=PSM.AUTO)
-            with pdfium.PdfDocument(pdf.getvalue()) as document:
-                rendered = document[0]
-                # Browser printouts often shrink price tables to tiny text.
-                # 360 dpi preserves part numbers and decimal points that the
-                # previous 216 dpi pass lost (notably the SigaTek receipt).
-                bitmap = rendered.render(scale=min(5, 5000 / max(rendered.get_size())))
-                try:
-                    image = bitmap.to_pil().copy()
-                finally:
-                    bitmap.close()
+            with page_raster(page) as image:
+                jpeg = _jpeg(image)
                 width, height = image.size
                 box = page.cropbox
                 sx, sy = float(box.width) / width, float(box.height) / height
@@ -183,19 +206,72 @@ def ocr_spans(page):
                                                   "line": (float(box.left)+left*sx, y, float(box.left)+right*sx, y)})
                         finally:
                             _ocr_engine.SetPageSegMode(PSM.AUTO)
+                    spans.extend(_table_cells(_ocr_engine, spans, box, sx, sy, width, height, PSM))
                 finally:
                     _ocr_engine.Clear()
-                    image.close()
-        return sorted(spans, key=lambda s: (-round(s["line"][1] / 3), s["line"][0]))
+        return RecognizedPage(sorted(spans, key=lambda s: (-round(s["line"][1] / 3), s["line"][0])), jpeg)
     except Exception:
         logging.getLogger(__name__).exception("Receipt OCR failed")
         return []
 
 
+def _table_cells(engine, spans, box, sx, sy, width, height, psm):
+    """Read shipped counts and missing zero extensions in explicit invoice tables.
+
+    AUTO often discards isolated digits inside ruled cells. Re-read only those
+    small cells; never mix native PDF amounts into the OCR evidence.
+    """
+    shipped = next((s for s in spans if s["text"].casefold() == "shipped"), None)
+    unit = next((s for s in spans if s["text"].casefold() == "unit"), None)
+    amount = next((s for s in spans if s["text"].casefold() == "amount"), None)
+    if not all((shipped, unit, amount)) or unit["line"][0] >= amount["line"][0]:
+        return []
+    rows = []
+    for span in spans:
+        x, y = span["line"][:2]
+        if (unit["line"][0] - 8 <= x < amount["line"][0] - 8
+                and y < shipped["line"][1] - 8
+                and re.fullmatch(r"[\d.,]+", span["text"])
+                and not any(abs(y - previous) < 3 for previous in rows)):
+            rows.append(y)
+    result = []
+    try:
+        engine.SetPageSegMode(psm.SINGLE_LINE)
+        engine.SetVariable("tessedit_char_whitelist", "0123456789.")
+        for y in rows:
+            center = (shipped["line"][0] + shipped["line"][2]) / 2
+            cells = [("shipped", center - 12, center + 12, r"\d+")]
+            if not any(s["line"][0] >= amount["line"][0] - 4
+                       and abs(s["line"][1] - y) < 3 and _PRICE.search(s["text"]) for s in spans):
+                cells.append(("amount", amount["line"][0] - 2, amount["line"][2] + 4, r"0\.0{2,5}"))
+            for column, left, right, pattern in cells:
+                x0 = max(0, int((left - float(box.left)) / sx))
+                top = max(0, int((float(box.top) - y - 7) / sy))
+                w = min(width - x0, int((right - left) / sx))
+                h = min(height - top, int(14 / sy))
+                if w <= 0 or h <= 0:
+                    continue
+                engine.SetRectangle(x0, top, w, h)
+                engine.Recognize()
+                text = (engine.GetUTF8Text() or "").strip()
+                confidence = engine.MeanTextConf()
+                if re.fullmatch(pattern, text) and confidence >= 60:
+                    result.append(dict(text=text, confidence=confidence, height=5,
+                                       line=(left, y, right, y), column=column))
+    finally:
+        engine.SetVariable("tessedit_char_whitelist", "")
+        engine.SetPageSegMode(psm.AUTO)
+        engine.SetRectangle(0, 0, width, height)
+    return result
+
+
 def receipt_spans(page, data):
     """One OCR pass shared by matching, strikes, dates and coverage checks."""
     if "ocr" not in data:
-        data["ocr"] = ocr_spans(page)
+        recognized = ocr_spans(page)
+        data["ocr"] = list(recognized)
+        if isinstance(recognized, RecognizedPage):
+            data["image_jpeg"] = recognized.jpeg
     return data["ocr"]
 
 
@@ -276,10 +352,10 @@ def _prices(spans):
         x0, y0, x1, y1 = span["line"]
         for match in matches:
             suffix = text[match.end():]
-            if re.match(r"\s*(?:%|units?\b)", suffix, re.I):
+            if re.match(r"\s*(?:%|units?\b|kgs?\b|lbs?\b|oz\b|mm\b|cm\b)", suffix, re.I):
                 continue
             if match.end() == len(text) and any(
-                    re.fullmatch(r"units?", other["text"], re.I)
+                    re.fullmatch(r"(?:units?|kgs?|lbs?|oz|mm|cm)", other["text"], re.I)
                     and 0 <= other["line"][0] - x1 < span.get("height", 10) * 3
                     and abs(other["line"][1] - y0) < span.get("height", 10) * .65
                     for other in spans):
@@ -382,7 +458,8 @@ def monetary_pages(pages, geometry):
             row = sorted((s for s in spans if abs(s["line"][1] - y) <= height * .65),
                          key=lambda s: s["line"][0])
             price.update(id=f"p{page_index + 1}.{index + 1}", page=page_index,
-                         context=" ".join(s["text"] for s in row), spans=spans)
+                         context=" ".join(s["text"] for s in row), spans=spans,
+                         unbilled=any(s.get("column") == "shipped" and s["text"] == "0" for s in row))
         result.append([price for price in prices if price["value"] != 0])
     return result
 
@@ -410,6 +487,14 @@ def amount_role(price):
             and abs(s["line"][1] - y) <= s.get("height", 10) * .65]
     text = " ".join(price["prefix"] if s is price["spans"][price["owner"]] else s["text"]
                     for s in sorted(left, key=lambda s: s["line"][0])).casefold()
+    if re.search(r"total\s+sales\s+and\s+tariff", text):
+        return "before_tax"
+    if re.search(r"tariff\s+(?:amount|total)|total\s+tariff", text):
+        return "tariff_total"
+    if re.search(r"sales\s+amount", text):
+        return "merchandise"
+    if re.search(r"charges\s+subtotal", text):
+        return "before_tax"
     if "total before tax" in text:
         return "before_tax"
     if re.search(r"tax(?:es)?\s+on\s*[$£€]?\s*$", text):
@@ -480,6 +565,10 @@ def reconcile(receipt):
                 tax += value
             else:
                 charges.append((price["id"], role, value))
+    tariff_summaries = [p for row in evidence for p in row if p["role"] == "tariff_total"]
+    if tariff_summaries and not any(kind == "tariff" for _, kind, _ in charges):
+        terminal = tariff_summaries[-1]
+        charges.append((terminal["id"], "tariff", terminal["value"]))
     # An exact whole-receipt match wins over inferred labels and page totals.
     # OCR can miss an isolated Total label at the end of a multipage receipt.
     exact_totals = [p for row in evidence for p in row
@@ -510,6 +599,9 @@ def reconcile(receipt):
     receipt.update(verification=evidence, charges=charges, excluded_tax=tax,
                    original_total=total, reimbursable_total=total - tax if total is not None else None,
                    allocated_total=reimbursable, unresolved=residual, allocations=allocations)
+    import receipt_review
+    receipt["item_evidence"] = receipt_review.item_evidence(receipt)
+    receipt["recommendations"] = receipt_review.recommendations(receipt)
     return receipt
 
 
@@ -528,6 +620,21 @@ def verify_amounts(receipt, project=None):
                 status, reason = "strike", "Excluded sales tax; included only in original receipt total"
             elif role == "taxable_base":
                 reason = "Taxable purchase amount, not the sales-tax charge. Compare this base with the taxable purchases on the receipt."
+            elif role == "tariff_total":
+                detected = sum((v for _, kind, v in receipt["charges"] if kind == "tariff"), Decimal(0))
+                if value == detected:
+                    status, reason = "ok", f"Tariff summary matches ${detected:,.2f} in tariff charges; counted once."
+                else:
+                    reason = f"Tariff summary ${value:,.2f} differs from detailed tariff charges ${detected:,.2f}."
+            elif role == "merchandise" or (role == "before_tax" and re.search(
+                    r"total\s+sales\s+and\s+tariff", price["context"], re.I)):
+                expected = receipt["allocated_total"] - Decimal(str(receipt.get("shipping") or "0"))
+                if role == "merchandise":
+                    expected -= sum((v for _, kind, v in receipt["charges"] if kind == "tariff"), Decimal(0))
+                if expected == value:
+                    status, reason = "ok", f"{role.capitalize()} matches database item costs: ${value:,.2f}."
+                else:
+                    reason = f"Database item costs imply ${expected:,.2f}; receipt shows ${value:,.2f}. Review item costs and invoice assignments."
             elif role in charge_refs:
                 row_refs = [(ref, value) for ref, value in charge_refs[role]
                             if ref.startswith(f'p{price["page"] + 1}.')]
@@ -629,6 +736,34 @@ def verify_amounts(receipt, project=None):
                               f"does not confirm the database quantity of {item[2]}.")
                 if price["confidence"] < 60:
                     reason += " OCR is uncertain; check the receipt."
+            import receipt_review
+            source = receipt_review.evidence_for_price(receipt, price)
+            if price.get("unbilled") and source is None:
+                status, reason = "strike", "Unit price on a zero-shipped row; this invoice bills $0.00 for the item."
+            if source is not None and (source["explicit_extension"] and source["billed"] == 0
+                                       or source["tariff"] or source["quantity"] is not None
+                                       and source["quantity"] != source["item"][2]):
+                key, index = source["ref"]
+                item = source["item"]
+                item_ref = (key, index)
+                if source["explicit_extension"] and source["billed"] == 0:
+                    status = "?"
+                    reason = (f"{item[1]}: receipt bills $0.00"
+                              + (" and shows zero shipped" if source["quantity"] == 0 else "")
+                              + f"; database includes ${item[0]:,.2f}. Check fulfillment and invoice assignment.")
+                elif source["quantity"] is not None and source["quantity"] != item[2]:
+                    status, reason = "?", (f"{item[1]}: receipt quantity {source['quantity']}; "
+                                           f"database quantity {item[2]}. Verify quantity before changing price.")
+                elif source["tariff"]:
+                    included = (source["landed"] == item[0] and source["quantity"] == item[2]
+                                and source["confidence"] >= 60 and price["confidence"] >= 60
+                                and price["line"] is not None)
+                    status = ("strike" if project is not None and key != project else "ok") if included else "?"
+                    reason = (f"{item[1]}: receipt item ${source['billed']:,.2f} + tariff "
+                              f"${source['tariff']:,.2f} = ${source['landed']:,.2f}; "
+                              f"database line ${item[0]:,.2f}. "
+                              + ("Tariff is included in the stored item cost." if included else
+                                 "Include the attributable tariff in item cost; review the opening recommendations."))
             if status == "?":
                 reason = f"OCR amount ${value:,.2f} ({role.replace('_', ' ')}; {price['context']}): " + reason
                 if receipt.get("explanation"):
@@ -674,6 +809,11 @@ def _item_candidates(receipt, price):
 
 
 def _description_matches(spans, description):
+    primary = description.split("(", 1)[0].strip()
+    if primary != description:
+        selected = _matches(spans, _anchors(primary, []))
+        if selected:
+            return selected
     selected = _matches(spans, _anchors(description, []))
     if selected:
         return selected
@@ -695,6 +835,18 @@ def _description_matches(spans, description):
 
 
 def _item_correspondence(receipt, price):
+    import receipt_review
+    source = receipt_review.evidence_for_price(receipt, price)
+    if source is not None:
+        if source["explicit_extension"] and source["billed"] == 0:
+            return None
+        if source["quantity"] is not None and source["quantity"] != source["item"][2]:
+            return None
+        if source["tariff"]:
+            if source["landed"] == source["item"][0] and source["quantity"] == source["item"][2]:
+                key, index = source["ref"]
+                return key, index, source["item"], "item including tariff"
+            return None
     # A stored combined purchase can be supported by the printed total even
     # when its component descriptions differ from the database description.
     if price.get("role") in ("total", "before_tax"):

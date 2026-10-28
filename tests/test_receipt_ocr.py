@@ -9,6 +9,7 @@ from reportlab.pdfgen import canvas
 
 import receipt_markup as markup
 import receipt_reports as reports
+from conftest import jpeg_images
 
 
 def sample():
@@ -89,7 +90,8 @@ def test_ocr_failure_never_matches_native_gibberish(monkeypatch):
     text = '\n'.join(p.extract_text() for p in PdfReader(BytesIO(reports.build_pdf([data], 'receipt'))).pages)
     assert 'OCR could not read this receipt' in text
     assert 'no matching receipt item was found' in text
-    assert 'Broken text layer $999.99' in text  # original still embedded
+    assert 'Broken text layer $999.99' not in text  # source is a bitmap
+    jpeg_images(PdfReader(BytesIO(reports.build_pdf([data], 'receipt'))))
 
 
 def test_renderer_and_ocr_map_crop_coordinates_without_system_commands(monkeypatch):

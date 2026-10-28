@@ -1,4 +1,4 @@
-"""Filtered receipt summaries with original supporting pages embedded as PDF content."""
+"""Filtered purchase summaries with reviewed costs and bitmap supporting pages."""
 from collections import OrderedDict
 from copy import deepcopy
 from datetime import date
@@ -14,7 +14,7 @@ from xml.sax.saxutils import escape
 
 import requests
 from PIL import Image as PILImage
-from pypdf import PdfReader, PdfWriter, Transformation
+from pypdf import PdfReader, PdfWriter
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet
@@ -215,7 +215,7 @@ class ReportProgress:
     LABELS = {"purchases": "Loading invoice purchase data", "downloads": "Downloading documents",
               "ocr": "Reading document pages", "reconcile": "Reconciling invoices",
               "matching": "Matching purchase sections", "sections": "Building purchase sections",
-              "layout": "Laying out PDF and bookmarks", "merge": "Embedding supporting pages",
+              "layout": "Laying out PDF and bookmarks", "merge": "Preparing supporting images",
               "write": "Writing PDF"}
 
     def __init__(self, invoices):
@@ -315,10 +315,11 @@ def _collect_receipts(db, invoices, progress):
         yield progress.advance()
 
     page_count = sum(len(doc.get("pages", [])) for doc in documents.values())
-    progress.totals["merge"] = sum(len(documents[r["source_url"]].get("pages", []))
-                                   * max(1, len(r["groups"])) for r in receipts)
-    progress.rates["layout"] += .03 * progress.totals["merge"]
-    progress.rates["write"] = .3 + .02 * progress.totals["merge"]
+    embedded_pages = sum(len(documents[r["source_url"]].get("pages", []))
+                         * max(1, len(r["groups"])) for r in receipts)
+    progress.totals["merge"] = page_count
+    progress.rates["layout"] += .03 * embedded_pages
+    progress.rates["write"] = .3 + .02 * embedded_pages
     yield progress.start("ocr", page_count)
     for document in documents.values():
         for page, geometry in zip(document.get("pages", []), document.get("geometry", [])):
@@ -343,10 +344,10 @@ def _collect_receipts(db, invoices, progress):
 
 
 class SupportingPage(Flowable):
-    """Reserve layout space, then merge the source page after pagination."""
-    def __init__(self, page, placements, strikes=(), annotations=()):
+    """Draw the OCR bitmap and annotations; never merge source PDF vectors."""
+    def __init__(self, page, image, strikes=(), annotations=()):
         super().__init__()
-        self.page, self.placements = page, placements
+        self.page, self.image = page, image
         self.strikes = strikes
         self.annotations = annotations
         width, height = float(page.cropbox.width), float(page.cropbox.height)
@@ -354,8 +355,9 @@ class SupportingPage(Flowable):
         self.width, self.height = width * self.scale, height * self.scale
 
     def draw(self):
-        x, y = self.canv.absolutePosition(0, 0)
-        self.placements.append((self.canv.getPageNumber() - 1, x, y, self))
+        # Keep only compressed bytes between draws. A cached ImageReader would
+        # retain a decoded RGB buffer for every high-resolution page at once.
+        self.canv.drawImage(ImageReader(BytesIO(self.image)), 0, 0, self.width, self.height)
         if self.strikes:
             self.canv.saveState()
             clip = self.canv.beginPath()
@@ -474,7 +476,7 @@ def build_pdf(receipts, grouping):
 def _build_pdf(receipts, grouping, progress):
     # Work on report data only; original supporting pages and database stay intact.
     receipts = [dict(receipt) if "verification" in receipt else receipt_markup.reconcile(dict(receipt))
-                for receipt in receipts]
+                for receipt in sorted(receipts, key=lambda receipt: receipt["id"])]
     # Compute decisions once per receipt/project, shared by tables and annotations.
     decisions = {}
     section_count = sum(max(1, len(receipt["groups"])) for receipt in receipts)
@@ -483,6 +485,18 @@ def _build_pdf(receipts, grouping, progress):
         for project in list(receipt["groups"]) or [None]:
             decisions[id(receipt), project] = receipt_markup.verify_amounts(receipt, project)
             yield progress.advance()
+
+    # Cache only compressed rasters. ReportLab reuses their image resources
+    # across project sections; decoded page buffers live for one draw only.
+    geometry_pages = {}
+    for receipt in receipts:
+        for page, data in zip(receipt["pages"], receipt["text_geometry"]):
+            geometry_pages.setdefault(id(data), (page, data))
+    yield progress.start("merge", len(geometry_pages))
+    for page, data in geometry_pages.values():
+        if "image_jpeg" not in data:
+            data["image_jpeg"] = receipt_markup.page_jpeg(page)
+        yield progress.advance()
 
     def item_total(receipt, key, index, item):
         return item[0] + sum(receipt["allocations"][key, index].values(), Decimal(0))
@@ -494,7 +508,7 @@ def _build_pdf(receipts, grouping, progress):
     styles = getSampleStyleSheet()
     styles.add(ParagraphStyle("OtherProject", parent=styles["Normal"], textColor=OTHER_PROJECT_COLOR))
     styles.add(ParagraphStyle("OtherProjectHeading", parent=styles["Heading3"], textColor=OTHER_PROJECT_COLOR))
-    placements, story = [], []
+    story = []
 
     def paragraph(text, style="Normal", outline_level=None):
         text = escape(str(text)).replace("\n", "<br/>")
@@ -578,7 +592,8 @@ def _build_pdf(receipts, grouping, progress):
                                  outline_level=2 if receipt["groups"] else 1, project=project),
                    paragraph(f'provided by: {receipt.get("provided_by", "not recorded")}'), Spacer(1, 6)]
         for index in range(0, len(pages), 2):
-            cells = [SupportingPage(pages[page_index], placements, strikes[page_index], annotations[page_index])
+            cells = [SupportingPage(pages[page_index], receipt["text_geometry"][page_index]["image_jpeg"],
+                                     strikes[page_index], annotations[page_index])
                      for page_index in range(index, min(index + 2, len(pages)))]
             if len(cells) == 1:
                 cells.append("")
@@ -708,8 +723,61 @@ def _build_pdf(receipts, grouping, progress):
     def receipt_total(receipt):
         return receipt["allocated_total"]
 
+    def recommended_corrections():
+        recommendations = [(receipt, suggestion) for receipt in receipts
+                           for suggestion in receipt.get("recommendations", [])]
+        if not recommendations:
+            return
+        story.append(paragraph("Recommended corrections", "Heading2"))
+        story.append(paragraph(
+            "Review these suggestions against the original receipt before editing. "
+            "Prices below are unit costs including attributable tariffs; database values are unchanged."))
+
+        def money(value):
+            if value is None:
+                return "—"
+            text = format(value, ",f")
+            if "." in text:
+                text = text.rstrip("0").rstrip(".")
+            if "." not in text:
+                text += ".00"
+            elif len(text.rsplit(".", 1)[1]) < 2:
+                text += "0"
+            return "$" + text
+
+        data = [[paragraph(label) for label in ["Receipt / project", "Item", "Unit cost: database → suggested", "Reason / evidence"]]]
+        for receipt, suggestion in recommendations:
+            current = money(suggestion["current_unit"])
+            if suggestion["proposed_unit"] is not None:
+                change = current + ' <font name="Symbol">→</font> ' + money(suggestion["proposed_unit"])
+            elif suggestion["kind"] == "unbilled":
+                change = current + ' <font name="Symbol">→</font> check invoice'
+            elif suggestion["kind"] == "quantity":
+                change = current + ' <font name="Symbol">→</font> check quantity'
+            else:
+                change = "Review tariff " + money(suggestion["tariff"])
+            reason = suggestion["reason"]
+            if suggestion["refs"]:
+                reason += " Reference: " + suggestion["refs"] + "."
+            data.append([
+                paragraph(f"#{receipt['id']} / {suggestion['project']}"),
+                paragraph(suggestion["item"]), Paragraph(change, styles["Normal"]), paragraph(reason)])
+        table = Table(data, colWidths=[75, 135, 110, CONTENT_WIDTH - 320],
+                      hAlign="LEFT", repeatRows=1, splitInRow=1)
+        table.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("BACKGROUND", (0, 0), (-1, 0), TABLE_HEADER_GRAY),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f7f8fa")]),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+            ("TOPPADDING", (0, 0), (-1, -1), 7),
+        ]))
+        story.extend([table, Spacer(1, 16)])
+
     yield progress.start("sections", section_count)
     story.append(paragraph("Report summary", "Heading1", outline_level=0))
+    recommended_corrections()
     if grouping == "receipt":
         summary_table(["Receipt", "Amount"], [
             (Paragraph(receipt_label(receipt, short=True), styles["Normal"]), receipt_total(receipt))
@@ -761,13 +829,6 @@ def _build_pdf(receipts, grouping, progress):
     writer = PdfWriter()
     writer.append(PdfReader(BytesIO(buf.getvalue())))
     writer.page_mode = "/UseOutlines"
-    yield progress.start("merge", len(placements))
-    for page_index, x, y, flowable in placements:
-        source = deepcopy(flowable.page)
-        transform = Transformation().translate(-float(source.cropbox.left), -float(source.cropbox.bottom))
-        transform = transform.scale(flowable.scale).translate(x, y)
-        writer.pages[page_index].merge_transformed_page(source, transform, over=False)
-        yield progress.advance()
     output = BytesIO()
     yield progress.start("write")
     writer.write(output)
@@ -781,6 +842,7 @@ def generate(db, invoices, grouping):
 
 def generate_events(db, invoices, grouping):
     """Yield progress snapshots; return the completed PDF as the generator result."""
+    invoices = sorted(invoices, key=lambda invoice: invoice["id"])
     progress = ReportProgress(invoices)
     receipts = yield from _collect_receipts(db, invoices, progress)
     return (yield from _build_pdf(receipts, grouping, progress))

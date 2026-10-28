@@ -598,7 +598,7 @@
   function fmtCurrency(s) {
     var f = parseFloat(String(s).replace(/,/g, ''));
     if (isNaN(f)) return s;
-    return f.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    return f.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 12});
   }
 
   function setCostInput(row, price) {

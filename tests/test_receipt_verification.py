@@ -8,6 +8,7 @@ from reportlab.pdfgen import canvas
 
 import receipt_markup as markup
 import receipt_reports as reports
+from conftest import jpeg_images
 
 
 @pytest.fixture(autouse=True)
@@ -139,7 +140,8 @@ def test_native_prices_are_not_added_to_ocr_evidence(monkeypatch):
     text = '\n'.join(p.extract_text() for p in PdfReader(BytesIO(output)).pages)
     assert 'Unexplained amounts' in text
     assert 'No matching database item was found' in ' '.join(text.split())
-    assert 'Precision cable $10.00' in text
+    assert 'Precision cable $10.00' not in text
+    jpeg_images(PdfReader(BytesIO(output)))
 
 
 @pytest.mark.parametrize('grouping', ['receipt', 'project'])
@@ -240,7 +242,8 @@ def test_unreadable_support_still_generates_pdf_with_review_notice(monkeypatch, 
     output = reports.build_pdf([data], grouping)
     text = '\n'.join(p.extract_text() for p in PdfReader(BytesIO(output)).pages)
     assert 'OCR could not read this receipt' in text
-    assert 'Precision cable $10.00' in text
+    assert 'Precision cable $10.00' not in text
+    jpeg_images(PdfReader(BytesIO(output)))
     assert 'no matching receipt item was found' in text
 
 
@@ -253,7 +256,8 @@ def test_text_extraction_failure_is_reported_inside_pdf(monkeypatch):
     output = reports.build_pdf([data], 'receipt')
     text = '\n'.join(p.extract_text() for p in PdfReader(BytesIO(output)).pages)
     assert 'OCR could not read this receipt' in text
-    assert 'Precision cable $10.00' in text
+    assert 'Precision cable $10.00' not in text
+    jpeg_images(PdfReader(BytesIO(output)))
 
 
 def test_exact_terminal_total_matches_combined_purchase_despite_ocr_confidence(monkeypatch):

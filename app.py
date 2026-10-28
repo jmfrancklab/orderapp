@@ -67,8 +67,12 @@ def fmt_cost(value):
     if not s:
         return ''
     try:
-        return '{:,.2f}'.format(float(s))
-    except ValueError:
+        number = Decimal(s)
+        if not number.is_finite():
+            return s
+        precision = max(2, -number.normalize().as_tuple().exponent)
+        return f"{number:,.{precision}f}"
+    except (ValueError, InvalidOperation):
         return value or ''
 
 
@@ -93,13 +97,19 @@ def description_rows(value, columns):
 
 
 def _normalise_cost(raw):
-    """Strip commas/whitespace from user input; return plain decimal or ''."""
+    """Normalize unit costs while preserving sub-cent acquisition costs."""
     s = str(raw or '').replace(',', '').strip()
     if not s:
         return ''
     try:
-        return str(round(float(s), 2))
-    except ValueError:
+        number = Decimal(s)
+        if not number.is_finite():
+            return s
+        normalized = format(number, "f")
+        if "." in normalized:
+            normalized = normalized.rstrip("0").rstrip(".")
+        return normalized if "." in normalized else normalized + ".0"
+    except (ValueError, InvalidOperation):
         return s
 
 

@@ -11,6 +11,7 @@ from reportlab.pdfgen import canvas
 
 import app as app_module
 import receipt_reports as reports
+from conftest import jpeg_images
 
 
 @pytest.fixture(autouse=True)
@@ -83,8 +84,11 @@ def test_export_amounts_sources_and_grouping(export_client, grouping):
     for label in ("Quantity", "Unit cost", "Line total", "37.05", "0.30", "2,000.20"):
         assert label in text
     assert downloads == ["https://files.example/receipt.pdf", "https://files.example/invoice.pdf"]
-    assert text.count("Original supporting receipt") == 3
-    assert "Supporting receipt second page" in text
+    assert "Original supporting receipt" not in text
+    assert "Supporting receipt second page" not in text
+    reader = PdfReader(BytesIO(response.data))
+    assert len(jpeg_images(reader)) == 2
+    assert sum(op == b'Do' for page in reader.pages for _, op in page.get_contents().operations) == 6
     assert "Relevant to project: Alpha" in " ".join(text.split())
     assert "Relevant to project: Beta" in " ".join(text.split())
     assert "All purchases on this receipt" not in text
@@ -274,8 +278,8 @@ def test_images_and_placement_limits():
         buf = BytesIO()
         Image.new("RGB", (800, 1200), "white").save(buf, format=image_format)
         pages = reports.document_pages(buf.getvalue())
-        placements = []
-        flowable = reports.SupportingPage(pages[0], placements)
+        image = reports.receipt_markup.page_jpeg(pages[0])
+        flowable = reports.SupportingPage(pages[0], image)
         assert flowable.width <= reports.CONTENT_WIDTH / 2
         assert flowable.height <= 600
     pages = reports.document_pages(source_pdf())
@@ -304,7 +308,8 @@ def test_long_tables_repeat_headers_and_split_long_descriptions():
     assert len(reader.pages) > 3
     assert text.count("Unit cost") > 3
     assert "25.00" in text
-    assert "Original supporting receipt" in text
+    assert "Original supporting receipt" not in text
+    jpeg_images(reader)
 
 
 def test_public_download_rewrites_provider_and_rejects_private_redirects(monkeypatch):
@@ -545,7 +550,8 @@ def test_unpositioned_amounts_download_report_instead_of_link_error(export_clien
     text = pdf_text(response)
     assert 'Unexplained amounts' in text
     assert 'no matching receipt item was found' in text
-    assert 'Total $37.05' in text
+    assert 'Total $37.05' not in text
+    jpeg_images(PdfReader(BytesIO(response.data)))
     assert 'attachment' in response.headers['Content-Disposition']
 
 
@@ -608,9 +614,9 @@ def test_stream_reports_real_work_before_pdf(export_client, monkeypatch, groupin
         assert 0 <= event['completed'] <= event['total']
         stages.setdefault(event['stage'], []).append(event)
     assert list(stages) == ['purchases', 'downloads', 'ocr', 'reconcile', 'matching',
-                            'sections', 'layout', 'merge', 'write']
+                            'merge', 'sections', 'layout', 'write']
     expected = dict(purchases=2, downloads=2, ocr=4, reconcile=2,
-                    matching=3, sections=3, layout=1, merge=6, write=1)
+                    matching=3, sections=3, layout=1, merge=4, write=1)
     for stage, count in expected.items():
         assert stages[stage][0]['completed'] == 0
         assert stages[stage][-1]['completed'] == stages[stage][-1]['total'] == count
@@ -634,7 +640,7 @@ def test_shared_document_is_downloaded_and_ocrd_once(export_client, monkeypatch)
     assert pdf.startswith(b'%PDF')
     assert len(downloads) == 1 and len(calls) == 2
     assert next(r for r in records if r.get('stage') == 'ocr')['total'] == 2
-    assert next(r for r in records if r.get('stage') == 'merge')['total'] == 6
+    assert next(r for r in records if r.get('stage') == 'merge')['total'] == 2
 
 
 def test_stream_document_error_keeps_editable_invoice_context(export_client, monkeypatch):
@@ -691,5 +697,16 @@ def test_stream_handles_receipts_without_purchase_sections(export_client, groupi
         completed = [r for r in records if r.get('stage') == stage][-1]
         assert completed['completed'] == completed['total'] == 4
     merge = [r for r in records if r.get('stage') == 'merge'][-1]
-    assert merge['completed'] == merge['total'] == 8
+    assert merge['completed'] == merge['total'] == 4
     assert 'No orders' in '\n'.join(page.extract_text() for page in PdfReader(BytesIO(pdf)).pages)
+
+
+def test_cost_editor_preserves_recommended_subcent_unit_cost(export_client):
+    client, _ = export_client
+    with sqlite3.connect(app_module.DB_PATH) as db:
+        order_id = db.execute('SELECT id FROM orders WHERE invoice_id=11 ORDER BY id LIMIT 1').fetchone()[0]
+    response = client.post(f'/api/orders/{order_id}', json={'cost': '0.64667'})
+    assert response.status_code == 200
+    with sqlite3.connect(app_module.DB_PATH) as db:
+        assert db.execute('SELECT cost FROM orders WHERE id=?', (order_id,)).fetchone()[0] == '0.64667'
+    assert 'value="0.64667"' in client.get('/submitted').get_data(as_text=True)

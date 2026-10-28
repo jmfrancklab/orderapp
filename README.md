@@ -49,7 +49,11 @@ of dependency-free vanilla JS (autosave, vendor auto-detect, tracker chips).
   each invoice links back to a Submitted view filtered to its associated rows.
   **By receipt** and **By project** download PDF reports for the current GET
   filters, with quantities, unit costs, line totals, project subtotals, and
-  bordered supporting pages. Receipt links take precedence; invoice links are
+  bordered supporting pages. Receipts appear in ascending receipt-number order
+  in both arrangements. An opening Recommended corrections table lists matched
+  price differences, attributable tariffs to include in unit costs, and
+  zero-billed/quantity issues for review. Suggestions never edit the database.
+  Receipt links take precedence; invoice links are
   used when no receipt is recorded. Supporting files must be publicly accessible
   PDF, PNG, or JPEG files. Missing files or costs open an in-page popup identifying
   the affected invoices, with each offending file link in an editable box and a
@@ -77,8 +81,8 @@ of dependency-free vanilla JS (autosave, vendor auto-detect, tracker chips).
   amount with the amount relevant to that project. Purchase descriptions show
   their Use notes underneath in 50% gray italics. PDF preparation streams real
   progress updates: invoice purchase data, unique document downloads, OCR pages,
-  reconciliation, matching, purchase sections, layout/bookmarks, page embedding,
-  and writing. The remaining-time estimate uses discovered counts and measured
+  reconciliation, matching, supporting-image preparation, purchase sections,
+  layout/bookmarks, and writing. The remaining-time estimate uses discovered counts and measured
   seconds per unit within each stage; layout includes fixed overhead plus table
   rows, sections, and embedded pages. Initial unknown page counts assume three
   pages per document until downloads establish the actual count. OCR is shared
@@ -91,8 +95,14 @@ of dependency-free vanilla JS (autosave, vendor auto-detect, tracker chips).
   Entered invoice shipping is prorated by project purchase value with cent-exact
   rounding. Reports preserve stored item prices and do not add OCR charges to
   purchases. Sales tax is never allocated or reimbursed. Missing amounts and
-  unresolved differences appear only in the red Unexplained amounts table;
-  reports do not change purchase records.
+  unresolved differences remain in the red Unexplained amounts table, with
+  actionable price/tariff suggestions also summarized at the start. Tariffs
+  attributable to a shipped line are compared with the stored item cost as
+  merchandise plus tariff; tariff summaries are not counted a second time.
+  Zero-shipped, zero-billed rows do not validate a purchase merely because its
+  unit price matches. Sub-cent unit costs are preserved in the editor and report
+  so multi-unit tariff allocations still reproduce the billed line to the cent.
+  Reports do not change purchase records.
   Every supporting page is rendered to an image and read with OCR, including
   PDFs with a text layer (some vendor text layers contain gibberish). Rendering
   uses pypdfium2 and OCR uses the tesserocr wheel with bundled Tesseract runtime libraries.
@@ -101,6 +111,10 @@ of dependency-free vanilla JS (autosave, vendor auto-detect, tracker chips).
   model downloads are required. English language data ships in `ocr_data/`.
   Receipts stay in memory. OCR runs once per page
   per report and shares its coordinates with matching and strike-throughs.
+  General OCR can miss isolated zero amounts or Shipped counts in ruled tables;
+  those small cells receive a targeted OCR pass. Supporting pages embed JPEGs
+  (quality 85) of the same rendered bitmaps used by OCR, never source PDF vectors.
+  Image resources are shared across repeated project sections to limit file size.
   The item table's Location column links matches to lowercase references such
   as `p1.8` on the receipt. Likely name matches with different prices show a red
   reference and the receipt price. The Unexplained amounts table spells out database
