@@ -720,3 +720,5 @@ input[data-field="location"]:required:invalid { border-color: var(--alert); }
 .location-dialog label { display: block; margin: .6rem 0; }
 .location-dialog input[type="radio"] { width: auto; margin-right: .5rem; }
 .location-dialog button { margin: .5rem .5rem 0 0; }
+
+.receipt-report-progress { width: 12rem; vertical-align: middle; margin: 0 .5rem; }

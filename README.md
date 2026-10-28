@@ -72,15 +72,18 @@ of dependency-free vanilla JS (autosave, vendor auto-detect, tracker chips).
   a date label and falling back to a numeric date anywhere. Missing dates are
   omitted. Receipt numbers are followed by the invoice nickname and full invoice
   total in smaller, parenthesized text, summed across all projects using quantity
-  times unit cost. Relevance statements name the project explicitly.
+  times unit cost plus entered shipping. Inner headings name the receipt and relevant
+  project in both report orders. Project summaries compare the original receipt
+  amount with the amount relevant to that project. Purchase descriptions show
+  their Use notes underneath in 50% gray italics. An estimated progress bar uses
+  roughly 12 seconds per filtered receipt and waits for the completed download.
   Supporting pages show `provided by:` followed by
   the invoice creator's email address.
-  Shipping is prorated by item extension with cent-exact rounding; insurance,
-  discounts, and tariffs are shown separately from original item prices. Sales
-  tax is never allocated or reimbursed. Each receipt shows its original total,
-  excluded tax, tax-excluded reimbursable total, allocated total, and any unresolved
-  difference. Stored price or quantity discrepancies require correction before
-  reimbursement; reports do not change purchase records.
+  Entered invoice shipping is prorated by project purchase value with cent-exact
+  rounding. Reports preserve stored item prices and do not add OCR charges to
+  purchases. Sales tax is never allocated or reimbursed. Missing amounts and
+  unresolved differences appear only in the red Unexplained amounts table;
+  reports do not change purchase records.
   Every supporting page is rendered to an image and read with OCR, including
   PDFs with a text layer (some vendor text layers contain gibberish). Rendering
   uses pypdfium2 and OCR uses the tesserocr wheel with bundled Tesseract runtime libraries.
@@ -91,9 +94,11 @@ of dependency-free vanilla JS (autosave, vendor auto-detect, tracker chips).
   per report and shares its coordinates with matching and strike-throughs.
   The item table's Location column links matches to lowercase references such
   as `p1.8` on the receipt. Likely name matches with different prices show a red
-  reference and the receipt price. The Receipt errors table spells out database
-  versus receipt amounts and missing items. Equal numbers alone do not verify
-  an item. Successful matches and exclusions have green references and Unicode
+  reference and the receipt price. The Unexplained amounts table spells out database
+  versus receipt amounts and missing items. Exact printed totals take precedence
+  when matching a combined database purchase. Otherwise unmatched OCR amounts
+  can confirm entered shipping to the cent, even without a nearby shipping label.
+  Zero-dollar amounts receive no annotations or unexplained rows. Successful matches and exclusions have green references and Unicode
   checks; unresolved matches have red references and question marks. References
   immediately precede their symbols on one line. All receipt overlays, including
   red strikeouts, use 50% opacity. An OCR failure produces a manual-review notice

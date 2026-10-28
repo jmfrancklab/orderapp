@@ -84,8 +84,10 @@ def test_export_amounts_sources_and_grouping(export_client, grouping):
     assert downloads == ["https://files.example/receipt.pdf", "https://files.example/invoice.pdf"]
     assert text.count("Original supporting receipt") == 3
     assert "Supporting receipt second page" in text
-    assert "All purchases on this receipt are relevant to Alpha." in text
-    assert "Only the following purchases on this receipt are relevant to Alpha." in text
+    assert "Relevant to project: Alpha" in " ".join(text.split())
+    assert "Relevant to project: Beta" in " ".join(text.split())
+    assert "All purchases on this receipt" not in text
+    assert "Only the following purchases" not in text
     assert "this project" not in text
     assert "attachment" in response.headers["Content-Disposition"]
 
@@ -107,9 +109,9 @@ def test_nested_bookmarks_survive_supporting_document_merge(export_client, group
         assert outline[4][0].title.startswith("Receipt #11")
     else:
         assert outline[1].title.startswith("Receipt #11")
-        assert outline[2][0].title == "Alpha"
+        assert "Relevant to project: Alpha" in outline[2][0].title
         assert outline[2][1][0].title.startswith("Supporting document")
-        assert outline[2][2].title == "Beta"
+        assert "Relevant to project: Beta" in outline[2][2].title
         assert outline[2][3][0].title.startswith("Supporting document")
 
     def check_destinations(entries):
@@ -119,7 +121,7 @@ def test_nested_bookmarks_survive_supporting_document_merge(export_client, group
             else:
                 page_number = reader.get_destination_page_number(entry)
                 assert page_number >= 0
-                assert entry.title in reader.pages[page_number].extract_text()
+                assert " ".join(entry.title.split()) in " ".join(reader.pages[page_number].extract_text().split())
     check_destinations(outline)
 
 
@@ -540,7 +542,23 @@ def test_unpositioned_amounts_download_report_instead_of_link_error(export_clien
     monkeypatch.setattr(reports.receipt_markup, 'text_spans', lambda page: original_spans(page)[:1])
     response = client.get('/invoices/receipt-report', query_string={'group_by': grouping})
     text = pdf_text(response)
-    assert 'Receipt errors' in text
+    assert 'Unexplained amounts' in text
     assert 'no matching receipt item was found' in text
     assert 'Total $37.05' in text
     assert 'attachment' in response.headers['Content-Disposition']
+
+
+@pytest.mark.parametrize("grouping", ["receipt", "project"])
+def test_use_notes_appear_below_descriptions_in_both_project_tables(export_client, grouping):
+    client, _ = export_client
+    with sqlite3.connect(app_module.DB_PATH) as db:
+        db.execute("UPDATE orders SET use_note = ? WHERE description = ?",
+                   ("Connect <prototype> & amplifier", "Precision cable <shielded>"))
+    text = pdf_text(client.get("/invoices/receipt-report", query_string={"group_by": grouping}))
+    # Once in its project's table and once in the other project's excluded table.
+    assert text.count("Connect <prototype> & amplifier") == 2
+    assert "Receipt errors" not in text
+    assert "Some receipt totals could not be confirmed" not in text
+    if grouping == "project":
+        assert "Receipt amount" in text
+        assert "Relevant to project" in text

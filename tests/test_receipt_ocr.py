@@ -51,7 +51,7 @@ def test_item_locations_error_table_and_translucent_exclusion_marks(monkeypatch,
     output = reports.build_pdf([data], grouping)
     reader = PdfReader(BytesIO(output))
     text = '\n'.join(p.extract_text() for p in reader.pages)
-    assert 'Location' in text and 'Receipt errors' in text
+    assert 'Location' in text and 'Unexplained amounts' in text
     assert '✓' in text and '❓' in text
     assert 'listed in database as $10.12, but on receipt as $12.10' in ' '.join(text.split())
     assert 'p1.1' in text and 'p1.2' in text

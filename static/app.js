@@ -1015,7 +1015,23 @@
     var buttons = reportActions.querySelectorAll("button");
     var status = reportActions.querySelector(".receipt-report-status");
     buttons.forEach(function (item) { item.disabled = true; });
-    status.textContent = "Preparing PDF…";
+    var progress = reportActions.querySelector(".receipt-report-progress");
+    // Supplied report: about three pages per receipt, 1.5–4s OCR per page,
+    // plus document downloads and PDF assembly. This is an estimate only.
+    var estimatedSeconds = Math.max(12, Number(reportActions.dataset.receiptCount || 1) * 12);
+    var started = Date.now();
+    progress.hidden = false;
+    progress.value = 0;
+    function updateProgress() {
+      var elapsed = (Date.now() - started) / 1000;
+      progress.value = Math.min(95, 95 * elapsed / estimatedSeconds);
+      var remaining = Math.max(0, Math.ceil(estimatedSeconds - elapsed));
+      status.textContent = remaining
+        ? "Preparing PDF… about " + remaining + " seconds remaining (estimated)."
+        : "Preparing PDF… taking longer than estimated. Please keep this page open.";
+    }
+    updateProgress();
+    var progressTimer = setInterval(updateProgress, 1000);
     var failure = null;
     try {
       var reportUrl = new URL(reportActions.dataset.reportUrl, window.location.origin);
@@ -1041,6 +1057,9 @@
     } catch (error) {
       failure = error;
     } finally {
+      clearInterval(progressTimer);
+      progress.value = failure ? 0 : 100;
+      progress.hidden = true;
       status.textContent = "";
       buttons.forEach(function (item) { item.disabled = false; });
     }

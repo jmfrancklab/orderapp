@@ -244,15 +244,15 @@ def _matches(spans, patterns):
     return selected
 
 
-# Decimal amounts anywhere, plus explicitly currency-denominated whole amounts.
+# Decimal amounts anywhere; currency/labeled amounts may use zero or one decimal.
 _WHOLE_AMOUNT_LABELS = ("shipping", "freight", "insurance", "discount", "tariff", "tax",
                         "subtotal", "total", "unit price", "unit cost", "price", "amount")
 _PRICE = re.compile(
-    r"(?<![a-zA-Z0-9.])(?:[+-]?\s*[$£€]\s*[+-]?\s*\d[\d,]*(?:\.\d{2,5})?"
+    r"(?<![a-zA-Z0-9.])(?:[+-]?\s*[$£€]\s*[+-]?\s*\d[\d,]*(?:\.\d{1,5})?"
     r"|[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2,5})(?![a-zA-Z0-9.])|(?:"
     + "|".join(r"(?<=" + re.escape(label + suffix) + ")"
                for label in _WHOLE_AMOUNT_LABELS for suffix in (" ", ": "))
-    + r")[+-]?\d+(?![a-zA-Z0-9.])", re.I)
+    + r")[+-]?\d+(?:\.\d)?(?![a-zA-Z0-9.])", re.I)
 
 
 
@@ -262,16 +262,16 @@ def _prices(spans):
         text = span["text"]
         matches = list(_PRICE.finditer(text))
         # OCR may put a currency sign or charge label in a separate word box.
-        # Recover labeled whole-dollar amounts without treating quantities,
+        # Recover labeled whole-dollar or single-decimal amounts without treating quantities,
         # phone numbers, or order numbers as money.
-        if not matches and re.fullmatch(r"[+-]?\d[\d,]*", text):
+        if not matches and re.fullmatch(r"[+-]?\d[\d,]*(?:\.\d)?", text):
             x, y = span["line"][:2]
             left = sorted((s for s in spans if s["line"][2] <= x
                            and abs(s["line"][1]-y) <= span.get("height", 10)*.65),
                           key=lambda s: s["line"][0])
             prefix = " ".join(s["text"] for s in left)
             if re.search(r"(?:[$£€]|\b(?:" + "|".join(_WHOLE_AMOUNT_LABELS) + r"))\s*:?\s*$", prefix, re.I):
-                matches = [re.match(r"[+-]?\d[\d,]*", text)]
+                matches = [re.match(r"[+-]?\d[\d,]*(?:\.\d)?", text)]
         width = stringWidth(text, "Helvetica", 1) or 1
         x0, y0, x1, y1 = span["line"]
         for match in matches:
@@ -383,7 +383,7 @@ def monetary_pages(pages, geometry):
                          key=lambda s: s["line"][0])
             price.update(id=f"p{page_index + 1}.{index + 1}", page=page_index,
                          context=" ".join(s["text"] for s in row), spans=spans)
-        result.append(prices)
+        result.append([price for price in prices if price["value"] != 0])
     return result
 
 
@@ -480,9 +480,29 @@ def reconcile(receipt):
                 tax += value
             else:
                 charges.append((price["id"], role, value))
+    # An exact whole-receipt match wins over inferred labels and page totals.
+    # OCR can miss an isolated Total label at the end of a multipage receipt.
+    exact_totals = [p for row in evidence for p in row
+                    if p["value"] == base + tax and p["value"] != 0
+                    and p["role"] in ("total", "before_tax")]
+    if exact_totals:
+        terminal = exact_totals[-1]
+        terminal["role"] = "total"
+    # Match an otherwise unclaimed amount to entered shipping, to the cent.
+    shipping = Decimal(str(receipt.get("shipping") or "0"))
+    if shipping and not any(kind == "shipping" for _, kind, _ in charges):
+        candidates = [p for row in evidence for p in row
+                      if p["role"] == "item" and p["value"] == shipping
+                      and not _item_candidates(receipt, p)]
+        if candidates:
+            price = candidates[-1]
+            price["role"] = "shipping"
+            charges.append((price["id"], "shipping", shipping))
     # One terminal total per page; multi-order supporting files sum their orders.
     total = sum((next((p["value"] for p in reversed(row) if p["role"] == "total"), Decimal(0))
                  for row in evidence), Decimal(0)) if totals else None
+    if exact_totals:
+        total = base + tax
     allocations = {(key, i): {"shipping": Decimal(0), "other": Decimal(0)} for key, i, _ in items}
     reimbursable = base
     residual = total - tax - reimbursable if total is not None else None
@@ -494,7 +514,7 @@ def reconcile(receipt):
 
 
 def verify_amounts(receipt, project=None):
-    """One decision per occurrence; equal numeric values alone never verify items."""
+    """Decide each nonzero occurrence, preferring exact totals and shipping."""
     result = []
     charge_refs = {role: [(ref, value) for ref, kind, value in receipt["charges"] if kind == role]
                    for role in ("shipping", "insurance", "discount", "tariff")}
@@ -565,7 +585,13 @@ def verify_amounts(receipt, project=None):
                     if detected:
                         expected += (shipping * page_shipping / detected).quantize(Decimal('.01'), rounding=ROUND_HALF_UP)
                     if role == "total": expected += sum((p["value"] for p in page_prices if p["role"] == "tax"), Decimal(0))
-                if accounted and expected == value:
+                match = _item_correspondence(receipt, price)
+                if match:
+                    key, index, item, field = match
+                    item_ref = (key, index)
+                    status = "strike" if project is not None and key != project else "ok"
+                    reason = f"{role.replace('_', ' ').capitalize()} matches {item[1]} in the database: ${value:,.2f}."
+                elif accounted and expected == value:
                     status, reason = "ok", f"{role.replace('_', ' ').capitalize()} matches database purchases and entered invoice shipping: ${expected:,.2f}."
                 else:
                     reason = (f"{role.replace('_', ' ').capitalize()}: listed in database as ${expected:,.2f}, "
@@ -582,7 +608,7 @@ def verify_amounts(receipt, project=None):
                     if status == "strike": reason += "; allocated to another project"
             if price["line"] is None:
                 status, reason = "?", "Could not position this amount on the original page; correspondence requires manual review"
-            elif price["confidence"] < 60:
+            elif price["confidence"] < 60 and not (role in ("total", "before_tax", "shipping") and status in ("ok", "strike")):
                 status, reason = "?", "Low-confidence OCR; " + reason
             candidates = _item_candidates(receipt, price) if role == "item" else []
             if role == "item" and match:
@@ -669,6 +695,14 @@ def _description_matches(spans, description):
 
 
 def _item_correspondence(receipt, price):
+    # A stored combined purchase can be supported by the printed total even
+    # when its component descriptions differ from the database description.
+    if price.get("role") in ("total", "before_tax"):
+        exact = [(key, index, item, "receipt total")
+                 for key, items in receipt.get("source_groups", receipt["groups"]).items()
+                 for index, item in enumerate(items) if item[0] == price["value"]]
+        if len(exact) == 1:
+            return exact[0]
     matches = []
     for key, index, item, row in _item_candidates(receipt, price):
         amount, description, quantity, cost = item

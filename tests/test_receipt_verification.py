@@ -81,7 +81,8 @@ def test_known_receipt_discrepancies(number, lines, items, total, difference):
         assert all(p['reason'] for p in decisions)
     if number != 13:
         assert any(p['status'] == '?' for page in annotations for p in page)
-        assert all(p['status'] == '?' for page in annotations for p in page if p['role'] == 'total')
+        assert all(p['status'] == '?' for page in annotations for p in page
+                   if p['role'] == 'total' and not (number == 20 and p['value'] == D('65.98')))
     else:
         assert data['allocated_total'] == D('174.23')
         assert data['groups'][1, 'Research'][-1][0] == D('16.09')
@@ -136,7 +137,7 @@ def test_native_prices_are_not_added_to_ocr_evidence(monkeypatch):
     assert decisions[0]['status'] == '?'
     output = reports.build_pdf([data], 'receipt')
     text = '\n'.join(p.extract_text() for p in PdfReader(BytesIO(output)).pages)
-    assert 'Receipt errors' in text
+    assert 'Unexplained amounts' in text
     assert 'No matching database item was found' in ' '.join(text.split())
     assert 'Precision cable $10.00' in text
 
@@ -149,9 +150,11 @@ def test_report_has_plain_receipt_comparison_and_audit_trail(grouping):
     original = data['pages'][0].get_contents().get_data()
     output = reports.build_pdf([data], grouping)
     text = '\n'.join(p.extract_text() for p in PdfReader(BytesIO(output)).pages)
-    for label in ('Shipping', 'Line total', 'original receipt total',
-                  'sales tax excluded', 'p1.1'):
+    for label in ('Shipping', 'Line total', 'Relevant to project: Research', 'p1.1'):
         assert label in text
+    assert 'Receipt total could not be read' not in text
+    assert 'Whole receipt:' not in text
+    assert 'Unexplained amounts' not in text
     assert 'Receipt reconciliation' not in text
     assert 'ALLOCATED TOTAL' not in text
     assert data['pages'][0].get_contents().get_data() == original
@@ -251,3 +254,71 @@ def test_text_extraction_failure_is_reported_inside_pdf(monkeypatch):
     text = '\n'.join(p.extract_text() for p in PdfReader(BytesIO(output)).pages)
     assert 'OCR could not read this receipt' in text
     assert 'Precision cable $10.00' in text
+
+
+def test_exact_terminal_total_matches_combined_purchase_despite_ocr_confidence(monkeypatch):
+    data = receipt([['Component $9401.31', 'Shipping insurance $175.00'],
+                    ['Untaxed Amount $9576.31', 'Tax $0.00', 'Total $9576.31']],
+                   [item('workstation', 1, '9576.31')], number=10)
+    original = markup.text_spans
+    monkeypatch.setattr(markup, 'ocr_spans', lambda page: [dict(s, confidence=45) for s in original(page)])
+    data = markup.reconcile(data)
+    totals = [p for page in markup.verify_amounts(data) for p in page if p['role'] == 'total']
+    assert totals and all(p['status'] == 'ok' for p in totals)
+    assert all(p['item_ref'] == ((1, 'Research'), 0) for p in totals)
+    text = '\n'.join(p.extract_text() for p in PdfReader(BytesIO(reports.build_pdf([data], 'project'))).pages)
+    assert 'workstation: listed in database' not in text
+    assert data['original_total'] == D('9576.31')
+
+
+def test_unlabeled_exact_shipping_matches_entered_amount():
+    data = receipt([['Printer $399.00', 'Delivery in 3-6 business days', '$6.99',
+                     'Tax $0.00', 'Total $405.99']], [item('Printer', 1, '399.00')], number=8)
+    data['shipping'] = D('6.99')
+    data = markup.reconcile(data)
+    decisions = markup.verify_amounts(data)[0]
+    shipping = next(p for p in decisions if p['value'] == D('6.99'))
+    assert shipping['role'] == 'shipping'
+    assert shipping['status'] == 'ok'
+    assert shipping['item_ref'] == 'shipping'
+    assert data['unresolved'] == 0
+
+
+def test_shipping_fallback_does_not_claim_a_database_item_or_near_match():
+    data = receipt([['Precision cable $6.99', 'Unknown $6.98', 'Total $13.98']], [item('Precision cable', 1, '6.99')])
+    data['shipping'] = D('6.99')
+    data = markup.reconcile(data)
+    assert not any(kind == 'shipping' for _, kind, _ in data['charges'])
+
+
+def test_zero_amounts_have_no_annotations_or_unexplained_rows():
+    data = markup.reconcile(receipt([['Precision cable $10.00', 'Free part $0.00', 'Shipping $0.00',
+                                     'Credit -$0.00', 'Total $10.00']],
+                                    [item('Precision cable', 1, '10.00'), item('Free part', 1, '0.00')]))
+    marks = markup.verify_amounts(data)[0]
+    assert all(p['value'] != 0 for p in marks)
+    # IDs remain stable against the supplied reports even as zero amounts disappear.
+    assert [p['id'] for p in marks] == ['p1.1', 'p1.5']
+    text = '\n'.join(p.extract_text() for p in PdfReader(BytesIO(reports.build_pdf([data], 'receipt'))).pages)
+    assert 'Unexplained amounts' not in text
+
+
+@pytest.mark.parametrize('printed', ['$3650.0', '$3,650.0', '$ 3650.0'])
+def test_minicircuits_single_decimal_currency_total(printed):
+    data = markup.reconcile(receipt([[f'Frequency source {printed}', f'Total {printed}']],
+                                    [item('Frequency source', 1, '3650.00')], number=2))
+    assert data['original_total'] == D('3650.00')
+    assert data['unresolved'] == 0
+    assert all(p['value'] == D('3650.00') and p['status'] == 'ok'
+               for page in markup.verify_amounts(data) for p in page)
+
+
+def test_single_decimal_currency_in_separate_ocr_word_boxes(monkeypatch):
+    data = receipt([['Frequency source']], [item('Frequency source', 1, '3650')], number=2)
+    monkeypatch.setattr(markup, 'ocr_spans', lambda page: [
+        {'text': text, 'line': (x, 600, x + 40, 600), 'height': 10}
+        for text, x in [('Total', 40), ('$', 90), ('3650.0', 140)]])
+    data = markup.reconcile(data)
+    assert data['original_total'] == D('3650.00')
+    assert markup.verify_amounts(data)[0][0]['status'] == 'ok'
+    assert not markup._PRICE.search('version 3650.0')

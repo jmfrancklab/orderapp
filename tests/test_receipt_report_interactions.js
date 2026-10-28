@@ -37,10 +37,12 @@ async function run(mode) {
   buttons[0].dataset.receiptReport = 'project';
   document.activeElement = buttons[0];
   const status = {textContent: ''};
+  const progress = {hidden: true, value: 0};
+  let progressTick, timerCleared = false, now = 0;
   document.getElementById = () => ({
-    dataset: {reportUrl: '/invoices/receipt-report'},
+    dataset: {reportUrl: '/invoices/receipt-report', receiptCount: '13'},
     addEventListener: (_, callback) => {click = callback;},
-    querySelectorAll: () => buttons, querySelector: () => status
+    querySelectorAll: () => buttons, querySelector: selector => selector.includes("progress") ? progress : status
   });
   class BrowserURL extends URL {}
   BrowserURL.createObjectURL = () => 'blob:report';
@@ -52,17 +54,27 @@ async function run(mode) {
     source_url: 'https://files.example/bad-' + id + '.pdf'
   }));
   const context = {
-    URL: BrowserURL, document,
+    URL: BrowserURL, document, Date: {now: () => now},
     window: {
       location: {origin: 'https://orders.example', search: '?filter_reimbursement_status=reimbursed&filter_reimbursement_status=requires+reimbursement'},
       alert: () => {throw new Error('Native alerts must not be used');}
     },
     setTimeout: callback => callback(),
+    setInterval: callback => { progressTick = callback; return 42; },
+    clearInterval: id => { assert.equal(id, 42); timerCleared = true; },
     fetch: async (url, options) => {
       if (options.method === 'POST') {
         posts.push({url, body: JSON.parse(options.body)});
         return {ok: mode !== 'save-failure', json: async () => mode === 'save-failure' ? {error: 'Save failed'} : {ok: true}};
       }
+      assert.equal(progress.hidden, false);
+      assert.match(status.textContent, /remaining \(estimated\)/);
+      progressTick();
+      assert.equal(progress.value, 0);
+      now += 300000;
+      progressTick();
+      assert.equal(progress.value, 95);
+      assert.match(status.textContent, /taking longer than estimated/);
       requested = url; getCount++;
       const failure = mode !== 'success' && getCount === 1;
       return {ok: !failure, status: failure ? 500 : 200, headers: {get: () => failure ? 'application/json' : 'application/pdf'},
@@ -79,6 +91,8 @@ async function run(mode) {
   assert.equal(requested.searchParams.get('group_by'), 'project');
   assert.ok(buttons.every(button => !button.disabled));
   assert.equal(status.textContent, '');
+  assert.equal(progress.hidden, true);
+  assert.equal(timerCleared, true);
   if (mode === 'success') {
     assert.equal(downloaded, 'receipts-by-project.pdf');
     assert.equal(revoked, 'blob:report');
