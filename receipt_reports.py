@@ -8,6 +8,7 @@ import ipaddress
 from pathlib import Path
 import re
 import socket
+from time import monotonic
 from urllib.parse import urljoin, urlparse
 from xml.sax.saxutils import escape
 
@@ -202,8 +203,69 @@ def _error(invoice, reason, document=True):
     return error
 
 
+class ReportProgress:
+    """Estimate remaining work from stage counts and observed seconds per unit.
+
+    Page totals start as estimates and become exact after downloads. Nothing
+    advances on a timer: each snapshot follows real work or a stage transition.
+    """
+    DEFAULTS = {"purchases": .01, "downloads": 1., "ocr": 3.,
+                "reconcile": .05, "matching": .1, "sections": .05,
+                "layout": .5, "merge": .1, "write": .3}
+    LABELS = {"purchases": "Loading invoice purchase data", "downloads": "Downloading documents",
+              "ocr": "Reading document pages", "reconcile": "Reconciling invoices",
+              "matching": "Matching purchase sections", "sections": "Building purchase sections",
+              "layout": "Laying out PDF and bookmarks", "merge": "Embedding supporting pages",
+              "write": "Writing PDF"}
+
+    def __init__(self, invoices):
+        count = len(invoices)
+        self.totals = dict(purchases=count, downloads=count, ocr=count * 3,
+                           reconcile=count, matching=count, sections=count,
+                           layout=1, merge=count * 3, write=1)
+        self.done = dict.fromkeys(self.totals, 0)
+        self.rates = dict(self.DEFAULTS)
+        self.started = monotonic()
+
+    def start(self, stage, total=None):
+        self.stage = stage
+        if total is not None:
+            self.totals[stage] = total
+        self.stage_started = monotonic()
+        return self.snapshot()
+
+    def advance(self):
+        self.done[self.stage] += 1
+        elapsed = monotonic() - self.stage_started
+        self.rates[self.stage] = elapsed / self.done[self.stage]
+        return self.snapshot()
+
+    def snapshot(self):
+        remaining = sum(max(0, self.totals[key] - self.done[key]) * self.rates[key]
+                        for key in self.totals)
+        elapsed = monotonic() - self.started
+        return dict(type="progress", stage=self.stage, label=self.LABELS[self.stage],
+                    completed=self.done[self.stage], total=self.totals[self.stage],
+                    elapsed_seconds=round(elapsed, 2), remaining_seconds=round(remaining, 1),
+                    percent=round(min(99, 100 * elapsed / max(.001, elapsed + remaining)), 1))
+
+
+def _consume(events):
+    """Synchronous callers use the same pipeline, without progress transport."""
+    while True:
+        try:
+            next(events)
+        except StopIteration as result:
+            return result.value
+
+
 def collect_receipts(db, invoices):
-    receipts, errors, cache = [], [], {}
+    return _consume(_collect_receipts(db, invoices, ReportProgress(invoices)))
+
+
+def _collect_receipts(db, invoices, progress):
+    receipts, errors, documents = [], [], {}
+    yield progress.start("purchases")
     for invoice in invoices:
         rows = db.execute(
             """SELECT o.id, o.description, o.use_note, o.cost, o.quantity, o.project_id, v.name AS vendor_name,
@@ -226,29 +288,55 @@ def collect_receipts(db, invoices):
             use_notes[key, len(groups.get(key, []))] = row["use_note"]
             groups.setdefault(key, []).append((amount, row["description"], row["quantity"], cost))
         url = (invoice["receipt_url"] or "").strip() or (invoice["invoice_url"] or "").strip()
-        if url not in cache:
-            try:
-                if not url:
-                    raise ValueError("No receipt or invoice URL is recorded.")
-                pages = document_pages(download_document(url))
-                geometry = [{} for _ in pages]
-                cache[url] = (pages, transaction_date(pages, geometry), geometry, None)
-            except Exception as exc:
-                # Do not expose share URLs/tokens or remote exception bodies.
-                reason = str(exc) if isinstance(exc, ValueError) else "Could not download or read the supporting file. Check its sharing permissions and file format."
-                cache[url] = (None, None, None, reason)
-        pages, purchased_on, geometry, failure = cache[url]
-        if failure:
-            errors.append(_error(invoice, failure))
+        documents.setdefault(url, {})
         vendors = list(dict.fromkeys(row["vendor_name"] for row in rows if row["vendor_name"]))
-        receipts.append({"id": invoice["id"], "nickname": invoice["nickname"], "groups": groups, "pages": pages,
+        receipts.append({"id": invoice["id"], "nickname": invoice["nickname"], "groups": groups,
                          "vendor": ", ".join(vendors) or "Vendor not recorded",
-                         "transaction_date": purchased_on, "provided_by": invoice["created_by"],
-                         "explanation": invoice["explanation"],
-                         "shipping": Decimal(invoice["shipping"] or "0"),
-                         "text_geometry": geometry, "use_notes": use_notes})
-        if not failure:
-            receipt_markup.reconcile(receipts[-1])
+                         "provided_by": invoice["created_by"], "explanation": invoice["explanation"],
+                         "shipping": Decimal(invoice["shipping"] or "0"), "use_notes": use_notes,
+                         "source_url": url, "invoice": invoice})
+        yield progress.advance()
+
+    sections = sum(max(1, len(receipt["groups"])) for receipt in receipts)
+    row_count = sum(len(items) for receipt in receipts for items in receipt["groups"].values())
+    progress.rates["layout"] = .5 + .02 * row_count + .05 * sections
+    progress.totals.update(matching=sections, sections=sections,
+                           downloads=len(documents), ocr=3 * len(documents))
+    yield progress.start("downloads")
+    for url, document in documents.items():
+        try:
+            if not url:
+                raise ValueError("No receipt or invoice URL is recorded.")
+            pages = document_pages(download_document(url))
+            document.update(pages=pages, geometry=[{} for _ in pages])
+        except Exception as exc:
+            # Never expose share URLs/tokens or remote exception bodies.
+            document["failure"] = str(exc) if isinstance(exc, ValueError) else "Could not download or read the supporting file. Check its sharing permissions and file format."
+        yield progress.advance()
+
+    page_count = sum(len(doc.get("pages", [])) for doc in documents.values())
+    progress.totals["merge"] = sum(len(documents[r["source_url"]].get("pages", []))
+                                   * max(1, len(r["groups"])) for r in receipts)
+    progress.rates["layout"] += .03 * progress.totals["merge"]
+    progress.rates["write"] = .3 + .02 * progress.totals["merge"]
+    yield progress.start("ocr", page_count)
+    for document in documents.values():
+        for page, geometry in zip(document.get("pages", []), document.get("geometry", [])):
+            receipt_markup.receipt_spans(page, geometry)
+            yield progress.advance()
+        document["transaction_date"] = transaction_date(document.get("pages"), document.get("geometry"))
+
+    yield progress.start("reconcile")
+    for receipt in receipts:
+        document = documents[receipt.pop("source_url")]
+        invoice = receipt.pop("invoice")
+        if "failure" in document:
+            errors.append(_error(invoice, document["failure"]))
+        else:
+            receipt.update(pages=document["pages"], text_geometry=document["geometry"],
+                           transaction_date=document["transaction_date"])
+            receipt_markup.reconcile(receipt)
+        yield progress.advance()
     if errors:
         raise ReportError(errors)
     return receipts
@@ -379,9 +467,23 @@ class NavigableReport(SimpleDocTemplate):
 
 
 def build_pdf(receipts, grouping):
+    progress = ReportProgress(receipts)
+    return _consume(_build_pdf(receipts, grouping, progress))
+
+
+def _build_pdf(receipts, grouping, progress):
     # Work on report data only; original supporting pages and database stay intact.
     receipts = [dict(receipt) if "verification" in receipt else receipt_markup.reconcile(dict(receipt))
                 for receipt in receipts]
+    # Compute decisions once per receipt/project, shared by tables and annotations.
+    decisions = {}
+    section_count = sum(max(1, len(receipt["groups"])) for receipt in receipts)
+    yield progress.start("matching", section_count)
+    for receipt in receipts:
+        for project in list(receipt["groups"]) or [None]:
+            decisions[id(receipt), project] = receipt_markup.verify_amounts(receipt, project)
+            yield progress.advance()
+
     def item_total(receipt, key, index, item):
         return item[0] + sum(receipt["allocations"][key, index].values(), Decimal(0))
 
@@ -467,7 +569,7 @@ def build_pdf(receipts, grouping):
                 receipt["text_geometry"] = [{} for _ in pages]
             strikes, unmatched = receipt_markup.strike_through(
                 pages, excluded, relevant, receipt["text_geometry"], costs=costs)
-        annotations = receipt_markup.verify_amounts(receipt, project)
+        annotations = decisions[id(receipt), project]
         # Legacy description strikes remain, but monetary decisions have a single owner.
         strikes = [[line for line in lines if not any(
                 mark["line"] is not None and abs(line[1] - mark["line"][1]) < 2 and
@@ -526,7 +628,7 @@ def build_pdf(receipts, grouping):
             story.extend([table, Spacer(1, 12)])
 
     def item_locations(receipt, keys, project):
-        marks = [mark for page in receipt_markup.verify_amounts(receipt, project) for mark in page]
+        marks = [mark for page in decisions[id(receipt), project] for mark in page]
         locations = []
         for key, i in keys:
             source_ref = receipt.get("source_refs", {}).get((key, i), (key, i))
@@ -606,6 +708,7 @@ def build_pdf(receipts, grouping):
     def receipt_total(receipt):
         return receipt["allocated_total"]
 
+    yield progress.start("sections", section_count)
     story.append(paragraph("Report summary", "Heading1", outline_level=0))
     if grouping == "receipt":
         summary_table(["Receipt", "Amount"], [
@@ -620,9 +723,11 @@ def build_pdf(receipts, grouping):
                 for key in keys], "RECEIPT TOTAL:", receipt_total(receipt))
             for key in keys:
                 purchase_section(receipt, key)
+                yield progress.advance()
             if not keys:
                 story.append(paragraph("No purchases are attached to this receipt."))
                 documents(receipt)
+                yield progress.advance()
     else:
         summary_table(["Project", "Amount"], [(key[1], project_totals[key]) for key in ordered_projects],
                       "OVERALL TOTAL:", sum(project_totals.values(), Decimal(0)))
@@ -636,6 +741,7 @@ def build_pdf(receipts, grouping):
             for receipt in receipts:
                 if key in receipt["groups"]:
                     purchase_section(receipt, key)
+                    yield progress.advance()
         orphans = [receipt for receipt in receipts if not receipt["groups"]]
         if orphans:
             if story:
@@ -643,24 +749,38 @@ def build_pdf(receipts, grouping):
             story.append(paragraph("Receipts without purchases", "Heading1", outline_level=0))
             for receipt in orphans:
                 documents(receipt)
+                yield progress.advance()
 
     buf = BytesIO()
     doc = NavigableReport(buf, pagesize=letter, rightMargin=MARGIN, leftMargin=MARGIN,
                             topMargin=MARGIN, bottomMargin=MARGIN,
                             title=f"Receipts by {grouping}")
+    yield progress.start("layout")
     doc.build(story)
+    yield progress.advance()
     writer = PdfWriter()
     writer.append(PdfReader(BytesIO(buf.getvalue())))
     writer.page_mode = "/UseOutlines"
+    yield progress.start("merge", len(placements))
     for page_index, x, y, flowable in placements:
         source = deepcopy(flowable.page)
         transform = Transformation().translate(-float(source.cropbox.left), -float(source.cropbox.bottom))
         transform = transform.scale(flowable.scale).translate(x, y)
         writer.pages[page_index].merge_transformed_page(source, transform, over=False)
+        yield progress.advance()
     output = BytesIO()
+    yield progress.start("write")
     writer.write(output)
+    yield progress.advance()
     return output.getvalue()
 
 
 def generate(db, invoices, grouping):
-    return build_pdf(collect_receipts(db, invoices), grouping)
+    return _consume(generate_events(db, invoices, grouping))
+
+
+def generate_events(db, invoices, grouping):
+    """Yield progress snapshots; return the completed PDF as the generator result."""
+    progress = ReportProgress(invoices)
+    receipts = yield from _collect_receipts(db, invoices, progress)
+    return (yield from _build_pdf(receipts, grouping, progress))

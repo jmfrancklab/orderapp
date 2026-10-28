@@ -75,8 +75,17 @@ of dependency-free vanilla JS (autosave, vendor auto-detect, tracker chips).
   times unit cost plus entered shipping. Inner headings name the receipt and relevant
   project in both report orders. Project summaries compare the original receipt
   amount with the amount relevant to that project. Purchase descriptions show
-  their Use notes underneath in 50% gray italics. An estimated progress bar uses
-  roughly 12 seconds per filtered receipt and waits for the completed download.
+  their Use notes underneath in 50% gray italics. PDF preparation streams real
+  progress updates: invoice purchase data, unique document downloads, OCR pages,
+  reconciliation, matching, purchase sections, layout/bookmarks, page embedding,
+  and writing. The remaining-time estimate uses discovered counts and measured
+  seconds per unit within each stage; layout includes fixed overhead plus table
+  rows, sections, and embedded pages. Initial unknown page counts assume three
+  pages per document until downloads establish the actual count. OCR is shared
+  per document URL, and matching decisions are reused per invoice/project.
+  The browser reads progress JSON lines followed by a size record and raw PDF
+  bytes on the same request (`progress=1`); direct requests still return a PDF.
+  The response disables proxy buffering so updates can arrive during generation.
   Supporting pages show `provided by:` followed by
   the invoice creator's email address.
   Entered invoice shipping is prorated by project purchase value with cent-exact

@@ -1818,7 +1818,8 @@ def filter_invoice_rows(rows, args):
 @login_required
 def invoice_receipt_report():
     from io import BytesIO
-    from flask import send_file
+    from flask import Response, send_file, stream_with_context
+    import json
 
     grouping = request.args.get("group_by", "receipt")
     if grouping not in ("receipt", "project"):
@@ -1827,23 +1828,58 @@ def invoice_receipt_report():
     rows = filter_invoice_rows(fetch_visible_invoices(db, current_user()), request.args)
     if not rows:
         return jsonify(ok=False, message="No invoices match the current filters."), 400
-    try:
-        import receipt_reports
-        try:
-            report = receipt_reports.generate(db, rows, grouping)
-        except receipt_reports.ReportError as exc:
-            for error in exc.errors:
-                if error.get("kind") == "document":
-                    error["can_edit"] = invoice_visible_to(
-                        db, error["invoice_id"], current_user()) is not None
-            return jsonify(ok=False, message=str(exc), errors=exc.errors), 400
-    except Exception:
+
+    def document_error(exc, connection):
+        for error in exc.errors:
+            if error.get("kind") == "document":
+                error["can_edit"] = invoice_visible_to(
+                    connection, error["invoice_id"], current_user()) is not None
+        return dict(ok=False, message=str(exc), errors=exc.errors)
+
+    def unexpected_error():
         reference = uuid4().hex[:12]
         app.logger.exception("Receipt report failed [%s], grouping=%s, invoice_ids=%s",
                              reference, grouping, [row["id"] for row in rows])
-        return jsonify(ok=False, message=(
+        return dict(ok=False, message=(
             f"The server could not generate the PDF. Error reference: {reference}. "
-            "Check the PythonAnywhere error log for the traceback with this reference.")), 500
+            "Check the PythonAnywhere error log for the traceback with this reference."))
+
+    try:
+        import receipt_reports
+        if request.args.get("progress") == "1":
+            def record(event):
+                return (json.dumps(event) + "\n").encode("utf-8")
+
+            @stream_with_context
+            def stream_report():
+                # JSON lines carry progress/errors. A final PDF record declares
+                # the byte count; all subsequent bytes are the unencoded PDF.
+                # Generate in this request so no worker thread or job store is needed.
+                try:
+                    stream_db = get_db()
+                    events = receipt_reports.generate_events(stream_db, rows, grouping)
+                    while True:
+                        try:
+                            event = next(events)
+                        except StopIteration as result:
+                            report = result.value
+                            break
+                        yield record(event)
+                    yield record(dict(type="pdf", size=len(report)))
+                    yield report
+                except receipt_reports.ReportError as exc:
+                    yield record(dict(type="error", **document_error(exc, stream_db)))
+                except Exception:
+                    yield record(dict(type="error", **unexpected_error()))
+
+            return Response(stream_report(), mimetype="application/vnd.orderapp.receipt-report",
+                            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+        try:
+            report = receipt_reports.generate(db, rows, grouping)
+        except receipt_reports.ReportError as exc:
+            return jsonify(document_error(exc, db)), 400
+    except Exception:
+        return jsonify(unexpected_error()), 500
     return send_file(BytesIO(report), mimetype="application/pdf", as_attachment=True,
                      download_name=f"receipts-by-{grouping}.pdf", max_age=0)
 

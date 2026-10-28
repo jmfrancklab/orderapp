@@ -1,5 +1,6 @@
 """Receipt exports preserve filtering, amounts, source pages and failure context."""
 from io import BytesIO
+import json
 from decimal import Decimal
 import sqlite3
 
@@ -562,3 +563,133 @@ def test_use_notes_appear_below_descriptions_in_both_project_tables(export_clien
     if grouping == "project":
         assert "Receipt amount" in text
         assert "Relevant to project" in text
+
+
+def read_report_stream(response):
+    records = []
+    chunks = iter(response.response)
+    for chunk in chunks:
+        record = json.loads(chunk)
+        records.append(record)
+        if record['type'] == 'pdf':
+            pdf = b''.join(chunks)
+            assert len(pdf) == record['size']
+            return records, pdf
+    return records, None
+
+
+@pytest.mark.parametrize('grouping', ['receipt', 'project'])
+def test_stream_reports_real_work_before_pdf(export_client, monkeypatch, grouping):
+    client, downloads = export_client
+    ocr_calls, match_calls = [], []
+    recognize = reports.receipt_markup.ocr_spans
+    verify = reports.receipt_markup.verify_amounts
+
+    def ocr(page):
+        ocr_calls.append(page)
+        return recognize(page)
+
+    def matching(receipt, project=None):
+        match_calls.append((receipt['id'], project))
+        return verify(receipt, project)
+
+    monkeypatch.setattr(reports.receipt_markup, 'ocr_spans', ocr)
+    monkeypatch.setattr(reports.receipt_markup, 'verify_amounts', matching)
+    response = client.get('/invoices/receipt-report', query_string={
+        'progress': '1', 'group_by': grouping}, buffered=False)
+    assert response.mimetype == 'application/vnd.orderapp.receipt-report'
+    assert response.headers['X-Accel-Buffering'] == 'no'
+    assert downloads == [] and ocr_calls == []  # first update precedes slow work
+    records, pdf = read_report_stream(response)
+    stages = {}
+    for event in records[:-1]:
+        assert event['type'] == 'progress'
+        assert 0 <= event['percent'] <= 99
+        assert 0 <= event['completed'] <= event['total']
+        stages.setdefault(event['stage'], []).append(event)
+    assert list(stages) == ['purchases', 'downloads', 'ocr', 'reconcile', 'matching',
+                            'sections', 'layout', 'merge', 'write']
+    expected = dict(purchases=2, downloads=2, ocr=4, reconcile=2,
+                    matching=3, sections=3, layout=1, merge=6, write=1)
+    for stage, count in expected.items():
+        assert stages[stage][0]['completed'] == 0
+        assert stages[stage][-1]['completed'] == stages[stage][-1]['total'] == count
+    assert len(ocr_calls) == 4
+    assert len(match_calls) == len(set(match_calls)) == 3
+    reader = PdfReader(BytesIO(pdf))
+    assert reader.outline[0].title == 'Report summary'
+    assert 'Receipt #13' not in '\n'.join(page.extract_text() for page in reader.pages)
+
+
+def test_shared_document_is_downloaded_and_ocrd_once(export_client, monkeypatch):
+    client, downloads = export_client
+    with sqlite3.connect(app_module.DB_PATH) as db:
+        db.execute('UPDATE invoices SET invoice_url = ? WHERE id = 12',
+                   ('https://files.example/receipt.pdf',))
+    calls = []
+    recognize = reports.receipt_markup.ocr_spans
+    monkeypatch.setattr(reports.receipt_markup, 'ocr_spans',
+                        lambda page: (calls.append(page), recognize(page))[1])
+    records, pdf = read_report_stream(client.get('/invoices/receipt-report?progress=1'))
+    assert pdf.startswith(b'%PDF')
+    assert len(downloads) == 1 and len(calls) == 2
+    assert next(r for r in records if r.get('stage') == 'ocr')['total'] == 2
+    assert next(r for r in records if r.get('stage') == 'merge')['total'] == 6
+
+
+def test_stream_document_error_keeps_editable_invoice_context(export_client, monkeypatch):
+    client, _ = export_client
+    monkeypatch.setattr(reports, 'download_document', lambda url: b'not a document')
+    records, pdf = read_report_stream(client.get('/invoices/receipt-report?progress=1'))
+    assert pdf is None
+    assert records[-1]['type'] == 'error'
+    assert {error['invoice_id'] for error in records[-1]['errors']} == {11, 12}
+    assert all(error['can_edit'] for error in records[-1]['errors'])
+
+
+def test_stream_unexpected_failure_returns_logged_reference(export_client, monkeypatch, caplog):
+    client, _ = export_client
+
+    def fail(*args):
+        yield dict(type='progress', stage='layout')
+        raise RuntimeError('private layout failure')
+
+    monkeypatch.setattr(reports, 'generate_events', fail)
+    records, pdf = read_report_stream(client.get('/invoices/receipt-report?progress=1'))
+    message = records[-1]['message']
+    assert pdf is None and records[-1]['type'] == 'error'
+    reference = message.split('Error reference: ')[1].split('.')[0]
+    assert reference in caplog.text and 'private layout failure' in caplog.text
+    assert 'private layout failure' not in message
+
+
+def test_progress_estimate_uses_discovered_pages_and_measured_rate(monkeypatch):
+    now = [0.]
+    monkeypatch.setattr(reports, 'monotonic', lambda: now[0])
+    progress = reports.ReportProgress([{}, {}])
+    progress.totals = dict.fromkeys(progress.totals, 0)
+    initial = progress.start('ocr', 4)
+    assert initial['remaining_seconds'] == 12
+    now[0] = 6
+    updated = progress.advance()
+    assert updated['completed'] == 1
+    assert updated['remaining_seconds'] == 18  # three pages at measured 6s/page
+    assert updated['percent'] == 25
+
+
+@pytest.mark.parametrize('grouping', ['receipt', 'project'])
+def test_stream_handles_receipts_without_purchase_sections(export_client, grouping):
+    client, _ = export_client
+    with sqlite3.connect(app_module.DB_PATH) as db:
+        db.execute("INSERT INTO invoices (nickname, created_by, created_at, receipt_url) "
+                   "VALUES ('No orders', 'buyer@lab.org', '2026-10-01', ?)",
+                   ('https://files.example/receipt.pdf',))
+    records, pdf = read_report_stream(client.get('/invoices/receipt-report', query_string={
+        'progress': '1', 'group_by': grouping}))
+    assert pdf is not None
+    for stage in ['matching', 'sections']:
+        completed = [r for r in records if r.get('stage') == stage][-1]
+        assert completed['completed'] == completed['total'] == 4
+    merge = [r for r in records if r.get('stage') == 'merge'][-1]
+    assert merge['completed'] == merge['total'] == 8
+    assert 'No orders' in '\n'.join(page.extract_text() for page in PdfReader(BytesIO(pdf)).pages)

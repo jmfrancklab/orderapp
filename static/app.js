@@ -1011,34 +1011,71 @@
     else close.focus();
   }
 
+  async function readReceiptReport(response, onProgress) {
+    var reader = response.body.getReader();
+    var decoder = new TextDecoder();
+    var pending = new Uint8Array(0);
+    var pdfSize = null, received = 0, chunks = [];
+    try {
+      while (true) {
+        var part = await reader.read();
+        if (part.done) break;
+        if (pdfSize !== null) {
+          chunks.push(part.value);
+          received += part.value.length;
+          continue;
+        }
+        var joined = new Uint8Array(pending.length + part.value.length);
+        joined.set(pending); joined.set(part.value, pending.length);
+        pending = joined;
+        var newline;
+        while ((newline = pending.indexOf(10)) !== -1) {
+          var event = JSON.parse(decoder.decode(pending.subarray(0, newline)));
+          pending = pending.slice(newline + 1);
+          if (event.type === "error") {
+            var error = new Error(event.message);
+            error.reportErrors = event.errors;
+            throw error;
+          }
+          if (event.type === "progress") onProgress(event);
+          else if (event.type === "pdf") {
+            pdfSize = event.size;
+            chunks.push(pending);
+            received += pending.length;
+            break;
+          }
+        }
+      }
+      if (pdfSize === null || received !== pdfSize) {
+        throw new Error("The PDF download was interrupted. Please try again.");
+      }
+      return new Blob(chunks, {type: "application/pdf"});
+    } catch (error) {
+      await reader.cancel().catch(function () {});
+      throw error;
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
   async function downloadReceiptReport(grouping) {
     var buttons = reportActions.querySelectorAll("button");
     var status = reportActions.querySelector(".receipt-report-status");
     buttons.forEach(function (item) { item.disabled = true; });
     var progress = reportActions.querySelector(".receipt-report-progress");
-    // Supplied report: about three pages per receipt, 1.5–4s OCR per page,
-    // plus document downloads and PDF assembly. This is an estimate only.
-    var estimatedSeconds = Math.max(12, Number(reportActions.dataset.receiptCount || 1) * 12);
-    var started = Date.now();
     progress.hidden = false;
-    progress.value = 0;
-    function updateProgress() {
-      var elapsed = (Date.now() - started) / 1000;
-      progress.value = Math.min(95, 95 * elapsed / estimatedSeconds);
-      var remaining = Math.max(0, Math.ceil(estimatedSeconds - elapsed));
-      status.textContent = remaining
-        ? "Preparing PDF… about " + remaining + " seconds remaining (estimated)."
-        : "Preparing PDF… taking longer than estimated. Please keep this page open.";
-    }
-    updateProgress();
-    var progressTimer = setInterval(updateProgress, 1000);
+    progress.removeAttribute("value");
+    status.textContent = "Preparing PDF… loading purchases.";
     var failure = null;
     try {
       var reportUrl = new URL(reportActions.dataset.reportUrl, window.location.origin);
       reportUrl.search = window.location.search;
       reportUrl.searchParams.set("group_by", grouping);
-      var response = await fetch(reportUrl, { headers: { Accept: "application/pdf" } });
-      if (!response.ok || !(response.headers.get("Content-Type") || "").includes("application/pdf")) {
+      reportUrl.searchParams.set("progress", "1");
+      var response = await fetch(reportUrl, { headers: { Accept: "application/vnd.orderapp.receipt-report" } });
+      var contentType = response.headers.get("Content-Type") || "";
+      var streaming = contentType.includes("application/vnd.orderapp.receipt-report");
+      if (!response.ok || (!streaming && !contentType.includes("application/pdf"))) {
         var errorData = await response.json().catch(function () { return {}; });
         var fallback = response.status === 500
           ? "The server could not generate the PDF (HTTP 500). Check the PythonAnywhere error log for the traceback from this attempt."
@@ -1047,7 +1084,14 @@
         error.reportErrors = errorData.errors;
         throw error;
       }
-      var blobUrl = URL.createObjectURL(await response.blob());
+      var blob = streaming
+        ? await readReceiptReport(response, function (event) {
+          progress.value = event.percent;
+          status.textContent = event.label + "… " + event.completed + " of " + event.total
+            + "; about " + Math.max(1, Math.ceil(event.remaining_seconds)) + " seconds remaining (estimated).";
+        })
+        : await response.blob();
+      var blobUrl = URL.createObjectURL(blob);
       var link = document.createElement("a");
       link.href = blobUrl;
       link.download = "receipts-by-" + grouping + ".pdf";
@@ -1057,7 +1101,6 @@
     } catch (error) {
       failure = error;
     } finally {
-      clearInterval(progressTimer);
       progress.value = failure ? 0 : 100;
       progress.hidden = true;
       status.textContent = "";
