@@ -63,7 +63,16 @@ def item(name, quantity, cost):
       item('Other purchases', 1, '192.48')], '274.55', '-0.90'),
 ])
 def test_known_receipt_discrepancies(number, lines, items, total, difference):
-    data = markup.reconcile(receipt(lines, items, number))
+    data = receipt(lines, items, number)
+    # Charges must be entered, rather than silently added by OCR.
+    if number == 11:
+        data['shipping'] = D('44.90')
+    elif number == 13:
+        data['shipping'] = D('16.09')
+        data['groups'][1, 'Research'].append(item('Shipping Insurance', 1, '3.75'))
+    elif number == 17:
+        difference = '20.61'  # The coupon has not been entered in the database.
+    data = markup.reconcile(data)
     assert data['original_total'] == D(total)
     assert data['unresolved'] == D(difference)
     annotations = markup.verify_amounts(data)
@@ -75,8 +84,7 @@ def test_known_receipt_discrepancies(number, lines, items, total, difference):
         assert all(p['status'] == '?' for page in annotations for p in page if p['role'] == 'total')
     else:
         assert data['allocated_total'] == D('174.23')
-        assert sum(v['other'] for v in data['allocations'].values()) == D('3.75')
-        assert sum(v['shipping'] for v in data['allocations'].values()) == D('16.09')
+        assert data['groups'][1, 'Research'][-1][0] == D('16.09')
         assert all(p['status'] == 'ok' for page in annotations for p in page if p['role'] == 'total')
 
 
@@ -86,11 +94,14 @@ def test_proration_tax_exclusion_discounts_and_exact_cent_reconciliation():
                      'Tariff $0.03', 'Sales tax $2.40', 'Grand Total $33.47']],
                    [item('Precision cable', 1, '10.00')])
     data['groups'][2, 'Office'] = [item('Shielded adapter', 1, '20.00')]
+    data['groups'][1, 'Research'].extend([
+        item('Insurance charge', 1, '.05'), item('Discount adjustment', 1, '-.02'), item('Tariff charge', 1, '.03')])
+    data['shipping'] = D('1.01')
     data = markup.reconcile(data)
     assert data['original_total'] == D('33.47')
     assert data['reimbursable_total'] == data['allocated_total'] == D('31.07')
     assert data['unresolved'] == 0
-    assert [v['shipping'] for v in data['allocations'].values()] == [D('.34'), D('.67')]
+    assert [rows[-1][0] for rows in data['groups'].values()] == [D('.34'), D('.67')]
     decisions = markup.verify_amounts(data, (1, 'Research'))[0]
     assert next(p for p in decisions if p['role'] == 'tax')['status'] == 'strike'
     assert next(p for p in decisions if p['value'] == 20)['status'] == 'strike'
@@ -126,20 +137,23 @@ def test_native_prices_are_not_added_to_ocr_evidence(monkeypatch):
     output = reports.build_pdf([data], 'receipt')
     text = '\n'.join(p.extract_text() for p in PdfReader(BytesIO(output)).pages)
     assert 'Receipt errors' in text
-    assert 'No matching database item was found' in text
+    assert 'No matching database item was found' in ' '.join(text.split())
     assert 'Precision cable $10.00' in text
 
 
 @pytest.mark.parametrize('grouping', ['receipt', 'project'])
-def test_report_has_original_reimbursable_and_allocation_totals_and_audit_trail(grouping):
+def test_report_has_plain_receipt_comparison_and_audit_trail(grouping):
     data = receipt([['Precision cable $10.00', 'Shipping $1.00', 'Sales tax $0.80', 'Total $11.80']],
                    [item('Precision cable', 1, '10.00')])
+    data['shipping'] = D('1.00')
     original = data['pages'][0].get_contents().get_data()
     output = reports.build_pdf([data], grouping)
     text = '\n'.join(p.extract_text() for p in PdfReader(BytesIO(output)).pages)
-    for label in ('Shipping', 'Other', 'Item price', 'Original receipt total',
-                  'Reimbursable receipt total', 'Sales tax excluded', 'p1.1'):
+    for label in ('Shipping', 'Line total', 'original receipt total',
+                  'sales tax excluded', 'p1.1'):
         assert label in text
+    assert 'Receipt reconciliation' not in text
+    assert 'ALLOCATED TOTAL' not in text
     assert data['pages'][0].get_contents().get_data() == original
 
 
@@ -165,8 +179,54 @@ def test_final_regex_pass_detects_a_removed_occurrence_even_with_same_value():
 def test_insurance_unit_and_extension_are_not_both_allocated():
     data = markup.reconcile(receipt([['Precision cable $10.00', 'Insurance QTY 2 $3.75 $7.50',
                                      'Total $17.50']], [item('Precision cable', 1, '10')]))
-    assert data['allocated_total'] == D('17.50')
-    assert data['allocations'][((1, 'Research'), 0)]['other'] == D('7.50')
+    assert data['allocated_total'] == D('10.00')
+    assert data['unresolved'] == D('7.50')
+    assert data['charges'] == [('p1.3', 'insurance', D('7.50'))]
+
+
+def test_invoice_shipping_prorates_once_across_projects_and_conserves_cents():
+    data = receipt([['Precision cable $10.00', 'Shielded adapter $20.00',
+                     'Shipping $1.01', 'Total $31.01']], [item('Precision cable', 1, '10')])
+    data['groups'][2, 'Office'] = [item('Shielded adapter', 1, '20')]
+    data['shipping'] = D('1.01')
+    markup.reconcile(data)
+    assert data['allocated_total'] == D('31.01')
+    assert [sum(row[0] for row in rows) for rows in data['groups'].values()] == [D('10.34'), D('20.67')]
+    assert data['source_groups'][1, 'Research'] == [item('Precision cable', 1, '10')]
+    markup.reconcile(data)
+    assert data['allocated_total'] == D('31.01')
+    assert data['unresolved'] == 0
+    assert len(data['groups'][1, 'Research']) == 2
+
+
+def test_total_only_purchase_never_has_ocr_shipping_added_again():
+    data = receipt([['Workstation components $9401.31', 'Shipping-Including insurance and handling 1.00 Units 175.00 0% $175.00'],
+                    ['Untaxed Amount $9576.31', 'Total $9576.31']],
+                   [item('Complete workstation', 1, '9576.31')], 10)
+    data['explanation'] = 'Workstation entered as one total including shipping.'
+    markup.reconcile(data)
+    assert data['allocated_total'] == D('9576.31')
+    assert data['unresolved'] == 0
+    decisions = markup.verify_amounts(data)
+    assert next(p for page in decisions for p in page if p['role'] == 'total')['status'] == 'ok'
+    assert all(p['value'] != 1 for page in decisions for p in page)
+    output = reports.build_pdf([data], 'project')
+    text = ' '.join(p.extract_text() for p in PdfReader(BytesIO(output)).pages)
+    assert data['explanation'] in text
+    assert 'OCR amount $9,401.31' in text
+    assert 'See invoice explanation above' in text
+
+
+def test_sigatek_model_ocr_subtotal_and_carrier_shipping():
+    data = receipt([['$C1030120 Directional Coupler 10 dB $255.00', 'Sub-Total: $255.00',
+                     'FedEx (1 Boxes) (Fedex Ground): $14.88', 'Total: $269.88']],
+                   [item('SC1030120', 1, '255')], 6)
+    data['shipping'] = D('14.88')
+    markup.reconcile(data)
+    decisions = markup.verify_amounts(data)[0]
+    assert [p['role'] for p in decisions] == ['item', 'subtotal', 'shipping', 'total']
+    assert all(p['status'] == 'ok' for p in decisions)
+    assert data['unresolved'] == 0
 
 
 @pytest.mark.parametrize('grouping', ['receipt', 'project'])

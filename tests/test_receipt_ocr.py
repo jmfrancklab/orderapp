@@ -53,7 +53,7 @@ def test_item_locations_error_table_and_translucent_exclusion_marks(monkeypatch,
     text = '\n'.join(p.extract_text() for p in reader.pages)
     assert 'Location' in text and 'Receipt errors' in text
     assert '✓' in text and '❓' in text
-    assert 'listed in database as $10.12, but on receipt as $12.10' in text
+    assert 'listed in database as $10.12, but on receipt as $12.10' in ' '.join(text.split())
     assert 'p1.1' in text and 'p1.2' in text
     assert 'contextually' not in text
     seen_strike = seen_green_label = seen_red_question = False
@@ -110,10 +110,10 @@ def test_renderer_and_ocr_map_crop_coordinates_without_system_commands(monkeypat
     page.cropbox.lower_left = (12, 24)
     page.cropbox.upper_right = (212, 424)
     result = markup.ocr_spans(page)
-    assert calls == [(600,1200)]
+    assert calls == [(1000,2000)]
     assert result[0]['confidence'] == 95
-    assert result[0]['line'][0] == pytest.approx(12 + 20/3)
-    assert result[0]['line'][1] == pytest.approx(424 - 35.5/3)
+    assert result[0]['line'][0] == pytest.approx(12 + 20/5)
+    assert result[0]['line'][1] == pytest.approx(424 - 35.5/5)
 
 
 def test_digikey_wrapped_description_and_vendor_model_suffix(monkeypatch):
@@ -133,6 +133,7 @@ def test_digikey_wrapped_description_and_vendor_model_suffix(monkeypatch):
     ]
     monkeypatch.setattr(markup, 'ocr_spans', lambda p: recognized)
     data = sample()
+    data['shipping'] = D('8.49')
     data['groups'] = {(1, 'Research'): [
         (D('320.84'), 'LTC5594 eval board', 1, D('320.84')),
         (D('29.60'), 'SparkFun Electronics DEV-20359', 1, D('29.60'))]}

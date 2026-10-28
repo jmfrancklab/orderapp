@@ -242,6 +242,8 @@ def collect_receipts(db, invoices):
         receipts.append({"id": invoice["id"], "nickname": invoice["nickname"], "groups": groups, "pages": pages,
                          "vendor": ", ".join(vendors) or "Vendor not recorded",
                          "transaction_date": purchased_on, "provided_by": invoice["created_by"],
+                         "explanation": invoice["explanation"],
+                         "shipping": Decimal(invoice["shipping"] or "0"),
                          "text_geometry": geometry})
         if not failure:
             receipt_markup.reconcile(receipts[-1])
@@ -420,19 +422,17 @@ def build_pdf(receipts, grouping):
     def purchases(items, project_names=None, allocations=None, locations=None):
         other = project_names is not None
         style = "OtherProject" if other else "Normal"
-        rows = [["Description"] + (["Project"] if other else []) + ["Location", "Quantity", "Unit cost", "Item price", "Shipping", "Other", "Line total"]]
+        rows = [["Description"] + (["Project"] if other else []) + ["Location", "Quantity", "Unit cost", "Line total"]]
         for index, (amount, description, quantity, cost) in enumerate(items):
             rows.append([paragraph(description, style)]
                         + ([paragraph(project_names[index], style)] if other else [])
                         + [locations[index] if locations else paragraph("Not found", "OtherProject"), str(quantity), f"{cost:,.5f}".rstrip("0").rstrip(".") if cost.as_tuple().exponent < -2 else f"{cost:,.2f}",
-                           f"{amount:,.2f}", f"{allocations[index]['shipping']:,.2f}",
-                           f"{allocations[index]['other']:,.2f}",
-                           f"{amount + sum(allocations[index].values(), Decimal(0)):,.2f}"])
+                           f"{amount:,.2f}"])
         total = sum((item[0] + sum(allocations[index].values(), Decimal(0))
                      for index, item in enumerate(items)), Decimal(0))
         rows.append(["OTHER PROJECTS TOTAL:" if other else "TOTAL:"]
                     + [""] * (len(rows[0]) - 2) + [f"{total:,.2f}"])
-        widths = [125, 55, 60, 35, 50, 50, 50, 50, 65] if other else [180, 60, 35, 50, 50, 50, 50, 65]
+        widths = [205, 75, 70, 45, 65, 80] if other else [280, 70, 45, 65, 80]
         table = Table(rows, colWidths=widths,
                       hAlign="LEFT", repeatRows=1, splitInRow=1)
         table.setStyle(TableStyle([
@@ -494,7 +494,10 @@ def build_pdf(receipts, grouping):
                 if mark["status"] == "?":
                     errors.append([paragraph(mark["id"], "OtherProject"), paragraph(mark["reason"])])
         matched_refs = {mark.get("item_ref") for marks in annotations for mark in marks}
-        for key, items in receipt["groups"].items():
+        if receipt.get("shipping") and "shipping" not in matched_refs:
+            errors.append([paragraph("Not found", "OtherProject"), paragraph(
+                f"Invoice Shipping field is ${receipt['shipping']:,.2f}; no shipping charge was located on the receipt.")])
+        for key, items in receipt.get("source_groups", receipt["groups"]).items():
             for i, item in enumerate(items):
                 if (key, i) not in matched_refs:
                     errors.append([paragraph("Not found", "OtherProject"), paragraph(
@@ -514,7 +517,8 @@ def build_pdf(receipts, grouping):
         marks = [mark for page in receipt_markup.verify_amounts(receipt, project) for mark in page]
         locations = []
         for key, i in keys:
-            matching = [mark for mark in marks if mark.get("item_ref") == (key, i)]
+            source_ref = receipt.get("source_refs", {}).get((key, i), (key, i))
+            matching = [mark for mark in marks if mark.get("item_ref") == source_ref]
             labels = []
             for mark in matching:
                 color = "#008000" if mark["status"] in ("ok", "strike") else "#b00020"
@@ -559,21 +563,26 @@ def build_pdf(receipts, grouping):
                      if len(receipt["groups"]) == 1 else
                      f"Only the following purchases on this receipt are relevant to {key[1]}.")
         story.extend([paragraph(statement), Spacer(1, 10)])
+        if receipt.get("explanation"):
+            story.extend([paragraph("Invoice explanation", "Heading3"),
+                          paragraph(receipt["explanation"]), Spacer(1, 10)])
+        if receipt.get("shipping"):
+            story.append(paragraph(
+                f"Invoice shipping: ${receipt['shipping']:,.2f}. Shipping is included below"
+                + (" in proportion to each project's stored purchase value."
+                   if len(receipt["groups"]) > 1 else ".")))
         purchases(receipt["groups"][key], allocations=[receipt["allocations"][key, i]
                   for i in range(len(receipt["groups"][key]))],
                   locations=item_locations(receipt, [(key, i) for i in range(len(receipt["groups"][key]))], key))
-        # Reconciliation explicitly preserves the source total and excluded tax.
-        rows = [("Stored item extensions", sum((item[0] for items in receipt["groups"].values() for item in items), Decimal(0)))]
-        rows.extend((f"{ref}: {role}", value) for ref, role, value in receipt["charges"])
-        rows.append(("Sales tax excluded (never reimbursable)", receipt["excluded_tax"]))
-        if receipt["original_total"] is not None:
-            rows.append(("Original receipt total", receipt["original_total"]))
-            rows.append(("Unresolved difference: original less tax less allocations", receipt["unresolved"]))
-        if receipt["reimbursable_total"] is not None:
-            rows.append(("Reimbursable receipt total (original less sales tax)", receipt["reimbursable_total"]))
-        summary_table(["Receipt reconciliation", "Amount"], rows, "ALLOCATED TOTAL:", receipt["allocated_total"])
-        if receipt["original_total"] is None or receipt["unresolved"] != 0:
-            story.append(paragraph("? Reimbursement is UNVERIFIED. Correct unresolved item prices, quantities, or charges before reimbursement. Original receipt total less excluded sales tax must equal allocations.", "OtherProject"))
+        if receipt["original_total"] is None:
+            story.append(paragraph("Receipt total could not be read. Compare the database purchases and invoice shipping with the supporting document.", "OtherProject"))
+        else:
+            comparison = (f"Whole receipt: database purchases plus invoice shipping ${receipt['allocated_total']:,.2f}; "
+                          f"original receipt total ${receipt['original_total']:,.2f}; "
+                          f"sales tax excluded ${receipt['excluded_tax']:,.2f}.")
+            if receipt["unresolved"]:
+                comparison += f" Difference (receipt less sales tax, minus database purchases and shipping): ${receipt['unresolved']:,.2f}. Review or explain this difference."
+            story.append(paragraph(comparison, "OtherProject" if receipt["unresolved"] else "Normal"))
         other_items, other_projects, other_allocations, other_keys = [], [], [], []
         for other_key, items in receipt["groups"].items():
             if other_key != key:
@@ -594,7 +603,7 @@ def build_pdf(receipts, grouping):
 
     story.append(paragraph("Report summary", "Heading1", outline_level=0))
     if any(receipt["unresolved"] != 0 for receipt in receipts):
-        story.append(paragraph("? Allocation totals are UNVERIFIED. Receipt reconciliation below identifies differences from original totals after excluding sales tax.", "OtherProject"))
+        story.append(paragraph("Totals use database purchases and entered invoice shipping. Some receipt totals could not be confirmed; see the comparisons and receipt errors below.", "OtherProject"))
     if grouping == "receipt":
         summary_table(["Receipt", "Amount"], [
             (Paragraph(receipt_label(receipt, short=True), styles["Normal"]), receipt_total(receipt))

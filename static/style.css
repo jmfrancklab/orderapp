@@ -327,6 +327,8 @@ input[data-field="link"] { font-family: var(--mono); font-size: .8rem; }
   letter-spacing: .06em; text-transform: uppercase;
 }
 .invoice-empty { color: #8a94a0; font-style: italic; }
+.invoice-explanation { white-space: pre-wrap; min-width: 12rem; }
+.invoice-field textarea { width: 100%; box-sizing: border-box; resize: vertical; }
 
 /* ------------------------------------------------- reference tables */
 .table-wrap { overflow-x: auto; }

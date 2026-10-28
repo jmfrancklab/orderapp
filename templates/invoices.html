@@ -5,6 +5,9 @@
 Click an invoice name to edit its details, or open its submitted orders as a
 filtered view.
 Use the Reimbursement column filter to select reimbursement types.</p>
+<p class="explain">Enter separate shipping once per invoice. Reports divide it among projects
+in proportion to their purchase values. Leave Shipping blank if it is already included in
+item costs, and describe that in Explanation.</p>
 {% endblock %}
 
 {% block content %}
@@ -25,6 +28,7 @@ Use the Reimbursement column filter to select reimbursement types.</p>
         <th>Invoice</th><th>Created</th><th>Created by</th><th>Items</th>
         <th>Invoice file</th><th>Receipt file</th><th>Tracking info</th>
         <th>{{ column_heading('Reimbursement', 'reimbursement_status', sortable=false) }}</th>
+        <th>Shipping ($)</th><th>Explanation</th>
         <th>Submitted orders</th><th></th>
       </tr>
     </thead>
@@ -39,6 +43,8 @@ Use the Reimbursement column filter to select reimbursement types.</p>
                data-invoice-url="{{ invoice.invoice_url }}"
                data-receipt-url="{{ invoice.receipt_url }}"
                data-tracking-info="{{ invoice.tracking_info }}"
+               data-explanation="{{ invoice.explanation }}"
+               data-shipping="{{ invoice.shipping }}"
                data-reimbursement-status="{{ invoice.reimbursement_status }}">{{ invoice.nickname }}</a>
           </span>
         </td>
@@ -50,6 +56,8 @@ Use the Reimbursement column filter to select reimbursement types.</p>
         <td data-invoice-file="receipt_url">{{ open_link(invoice.receipt_url) }}</td>
         <td>{{ open_link(invoice.tracking_info) }}</td>
         <td>{{ invoice_reimbursement_labels.get(invoice.reimbursement_status, invoice.reimbursement_status) }}</td>
+        <td>{{ invoice.shipping }}</td>
+        <td class="invoice-explanation">{{ invoice.explanation }}</td>
         <td><a href="{{ url_for('submitted', filter_invoice_id=invoice.id) }}">view orders →</a></td>
         <td class="ref-row-actions">
           <button type="button" class="mini vdel reference-delete"

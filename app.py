@@ -8,6 +8,7 @@ import re
 import sqlite3
 import textwrap
 import tomllib
+from decimal import Decimal, InvalidOperation
 from datetime import datetime, timedelta, timezone
 from functools import cmp_to_key
 from urllib.parse import unquote, urlparse
@@ -481,6 +482,8 @@ def init_db():
         invoice_url TEXT NOT NULL DEFAULT '',
         receipt_url TEXT NOT NULL DEFAULT '',
         tracking_info TEXT NOT NULL DEFAULT '',
+        explanation TEXT NOT NULL DEFAULT '',
+        shipping TEXT NOT NULL DEFAULT '',
         reimbursement_status TEXT NOT NULL DEFAULT 'madhur cc',
         created_by TEXT NOT NULL,
         created_at TEXT NOT NULL
@@ -569,6 +572,8 @@ def init_db():
         "ALTER TABLE orders ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1",
         "ALTER TABLE orders ADD COLUMN invoice_id INTEGER REFERENCES invoices(id) ON DELETE SET NULL",
         "ALTER TABLE invoices ADD COLUMN tracking_info TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE invoices ADD COLUMN explanation TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE invoices ADD COLUMN shipping TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE invoices ADD COLUMN reimbursement_status TEXT NOT NULL DEFAULT 'madhur cc'",
         "ALTER TABLE allowed_emails ADD COLUMN password_hash TEXT",
     ]:
@@ -2488,12 +2493,23 @@ def api_save_invoice(invoice_id):
     data = request.get_json(silent=True) or {}
     allowed = {
         "nickname", "invoice_url", "receipt_url", "tracking_info",
-        "reimbursement_status"
+        "reimbursement_status", "explanation", "shipping"
     }
     if "reimbursement_status" in data:
         reimbursement_status = str(data["reimbursement_status"] or "").strip()
         if reimbursement_status not in INVOICE_REIMBURSEMENT_STATUSES:
             return jsonify(error="invalid reimbursement status"), 400
+    if "shipping" in data:
+        raw = str(data["shipping"] if data["shipping"] is not None else "").strip().replace(",", "")
+        if raw:
+            try:
+                shipping = Decimal(raw)
+                if not shipping.is_finite() or shipping < 0 or shipping > Decimal('999999999999.99') or shipping != shipping.quantize(Decimal('.01')):
+                    raise ValueError
+                raw = f"{shipping:.2f}"
+            except (InvalidOperation, ValueError):
+                return jsonify(error="Shipping must be a nonnegative dollar amount with at most two decimal places."), 400
+        data["shipping"] = raw
     sets, vals = [], []
     for field, value in data.items():
         if field not in allowed:
@@ -2904,11 +2920,13 @@ def export_xlsx(view):
         rows = filter_invoice_rows(fetch_visible_invoices(db, email), request.args)
         headers = [("ID", 8), ("Invoice", 28), ("Created", 12), ("Created by", 28),
                    ("Items", 10), ("Unique items", 12), ("Invoice file", 50),
-                   ("Receipt file", 50), ("Tracking info", 40), ("Reimbursement", 24)]
+                   ("Receipt file", 50), ("Tracking info", 40), ("Reimbursement", 24),
+                   ("Explanation", 60), ("Shipping ($)", 16)]
         labels = dict(INVOICE_REIMBURSEMENT_CHOICES)
         values = ((r["id"], r["nickname"], r["created_at"][:10], r["created_by"],
                    r["item_count"], r["unique_items"], r["invoice_url"], r["receipt_url"],
-                   r["tracking_info"], labels.get(r["reimbursement_status"], r["reimbursement_status"]))
+                   r["tracking_info"], labels.get(r["reimbursement_status"], r["reimbursement_status"]),
+                   r["explanation"], _cost_val(r["shipping"]))
                   for r in rows)
         return _xlsx_response(_make_workbook("Invoices", headers, values), "invoices.xlsx")
 

@@ -1857,8 +1857,13 @@
     name.textContent = label;
     row.appendChild(name);
 
-    var input = document.createElement("input");
-    input.type = isInvoiceUrlField(field) ? "url" : "text";
+    var input = document.createElement(field === "explanation" ? "textarea" : "input");
+    if (field === "explanation") input.rows = 4;
+    else input.type = isInvoiceUrlField(field) ? "url" : "text";
+    if (field === "shipping") {
+      input.type = "number"; input.min = "0"; input.step = "0.01";
+      input.placeholder = "Separate shipping only; leave blank if included in item costs";
+    }
     input.name = field;
     input.value = value || "";
     if (field === "nickname") input.required = true;
@@ -1898,6 +1903,8 @@
       invoiceUrl: link.dataset.invoiceUrl,
       receiptUrl: link.dataset.receiptUrl,
       trackingInfo: link.dataset.trackingInfo,
+      explanation: link.dataset.explanation,
+      shipping: link.dataset.shipping,
       reimbursementStatus: link.dataset.reimbursementStatus
     };
   }
@@ -1931,6 +1938,8 @@
     fields.appendChild(invoiceField("Invoice", invoice.invoiceUrl, "invoice_url"));
     fields.appendChild(invoiceField("Receipt", invoice.receiptUrl, "receipt_url"));
     fields.appendChild(invoiceField("Tracking info", invoice.trackingInfo, "tracking_info"));
+    fields.appendChild(invoiceField("Explanation", invoice.explanation, "explanation"));
+    fields.appendChild(invoiceField("Shipping ($)", invoice.shipping, "shipping"));
     fields.appendChild(invoiceReimbursementField(invoice.reimbursementStatus));
 
     var actions = document.createElement("div");
@@ -1950,6 +1959,8 @@
         invoice_url: fields.elements.invoice_url.value.trim(),
         receipt_url: fields.elements.receipt_url.value.trim(),
         tracking_info: fields.elements.tracking_info.value.trim(),
+        explanation: fields.elements.explanation.value.trim(),
+        shipping: fields.elements.shipping.value.trim(),
         reimbursement_status: fields.elements.reimbursement_status.value
       }, function () { window.location.reload(); });
     });

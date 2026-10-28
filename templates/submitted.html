@@ -38,6 +38,8 @@ add links to the invoice and receipt files.</p>
        data-invoice-url="{{ invoice.invoice_url }}"
        data-receipt-url="{{ invoice.receipt_url }}"
        data-tracking-info="{{ invoice.tracking_info }}"
+       data-explanation="{{ invoice.explanation }}"
+       data-shipping="{{ invoice.shipping }}"
        data-reimbursement-status="{{ invoice.reimbursement_status }}">{{ invoice.nickname }}</a>
   </span>
   {% else %}

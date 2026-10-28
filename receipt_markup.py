@@ -14,6 +14,8 @@ from reportlab.pdfbase.pdfmetrics import stringWidth
 
 
 def _tokens(text):
+    # OCR commonly reads the S in a part number such as SC1030120 as $.
+    text = re.sub(r"(?<!\w)\$(?=[A-Za-z]\d)", "S", text)
     return re.findall(r"[a-z0-9]+", unicodedata.normalize("NFKC", text).casefold())
 
 
@@ -130,7 +132,10 @@ def ocr_spans(page):
                     lang="eng", psm=PSM.AUTO)
             with pdfium.PdfDocument(pdf.getvalue()) as document:
                 rendered = document[0]
-                bitmap = rendered.render(scale=min(3, 3000 / max(rendered.get_size())))
+                # Browser printouts often shrink price tables to tiny text.
+                # 360 dpi preserves part numbers and decimal points that the
+                # previous 216 dpi pass lost (notably the SigaTek receipt).
+                bitmap = rendered.render(scale=min(5, 5000 / max(rendered.get_size())))
                 try:
                     image = bitmap.to_pil().copy()
                 finally:
@@ -156,6 +161,28 @@ def ocr_spans(page):
                                       "height": (bottom-top) * sy,
                                       "line": (float(box.left) + left*sx, y,
                                                float(box.left) + right*sx, y)})
+                    # Sparse summary pages can lose the isolated Total label
+                    # in AUTO mode. Recover missing labels without duplicating
+                    # monetary occurrences or trusting the broken native layer.
+                    if (any("untaxed" in s["text"].casefold() for s in spans)
+                            and not any(s["text"].casefold().strip(':') == "total" for s in spans)):
+                        try:
+                            _ocr_engine.SetPageSegMode(PSM.SPARSE_TEXT)
+                            _ocr_engine.Recognize()
+                            iterator = _ocr_engine.GetIterator()
+                            for word in iterate_level(iterator, RIL.WORD) if iterator else ():
+                                text = (word.GetUTF8Text(RIL.WORD) or "").strip()
+                                if text.casefold().strip(':') not in ("total", "taxes", "tax"):
+                                    continue
+                                left, top, right, bottom = word.BoundingBox(RIL.WORD)
+                                _, line_top, _, line_bottom = word.BoundingBox(RIL.TEXTLINE)
+                                y = float(box.top) - (line_top + (line_bottom-line_top) * .55) * sy
+                                if not any(s["text"].casefold() == text.casefold() and abs(s["line"][1] - y) < 3 for s in spans):
+                                    spans.append({"text": text, "confidence": word.Confidence(RIL.WORD),
+                                                  "height": (bottom-top)*sy,
+                                                  "line": (float(box.left)+left*sx, y, float(box.left)+right*sx, y)})
+                        finally:
+                            _ocr_engine.SetPageSegMode(PSM.AUTO)
                 finally:
                     _ocr_engine.Clear()
                     image.close()
@@ -248,6 +275,15 @@ def _prices(spans):
         width = stringWidth(text, "Helvetica", 1) or 1
         x0, y0, x1, y1 = span["line"]
         for match in matches:
+            suffix = text[match.end():]
+            if re.match(r"\s*(?:%|units?\b)", suffix, re.I):
+                continue
+            if match.end() == len(text) and any(
+                    re.fullmatch(r"units?", other["text"], re.I)
+                    and 0 <= other["line"][0] - x1 < span.get("height", 10) * 3
+                    and abs(other["line"][1] - y0) < span.get("height", 10) * .65
+                    for other in spans):
+                continue
             start = stringWidth(text[:match.start()], "Helvetica", 1) / width
             end = stringWidth(text[:match.end()], "Helvetica", 1) / width
             value = Decimal(re.sub(r"[^0-9.+-]", "", match.group()))
@@ -352,14 +388,14 @@ def monetary_pages(pages, geometry):
 
 
 _SUMMARY_LABELS = (
-    ("tax", r"(?:sales\s+tax|estimated\s+tax|\btax\b)"),
+    ("tax", r"(?:sales\s+tax|estimated\s+tax|\btax(?:es)?\b)"),
     ("discount", r"(?:discount|coupon|savings|promotion)"),
     ("insurance", r"insurance"),
-    ("shipping", r"(?:shipping|freight|delivery charge)"),
+    ("shipping", r"(?:shipping|freight|delivery charge|fedex|\bups\b|\busps\b|\bdhl\b)"),
     ("tariff", r"(?:tariff|duty|surcharge|handling fee|other charge)"),
-    ("subtotal", r"(?:subtotal|sub total|merchandise|item\(s\) subtotal)"),
-    ("before_tax", r"total before tax"),
-    ("total", r"(?:grand total|total billed|order total|amount paid|(?<!sub )\btotal\b)"),
+    ("subtotal", r"(?:sub[ -]?total|merchandise|item\(s\) subtotal)"),
+    ("before_tax", r"(?:total before tax|untaxed amount)"),
+    ("total", r"(?:grand total|total billed|order total|amount paid|(?<!sub )(?<!sub-)\btotal\b)"),
 )
 
 
@@ -376,16 +412,53 @@ def amount_role(price):
                     for s in sorted(left, key=lambda s: s["line"][0])).casefold()
     if "total before tax" in text:
         return "before_tax"
+    if re.search(r"tax(?:es)?\s+on\s*[$£€]?\s*$", text):
+        return "taxable_base"
+    if re.search(r"shipping[\s-]*(?:including|and|&)", text):
+        return "shipping"
     matches = [(m.start(), -rank, role) for rank, (role, pattern) in enumerate(_SUMMARY_LABELS)
                for m in re.finditer(pattern, text)]
     return max(matches)[2] if matches else "item"
 
 
+def _prorate_shipping(receipt):
+    """Distribute the invoice shipping field by project purchase value."""
+    source = receipt.setdefault("source_groups", receipt["groups"])
+    bases = {key: sum((row[0] for row in rows), Decimal(0))
+             for key, rows in source.items()}
+    bases = {key: value for key, value in bases.items() if value > 0}
+    groups, refs = {}, {}
+    for key, rows in source.items():
+        for i, row in enumerate(rows):
+            target = groups.setdefault(key, [])
+            refs[key, len(target)] = (key, i)
+            target.append(row)
+    base = sum(bases.values(), Decimal(0))
+    shipping = Decimal(str(receipt.get("shipping") or "0"))
+    if shipping and not bases:
+        key = (None, "Unassigned project")
+        target = groups.setdefault(key, [])
+        refs[key, len(target)] = "shipping"
+        target.append((shipping, "Shipping (no positive purchase value to prorate)", 1, shipping))
+    if shipping and bases:
+        previous, cumulative = Decimal(0), Decimal(0)
+        for key, value in bases.items():
+            cumulative += value
+            rounded = (shipping * cumulative / base).quantize(Decimal('.01'), rounding=ROUND_HALF_UP)
+            share = rounded - previous
+            previous = rounded
+            target = groups.setdefault(key, [])
+            refs[key, len(target)] = "shipping"
+            label = "Shipping" + (" (prorated by project purchase value)" if len(bases) > 1 else "")
+            target.append((share, label, 1, share))
+    receipt.update(groups=groups, source_refs=refs)
+
+
 def reconcile(receipt):
     """Keep purchase tuples intact; store source evidence and allocations alongside."""
-    cent = Decimal(".01")
     geometry = receipt.setdefault("text_geometry", [{} for _ in receipt["pages"]])
     evidence = monetary_pages(receipt["pages"], geometry)
+    _prorate_shipping(receipt)
     items = [(key, i, item) for key, rows in receipt["groups"].items() for i, item in enumerate(rows)]
     base = sum((item[0] for _, _, item in items), Decimal(0))
     charges, tax, totals = [], Decimal(0), []
@@ -399,8 +472,8 @@ def reconcile(receipt):
             if role == "total":
                 totals.append(price["value"])
         for (role, _), row in adjustment_rows.items():
-            # A charge row may print both unit and extended amounts. Allocate
-            # only the rightmost extension, even when the unit amount differs.
+            # A charge row may print both unit and extended amounts. Compare
+            # only its rightmost extension with the entered invoice shipping.
             price = max(row, key=lambda p: p["line"][0])
             value = -abs(price["value"]) if role == "discount" else price["value"]
             if role == "tax":
@@ -411,17 +484,7 @@ def reconcile(receipt):
     total = sum((next((p["value"] for p in reversed(row) if p["role"] == "total"), Decimal(0))
                  for row in evidence), Decimal(0)) if totals else None
     allocations = {(key, i): {"shipping": Decimal(0), "other": Decimal(0)} for key, i, _ in items}
-    for _, role, value in charges:
-        if not items or base <= 0:
-            continue
-        # Cumulative rounding conserves every cent and is deterministic.
-        previous, cumulative = Decimal(0), Decimal(0)
-        for key, i, item in items:
-            cumulative += item[0]
-            share = (value * cumulative / base).quantize(cent, rounding=ROUND_HALF_UP)
-            allocations[key, i]["shipping" if role == "shipping" else "other"] += share - previous
-            previous = share
-    reimbursable = base + sum((v for _, _, v in charges), Decimal(0))
+    reimbursable = base
     residual = total - tax - reimbursable if total is not None else None
     receipt.pop("item_candidates", None)
     receipt.update(verification=evidence, charges=charges, excluded_tax=tax,
@@ -439,25 +502,40 @@ def verify_amounts(receipt, project=None):
         decisions = []
         for price in page_prices:
             role, value = price["role"], price["value"]
+            match, item_ref = None, None
             status, reason = "?", "No matching database item was found for this receipt amount."
             if role == "tax":
                 status, reason = "strike", "Excluded sales tax; included only in original receipt total"
+            elif role == "taxable_base":
+                reason = "Taxable purchase amount, not the sales-tax charge. Compare this base with the taxable purchases on the receipt."
             elif role in charge_refs:
                 row_refs = [(ref, value) for ref, value in charge_refs[role]
                             if ref.startswith(f'p{price["page"] + 1}.')]
-                if any(abs(value) == abs(price["value"]) for _, value in row_refs):
-                    references = "; ".join(f"{ref} = {value:,.2f}" for ref, value in row_refs)
-                    status, reason = "ok", f"Receipt adjustment {role}: {references}"
+                if role == "shipping":
+                    expected = Decimal(str(receipt.get("shipping") or "0"))
+                    detected = sum((v for _, kind, v in receipt["charges"] if kind == "shipping"), Decimal(0))
+                    reason = (f"Shipping: invoice Shipping field is ${expected:,.2f}; "
+                              f"receipt shipping charges total ${detected:,.2f}. "
+                              "Enter separate shipping in the invoice, or explain if already included in item costs.")
+                    if expected == detected and any(ref == price["id"] for ref, _ in row_refs):
+                        status, reason = "ok", f"Shipping matches invoice Shipping field ${expected:,.2f}; prorated by project purchase value."
+                    item_ref = "shipping"
                 else:
-                    references = "; ".join(f"{ref} = {value:,.2f}" for ref, value in row_refs)
-                    reason = f"Adjustment unit price needs quantity verification against {references}"
+                    match = _item_correspondence(receipt, price)
+                    if match:
+                        key, index, item, field = match
+                        item_ref = (key, index)
+                        status = "strike" if project is not None and key != project else "ok"
+                        reason = f"{item[1]} ({field}): database ${item[3]:,.2f} x {item[2]} = ${item[0]:,.2f}."
+                    else:
+                        reason = f"Receipt {role} charge is not separately matched to a database item; explain if included in a stored total."
             elif role in ("subtotal", "total", "before_tax"):
                 # Page-scoped item evidence is necessary for multi-order PDFs.
                 expected = Decimal(0)
                 accounted = True
                 matched_items = set()
                 for candidate in page_prices:
-                    if candidate["role"] != "item": continue
+                    if candidate["role"] not in ("item", "insurance", "discount", "tariff"): continue
                     match = _item_correspondence(receipt, candidate)
                     if match:
                         key, index, item, field = match
@@ -472,21 +550,28 @@ def verify_amounts(receipt, project=None):
                             if (key, index) not in matched_items:
                                 expected += item[0]
                                 matched_items.add((key, index))
-                page_charges = {kind: sum((v for ref, kind2, v in receipt["charges"]
-                                          if kind2 == kind and ref.startswith(f'p{price["page"] + 1}.')), Decimal(0))
-                                for kind in charge_refs}
-                if role != "subtotal":
-                    expected += sum(page_charges.values(), Decimal(0))
-                else:
-                    expected += page_charges.get("insurance", Decimal(0))
-                if role == "total": expected += sum((p["value"] for p in page_prices if p["role"] == "tax"), Decimal(0))
-                if matched_items and accounted and expected == value and receipt["unresolved"] == 0:
-                    status, reason = "ok", f"Page {price['page'] + 1} {role}: item extensions plus applicable adjustments = {expected}"
+                total_pages = sum(any(p["role"] == "total" for p in row) for row in receipt["verification"])
+                if role in ("total", "before_tax") and total_pages <= 1:
+                    # A receipt spanning pages can be stored as one total-only
+                    # database item. Component mismatches remain separate.
+                    expected = receipt["allocated_total"]
+                    accounted = True
+                    if role == "total": expected += receipt["excluded_tax"]
+                elif role != "subtotal":
+                    detected = sum((v for _, kind, v in receipt["charges"] if kind == "shipping"), Decimal(0))
+                    page_shipping = sum((v for ref, kind, v in receipt["charges"] if kind == "shipping"
+                                         and ref.startswith(f'p{price["page"] + 1}.')), Decimal(0))
+                    shipping = Decimal(str(receipt.get("shipping") or "0"))
+                    if detected:
+                        expected += (shipping * page_shipping / detected).quantize(Decimal('.01'), rounding=ROUND_HALF_UP)
+                    if role == "total": expected += sum((p["value"] for p in page_prices if p["role"] == "tax"), Decimal(0))
+                if accounted and expected == value:
+                    status, reason = "ok", f"{role.replace('_', ' ').capitalize()} matches database purchases and entered invoice shipping: ${expected:,.2f}."
                 else:
                     reason = (f"{role.replace('_', ' ').capitalize()}: listed in database as ${expected:,.2f}, "
                               f"but on receipt as ${value:,.2f}."
                               + (" Some receipt items could not be matched to database items." if not accounted else "")
-                              + (" The receipt total does not balance with the database items and charges."
+                              + (" The receipt total does not balance with database purchases and entered invoice shipping."
                                  if receipt["unresolved"] != 0 else ""))
             else:
                 match = _item_correspondence(receipt, price)
@@ -500,7 +585,8 @@ def verify_amounts(receipt, project=None):
             elif price["confidence"] < 60:
                 status, reason = "?", "Low-confidence OCR; " + reason
             candidates = _item_candidates(receipt, price) if role == "item" else []
-            item_ref = (match[0], match[1]) if role == "item" and match else None
+            if role == "item" and match:
+                item_ref = (match[0], match[1])
             if role == "item" and not match and len(candidates) == 1:
                 key, index, item, row_prices = candidates[0]
                 item_ref = (key, index)
@@ -517,6 +603,10 @@ def verify_amounts(receipt, project=None):
                               f"does not confirm the database quantity of {item[2]}.")
                 if price["confidence"] < 60:
                     reason += " OCR is uncertain; check the receipt."
+            if status == "?":
+                reason = f"OCR amount ${value:,.2f} ({role.replace('_', ' ')}; {price['context']}): " + reason
+                if receipt.get("explanation"):
+                    reason += " See invoice explanation above."
             decisions.append(dict(price, status=status, reason=reason, item_ref=item_ref))
         result.append(decisions)
     # Re-search every original page after classification, comparing occurrences
@@ -540,7 +630,8 @@ def _item_candidates(receipt, price):
         return cache[identity]
     spans = price["spans"]
     matches = []
-    all_items = [(key, i, item) for key, items in receipt["groups"].items() for i, item in enumerate(items)]
+    all_items = [(key, i, item) for key, items in receipt.get("source_groups", receipt["groups"]).items()
+                 for i, item in enumerate(items)]
     selections = [_description_matches(spans, item[1]) for _, _, item in all_items]
     product_lines = set().union(*selections) if selections else set()
     prices = _prices(spans)
@@ -548,7 +639,7 @@ def _item_candidates(receipt, price):
     for (key, index, item), selected in zip(all_items, selections):
         if not selected or position not in _row_prices(spans, selected, product_lines, prices): continue
         row = [prices[j] for j in _row_prices(spans, selected, product_lines, prices)
-               if amount_role(dict(prices[j], spans=spans, context="")) == "item"]
+               if amount_role(dict(prices[j], spans=spans, context="")) in ("item", "insurance", "discount", "tariff")]
         if not any(p["line"] == price["line"] for p in row):
             continue
         matches.append((key, index, item, row))

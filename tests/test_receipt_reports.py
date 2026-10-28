@@ -123,6 +123,22 @@ def test_nested_bookmarks_survive_supporting_document_merge(export_client, group
     check_destinations(outline)
 
 
+@pytest.mark.parametrize('grouping', ['receipt', 'project'])
+def test_invoice_shipping_and_explanation_reach_report(export_client, grouping):
+    client, _ = export_client
+    explanation = 'Recorded as a combined purchase; components are not individually entered.'
+    response = client.post('/api/invoices/11', json={'shipping': '1.01', 'explanation': explanation})
+    assert response.status_code == 200
+    text = pdf_text(client.get('/invoices/receipt-report', query_string={
+        'group_by': grouping, 'filter_reimbursement_status': 'requires reimbursement'}))
+    text = ' '.join(text.split())
+    assert explanation in text
+    assert '38.36' in text  # 37.35 in purchases plus 1.01 in invoice shipping.
+    assert '38.05' in text  # Alpha: 37.05 plus 1.00 of shipping.
+    assert '0.31' in text  # Beta: 0.30 plus the remaining cent of shipping.
+    assert 'prorated by project purchase value' in text
+
+
 @pytest.mark.parametrize("selected,ids", [(["reimbursed"], [12]), (["requires reimbursement", "reimbursed"], [11, 12])])
 def test_filter_matches_page_and_preserves_multiselect(export_client, selected, ids):
     client, _ = export_client
