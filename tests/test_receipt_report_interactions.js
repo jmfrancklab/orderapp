@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const source = fs.readFileSync('static/app.js', 'utf8');
 const block = source.slice(source.indexOf('  var reportActions ='), source.indexOf('  var filterSheet ='));
+const formatHelper = source.slice(source.indexOf('  function fmtCurrency('), source.indexOf('  function setCostInput('));
 const buttonHelper = source.slice(source.indexOf('  function makePopupBtn('), source.indexOf('  function closeVendorPopup('));
 
 class Element {
@@ -25,7 +26,7 @@ class Element {
 }
 
 async function run(mode) {
-  let click, requested, downloaded, revoked, getCount = 0, posts = [];
+  let click, requested, downloaded, revoked, timingBlob, getCount = 0, posts = [];
   const document = {removeEventListener() {}, addEventListener() {}, querySelectorAll: () => []};
   document.createElement = tag => {
     const el = new Element(tag, document);
@@ -37,15 +38,19 @@ async function run(mode) {
   buttons[0].dataset.receiptReport = 'project';
   document.activeElement = buttons[0];
   const status = {textContent: ''};
+  const timingLink = {hidden: true};
   const progress = {hidden: true, value: 0, removeAttribute() { this.value = undefined; }};
   let snapshots = [];
   document.getElementById = () => ({
     dataset: {reportUrl: '/invoices/receipt-report', receiptCount: '13'},
     addEventListener: (_, callback) => {click = callback;},
-    querySelectorAll: () => buttons, querySelector: selector => selector.includes("progress") ? progress : status
+    querySelectorAll: () => buttons, querySelector: selector => selector.includes("progress") ? progress : selector.includes("timing") ? timingLink : status
   });
   class BrowserURL extends URL {}
-  BrowserURL.createObjectURL = () => 'blob:report';
+  BrowserURL.createObjectURL = blob => {
+    if (blob.type === 'application/json') { timingBlob = blob; return 'blob:timing'; }
+    return 'blob:report';
+  };
   BrowserURL.revokeObjectURL = url => {revoked = url;};
   const errors = [11, 12].map(id => ({
     invoice_id: id, nickname: 'Purchase ' + id, kind: 'document', can_edit: true,
@@ -68,7 +73,7 @@ async function run(mode) {
       assert.equal(progress.hidden, false);
       assert.match(status.textContent, /loading purchases/);
       requested = url; getCount++;
-      const failure = mode !== 'success' && getCount === 1;
+      const failure = !mode.startsWith('success') && getCount === 1;
       return {ok: !failure, status: failure ? 500 : 200, headers: {get: () => failure ? 'application/json' : 'application/vnd.orderapp.receipt-report'},
         json: async () => {
           if (mode === 'html-error') throw new Error('HTML response');
@@ -79,6 +84,10 @@ async function run(mode) {
           const records = [
             {type: 'progress', label: 'Reading document pages', percent: 35, completed: 2, total: 7, remaining_seconds: 20},
             {type: 'progress', label: 'Embedding supporting pages', percent: 94, completed: 5, total: 6, remaining_seconds: 2},
+            {type: 'result', timing: {actual_seconds: 2, stages: []}, recommendations: mode === 'success-recommendations' ? [
+              {receipt_id: 11, project: 'Alpha', item: 'Precision cable <shielded>', current_unit: '10.00',
+                proposed_unit: '10.12', kind: 'price', reason: 'Receipt line differs.', refs: 'p1.1'}
+            ] : []},
             {type: 'pdf', size: pdf.length}
           ].map(record => JSON.stringify(record) + '\n').join('');
           const data = Buffer.concat([Buffer.from(records), pdf]);
@@ -98,7 +107,7 @@ async function run(mode) {
       };
     }
   };
-  vm.runInNewContext(buttonHelper + block, context);
+  vm.runInNewContext(buttonHelper + formatHelper + block, context);
   await click({target: {closest: () => buttons[0]}});
   assert.deepEqual(Array.from(requested.searchParams.getAll('filter_reimbursement_status')), ['reimbursed', 'requires reimbursement']);
   assert.equal(requested.searchParams.get('group_by'), 'project');
@@ -106,11 +115,26 @@ async function run(mode) {
   assert.ok(buttons.every(button => !button.disabled));
   assert.equal(status.textContent, '');
   assert.equal(progress.hidden, true);
-  if (mode === 'success') {
+  if (mode.startsWith('success')) {
     assert.ok(snapshots.some(text => /Reading document pages… 2 of 7.*20 seconds/.test(text)));
     assert.ok(snapshots.some(text => /Embedding supporting pages… 5 of 6/.test(text)));
     assert.equal(downloaded, 'receipts-by-project.pdf');
     assert.equal(revoked, 'blob:report');
+    assert.equal(timingLink.hidden, false);
+    assert.equal(timingLink.href, 'blob:timing');
+    assert.match(timingLink.download, /^receipt-report-timing-.*\.json$/);
+    const timing = JSON.parse(await timingBlob.text());
+    assert.equal(timing.server.actual_seconds, 2);
+    assert.ok(timing.browser.progress_updates.length === 2);
+    const popup = document.body.children.find(child => child.attributes.role === 'dialog');
+    if (mode === 'success-recommendations') {
+      assert.ok(popup);
+      assert.equal(downloaded, 'receipts-by-project.pdf');
+      const cells = popup.querySelectorAll('td').map(cell => cell.textContent);
+      assert.ok(cells.includes('Precision cable <shielded>'));
+      assert.ok(cells.includes('$10.00 → $10.12'));
+      assert.equal(popup.querySelectorAll('input').length, 0);
+    } else assert.equal(popup, undefined);
     return;
   }
   const popup = document.body.children.find(child => child.attributes.role === 'dialog');
@@ -148,7 +172,7 @@ async function run(mode) {
   assert.ok(!document.body.children.includes(popup));
 }
 (async () => {
-  for (const mode of ['success', 'failure', 'save-failure', 'generic-error', 'html-error']) await run(mode);
+  for (const mode of ['success', 'success-recommendations', 'failure', 'save-failure', 'generic-error', 'html-error']) await run(mode);
   console.log('Receipt report interactions passed');
 })().catch(error => {console.error(error); process.exitCode = 1;});
 

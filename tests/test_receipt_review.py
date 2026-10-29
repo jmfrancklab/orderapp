@@ -81,16 +81,18 @@ def test_landed_costs_verify_after_invoice_assignments_and_prices_are_corrected(
 
 
 @pytest.mark.parametrize('grouping', ['receipt', 'project'])
-def test_recommendations_precede_purchases_with_unicode_arrow_and_no_data_changes(grouping):
+def test_pdf_has_amount_columns_without_recommendations_or_data_changes(grouping):
     data = markup.reconcile(digikey_receipt())
     before = deepcopy(data['source_groups'])
     output = reports.build_pdf([data], grouping)
     reader = PdfReader(BytesIO(output))
     first = reader.pages[0].extract_text()
-    assert 'Recommended corrections' in first
-    assert '$140.00 → $151.05' in first
-    assert 'Zero shipped' in first
-    assert '$416.00 → $449.52' in first
+    assert 'Recommended corrections' not in first
+    text = '\n'.join(page.extract_text() for page in reader.pages)
+    assert 'Recommended corrections' not in text
+    assert 'Database amount' in text and 'Receipt amount' in text
+    assert 'Not confirmed' not in text
+    assert 'Receipt check:' in text
     assert data['source_groups'] == before
     assert reader.outline[0].title == 'Report summary'
     jpeg_images(reader)
@@ -198,3 +200,93 @@ def test_close_prices_require_unique_product_evidence(description, duplicate, ex
     assert bool(data['recommendations']) == expected
     if expected:
         assert data['recommendations'][0]['proposed_unit'] == D('10.12')
+
+
+def test_receipt_amounts_keep_zero_billed_separate_from_price_mismatches():
+    import receipt_review
+    data = markup.reconcile(digikey_receipt())
+    key = (1, 'C-band')
+    assert data['receipt_amounts'][key, 7] == 0  # ADS127L21
+    assert data['receipt_amounts'][key, 1] == 0  # Connor-Winfield
+    assert data['receipt_amounts'][key, 4] == D('7.86')  # AD8420: positive price mismatch
+    assert data['groups'][key][4][0] == D('7.28')
+    assert receipt_review.amount_sum(data['receipt_amounts'].values()) == D('1562.82')
+    shipping = [(ref, value) for ref, value in data['receipt_amounts'].items()
+                if data['source_refs'][ref] == 'shipping']
+    assert [value for _, value in shipping] == [D('8.27'), D('.22')]
+    marks = [p for page in markup.verify_amounts(data) for p in page]
+    assert all(p['status'] == '?' for p in marks if p.get('item_ref') == (key, 4))
+
+
+def test_balancing_total_never_turns_an_unmatched_item_into_zero():
+    import receipt_review
+    data = digikey_receipt()
+    key = (1, 'Research')
+    data['groups'] = {key: [(D(10), 'Precision cable', 1, D(10)),
+                            (D(5), 'Unmatched adapter', 1, D(5))]}
+    data['shipping'] = D(0)
+    data['text_geometry'] = [dict(ocr=[dict(text=text, line=(40, y, 240, y), height=10)
+                                     for text, y in [('Precision cable $10.00', 700), ('Total $10.00', 650)]])]
+    data['pages'] = data['pages'][:1]
+    markup.reconcile(data)
+    assert data['original_total'] == 10
+    assert data['receipt_amounts'][key, 0] == 10
+    assert data['receipt_amounts'][key, 1] is None
+    assert receipt_review.amount_sum(data['receipt_amounts'].values()) is None
+
+
+def test_explicit_total_wins_over_a_subtotal_matching_the_database():
+    data = digikey_receipt()
+    data['groups'] = {(1, 'Research'): [(D(10), 'Precision cable', 1, D(10))]}
+    data['shipping'] = D(0)
+    data['text_geometry'] = [dict(ocr=[dict(text=text, line=(40, y, 260, y), height=10)
+                                     for text, y in [('Precision cable $10.00', 700),
+                                                     ('Total before tax $10.00', 650),
+                                                     ('Grand Total $11.00', 600)]])]
+    data['pages'] = data['pages'][:1]
+    markup.reconcile(data)
+    assert data['original_total'] == 11
+    assert data['unresolved'] == 1
+    assert [price['value'] for price in data['total_occurrences']] == [D(11)]
+
+
+def test_receipt_total_has_red_box_and_half_size_annotations():
+    data = markup.reconcile(digikey_receipt())
+    reader = PdfReader(BytesIO(reports.build_pdf([data], 'receipt')))
+    fonts, rectangles = [], []
+    for page in reader.pages:
+        page.extract_text(visitor_text=lambda text, cm, tm, font, size: fonts.append((text.strip(), size)))
+        stroke = (0, 0, 0)
+        stack = []
+        for args, op in page.get_contents().operations:
+            if op == b'q': stack.append(stroke)
+            elif op == b'Q': stroke = stack.pop()
+            elif op == b'RG': stroke = tuple(float(x) for x in args)
+            elif op == b're' and stroke[0] > .6 and stroke[1] == 0:
+                rectangles.append(args)
+    assert rectangles
+    total_labels = [(text, size) for text, size in fonts if text.startswith('total p3.')]
+    assert total_labels and all(size == 2.5 for _, size in total_labels)
+    assert any(text.startswith('p1.1') and size == 2.5 for text, size in fonts)
+    assert any(text.startswith('p1.1') and size == 5 for text, size in fonts)
+
+
+def test_timing_log_compares_each_prediction_to_actual_remaining_time(monkeypatch):
+    now = [0.]
+    monkeypatch.setattr(reports, 'monotonic', lambda: now[0])
+    progress = reports.ReportProgress([{}])
+    progress.totals = dict.fromkeys(progress.totals, 0)
+    progress.start('ocr', 4)
+    for step in range(1, 5):
+        now[0] = step * 6
+        progress.advance()
+    timing = progress.timing_log()
+    assert timing['actual_seconds'] == 24
+    assert timing['initial_estimated_seconds'] == 12
+    assert timing['stages'][0]['predicted_seconds'] == 12
+    assert timing['stages'][0]['actual_seconds'] == 24
+    assert timing['updates'][0]['prediction_error_seconds'] == -12
+    assert timing['updates'][1]['actual_remaining_seconds'] == 18
+    assert timing['updates'][1]['prediction_error_seconds'] == 0
+    assert timing['updates'][-1]['actual_remaining_seconds'] == 0
+    json.dumps(timing)

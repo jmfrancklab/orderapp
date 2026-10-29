@@ -50,9 +50,12 @@ of dependency-free vanilla JS (autosave, vendor auto-detect, tracker chips).
   **By receipt** and **By project** download PDF reports for the current GET
   filters, with quantities, unit costs, line totals, project subtotals, and
   bordered supporting pages. Receipts appear in ascending receipt-number order
-  in both arrangements. An opening Recommended corrections table lists matched
-  price differences, attributable tariffs to include in unit costs, and
-  zero-billed/quantity issues for review. Suggestions never edit the database.
+  in both arrangements. Purchase and summary tables compare Database amount
+  with Receipt amount, including attributable tariffs. Explicit zero-billed
+  items show 0.00; unresolved amounts show an em dash, with the existing red
+  receipt references carrying validation status. Recommended corrections appear
+  in an in-page dialog after PDF generation, never in the PDF, and do not edit
+  the database.
   Receipt links take precedence; invoice links are
   used when no receipt is recorded. Supporting files must be publicly accessible
   PDF, PNG, or JPEG files. Missing files or costs open an in-page popup identifying
@@ -90,13 +93,16 @@ of dependency-free vanilla JS (autosave, vendor auto-detect, tracker chips).
   The browser reads progress JSON lines followed by a size record and raw PDF
   bytes on the same request (`progress=1`); direct requests still return a PDF.
   The response disables proxy buffering so updates can arrive during generation.
+  After generation, Download timing log saves JSON with every server estimate,
+  actual stage timings, work counts, prediction errors, and browser update arrival
+  times. The log excludes document URLs and item descriptions.
   Supporting pages show `provided by:` followed by
   the invoice creator's email address.
   Entered invoice shipping is prorated by project purchase value with cent-exact
   rounding. Reports preserve stored item prices and do not add OCR charges to
   purchases. Sales tax is never allocated or reimbursed. Missing amounts and
   unresolved differences remain in the red Unexplained amounts table, with
-  actionable price/tariff suggestions also summarized at the start. Tariffs
+  actionable price/tariff suggestions shown in the website dialog. Tariffs
   attributable to a shipped line are compared with the stored item cost as
   merchandise plus tariff; tariff summaries are not counted a second time.
   Zero-shipped, zero-billed rows do not validate a purchase merely because its
@@ -115,6 +121,9 @@ of dependency-free vanilla JS (autosave, vendor auto-detect, tracker chips).
   those small cells receive a targeted OCR pass. Supporting pages embed JPEGs
   (quality 85) of the same rendered bitmaps used by OCR, never source PDF vectors.
   Image resources are shared across repeated project sections to limit file size.
+  An independently detected receipt total is boxed in red and labeled total.
+  Receipt annotations use 2.5-point text. A receipt check compares this project's
+  receipt amounts plus other projects with the detected total less excluded tax.
   The item table's Location column links matches to lowercase references such
   as `p1.8` on the receipt. Likely name matches with different prices show a red
   reference and the receipt price. The Unexplained amounts table spells out database

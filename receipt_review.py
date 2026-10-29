@@ -75,7 +75,11 @@ def item_evidence(receipt):
                 shipped = Decimal(1)
             value = extension['value']
             # A lone unit-price row marked QTY can supply its billed extension.
-            if not explicit_extension and shipped and len(row) == 1 and value == item[3]:
+            unit_only = table and not explicit_extension
+            if not table and len(row) == 1:
+                context = spans[extension['owner']]['text']
+                unit_only = bool(re.search(r'unit (?:price|cost)|/ea\b|each\b', context, re.I))
+            if unit_only and shipped is not None:
                 value = (value * shipped).quantize(CENT, rounding=ROUND_HALF_UP)
             ids = [p['id'] for p in receipt['verification'][page_index]
                    if any(p['line'] == raw['line'] for raw in row)]
@@ -147,3 +151,62 @@ def recommendations(receipt):
                                 proposed_total=unassigned, quantity=None, tariff=unassigned,
                                 reason=f"${unassigned:,.2f} tariff could not be assigned confidently; check whether already included in item costs."))
     return suggestions
+
+
+def receipt_amounts(receipt):
+    """Receipt-derived line amounts. None means unresolved, never zero by default."""
+    amounts = {}
+    source = receipt.get('source_groups', receipt['groups'])
+    for key, items in source.items():
+        for index, item in enumerate(items):
+            ref = (key, index)
+            row = receipt.get('item_evidence', {}).get(ref)
+            amounts[ref] = None
+            if row and not row.get('ambiguous') and row['confidence'] >= 60:
+                if row['explicit_extension'] or row['quantity'] is not None:
+                    amounts[ref] = row['landed'].quantize(CENT, rounding=ROUND_HALF_UP)
+    # A combined purchase may be evidenced by an exact printed total rather
+    # than its component descriptions. Preserve that existing correspondence.
+    for page in receipt['verification']:
+        for price in page:
+            if price['role'] not in ('total', 'before_tax'):
+                continue
+            match = markup._item_correspondence(receipt, price)
+            if match and price['confidence'] >= 60:
+                key, index, item, _ = match
+                if amounts[key, index] is None:
+                    amounts[key, index] = price['value']
+
+    shipping_rows = [(key, i) for key, items in receipt['groups'].items()
+                     for i, _ in enumerate(items)
+                     if receipt.get('source_refs', {}).get((key, i)) == 'shipping']
+    shipping_amounts = dict.fromkeys(shipping_rows)
+    shipping_charges = [value for _, kind, value in receipt['charges'] if kind == 'shipping']
+    if shipping_rows and shipping_charges:
+        shipping = sum(shipping_charges, Decimal(0))
+        bases = {key: sum((amounts[key, i] for i in range(len(items))), Decimal(0))
+                 if all(amounts[key, i] is not None for i in range(len(items))) else None
+                 for key, items in source.items()}
+        if len(shipping_rows) == 1:
+            shipping_amounts[shipping_rows[0]] = shipping
+        elif all(value is not None for value in bases.values()):
+            positive = {key: max(Decimal(0), value) for key, value in bases.items()}
+            base = sum(positive.values(), Decimal(0))
+            if base:
+                previous, cumulative = Decimal(0), Decimal(0)
+                for key, i in shipping_rows:
+                    cumulative += positive.get(key, Decimal(0))
+                    rounded = (shipping * cumulative / base).quantize(CENT, rounding=ROUND_HALF_UP)
+                    shipping_amounts[key, i] = rounded - previous
+                    previous = rounded
+    displayed = {}
+    for key, items in receipt['groups'].items():
+        for i, _ in enumerate(items):
+            ref = receipt.get('source_refs', {}).get((key, i), (key, i))
+            displayed[key, i] = shipping_amounts.get((key, i)) if ref == 'shipping' else amounts.get(ref)
+    return displayed
+
+
+def amount_sum(amounts):
+    values = list(amounts)
+    return sum(values, Decimal(0)) if all(value is not None for value in values) else None

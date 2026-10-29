@@ -81,7 +81,7 @@ def test_export_amounts_sources_and_grouping(export_client, grouping):
     assert "Receipt #11" in text and "Receipt #12" in text
     assert "Receipt #13" not in text
     assert "Precision cable <shielded>" in text
-    for label in ("Quantity", "Unit cost", "Line total", "37.05", "0.30", "2,000.20"):
+    for label in ("Quantity", "Unit cost", "Database amount", "Receipt amount", "37.05", "0.30", "2,000.20"):
         assert label in text
     assert downloads == ["https://files.example/receipt.pdf", "https://files.example/invoice.pdf"]
     assert "Original supporting receipt" not in text
@@ -563,7 +563,7 @@ def test_use_notes_appear_below_descriptions_in_both_project_tables(export_clien
                    ("Connect <prototype> & amplifier", "Precision cable <shielded>"))
     text = pdf_text(client.get("/invoices/receipt-report", query_string={"group_by": grouping}))
     # Once in its project's table and once in the other project's excluded table.
-    assert text.count("Connect <prototype> & amplifier") == 2
+    assert " ".join(text.split()).count("Connect <prototype> & amplifier") == 2
     assert "Receipt errors" not in text
     assert "Some receipt totals could not be confirmed" not in text
     if grouping == "project":
@@ -609,6 +609,8 @@ def test_stream_reports_real_work_before_pdf(export_client, monkeypatch, groupin
     records, pdf = read_report_stream(response)
     stages = {}
     for event in records[:-1]:
+        if event['type'] == 'result':
+            continue
         assert event['type'] == 'progress'
         assert 0 <= event['percent'] <= 99
         assert 0 <= event['completed'] <= event['total']
@@ -710,3 +712,31 @@ def test_cost_editor_preserves_recommended_subcent_unit_cost(export_client):
     with sqlite3.connect(app_module.DB_PATH) as db:
         assert db.execute('SELECT cost FROM orders WHERE id=?', (order_id,)).fetchone()[0] == '0.64667'
     assert 'value="0.64667"' in client.get('/submitted').get_data(as_text=True)
+
+
+def test_stream_sends_recommendations_and_timing_outside_pdf(export_client, monkeypatch):
+    client, _ = export_client
+    def supporting_pdf(url):
+        buf = BytesIO()
+        pdf = canvas.Canvas(buf)
+        pdf.drawString(40, 700, 'Precision cable <shielded> Qty 3 $12.34 $37.02')
+        pdf.drawString(40, 650, 'Adapter Qty 3 $0.10 $0.30')
+        pdf.drawString(40, 600, 'Grand Total $37.32')
+        pdf.save()
+        return buf.getvalue()
+    monkeypatch.setattr(reports, 'download_document', supporting_pdf)
+    records, pdf = read_report_stream(client.get('/invoices/receipt-report', query_string={
+        'progress': '1', 'filter_reimbursement_status': 'requires reimbursement'}))
+    result = next(record for record in records if record['type'] == 'result')
+    assert records[-2] is result and records[-1]['type'] == 'pdf'
+    assert result['recommendations'][0]['receipt_id'] == 11
+    assert result['recommendations'][0]['proposed_unit'] == '12.34000'
+    assert result['timing']['actual_seconds'] > 0
+    assert result['timing']['invoice_ids'] == [11]
+    assert result['timing']['updates']
+    assert all('actual_remaining_seconds' in update for update in result['timing']['updates'])
+    assert len(result['timing']['stages']) == 9
+    assert 'files.example' not in json.dumps(result['timing'])
+    text = '\n'.join(page.extract_text() for page in PdfReader(BytesIO(pdf)).pages)
+    assert 'Recommended corrections' not in text
+    assert 'Database amount' in text and 'Receipt amount' in text

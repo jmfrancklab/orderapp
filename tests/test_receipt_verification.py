@@ -152,7 +152,7 @@ def test_report_has_plain_receipt_comparison_and_audit_trail(grouping):
     original = data['pages'][0].get_contents().get_data()
     output = reports.build_pdf([data], grouping)
     text = '\n'.join(p.extract_text() for p in PdfReader(BytesIO(output)).pages)
-    for label in ('Shipping', 'Line total', 'Relevant to project: Research', 'p1.1'):
+    for label in ('Shipping', 'Database amount', 'Receipt amount', 'Relevant to project: Research', 'p1.1'):
         assert label in text
     assert 'Receipt total could not be read' not in text
     assert 'Whole receipt:' not in text

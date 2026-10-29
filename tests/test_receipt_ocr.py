@@ -70,7 +70,11 @@ def test_item_locations_error_table_and_translucent_exclusion_marks(monkeypatch,
                 state.update(resources['/ExtGState'][args[0]].get_object())
             elif op in (b'rg', b'RG'):
                 state[op] = tuple(float(v) for v in args)
-            elif op == b'S' and state.get(b'RG', (0,))[0] > .6:
+            elif op == b're':
+                state['path_kind'] = 'rectangle'
+            elif op == b'm':
+                state['path_kind'] = 'line'
+            elif op == b'S' and state.get(b'RG', (0,))[0] > .6 and state.get('path_kind') == 'line':
                 assert state.get('/CA') == .5
                 seen_strike = True
             elif op == b'Tj' and 'p1.2' in str(args[0]) and state.get('/ca') == .5:

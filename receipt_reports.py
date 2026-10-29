@@ -1,7 +1,7 @@
 """Filtered purchase summaries with reviewed costs and bitmap supporting pages."""
 from collections import OrderedDict
 from copy import deepcopy
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from io import BytesIO
 import ipaddress
@@ -30,6 +30,7 @@ from reportlab.platypus import (
 
 import quotes
 import receipt_markup
+import receipt_review
 
 PAGE_WIDTH, PAGE_HEIGHT = letter
 MARGIN = 36
@@ -226,28 +227,49 @@ class ReportProgress:
         self.done = dict.fromkeys(self.totals, 0)
         self.rates = dict(self.DEFAULTS)
         self.started = monotonic()
+        self.snapshots = []
+        self.stage_timings = []
 
     def start(self, stage, total=None):
         self.stage = stage
         if total is not None:
             self.totals[stage] = total
         self.stage_started = monotonic()
+        self.stage_timings.append(dict(stage=stage, total=self.totals[stage],
+                                       predicted_seconds=self.totals[stage] * self.rates[stage],
+                                       actual_seconds=0))
         return self.snapshot()
 
     def advance(self):
         self.done[self.stage] += 1
         elapsed = monotonic() - self.stage_started
         self.rates[self.stage] = elapsed / self.done[self.stage]
+        self.stage_timings[-1]["actual_seconds"] = elapsed
         return self.snapshot()
 
     def snapshot(self):
         remaining = sum(max(0, self.totals[key] - self.done[key]) * self.rates[key]
                         for key in self.totals)
         elapsed = monotonic() - self.started
-        return dict(type="progress", stage=self.stage, label=self.LABELS[self.stage],
+        event = dict(type="progress", stage=self.stage, label=self.LABELS[self.stage],
                     completed=self.done[self.stage], total=self.totals[self.stage],
                     elapsed_seconds=round(elapsed, 2), remaining_seconds=round(remaining, 1),
                     percent=round(min(99, 100 * elapsed / max(.001, elapsed + remaining)), 1))
+        self.snapshots.append(dict(event, counts=dict(self.totals), seconds_per_unit=dict(self.rates)))
+        return event
+
+    def timing_log(self):
+        actual = monotonic() - self.started
+        updates = []
+        for snapshot in self.snapshots:
+            remaining = max(0, actual - snapshot["elapsed_seconds"])
+            updates.append(dict(snapshot, actual_remaining_seconds=round(remaining, 3),
+                                prediction_error_seconds=round(snapshot["remaining_seconds"] - remaining, 3)))
+        return dict(format_version=1, generated_at=datetime.now(timezone.utc).isoformat(),
+                    actual_seconds=round(actual, 3), stages=self.stage_timings,
+                    default_seconds_per_unit=dict(self.DEFAULTS), final_counts=dict(self.totals),
+                    initial_estimated_seconds=self.snapshots[0]["remaining_seconds"] if self.snapshots else None,
+                    updates=updates)
 
 
 def _consume(events):
@@ -365,7 +387,7 @@ class SupportingPage(Flowable):
             self.canv.clipPath(clip, stroke=0)
             self.canv.setStrokeColor(OTHER_PROJECT_COLOR)
             self.canv.setStrokeAlpha(.5)
-            self.canv.setLineWidth(.8)
+            self.canv.setLineWidth(.4)
             left, bottom = float(self.page.cropbox.left), float(self.page.cropbox.bottom)
             for x0, y0, x1, y1 in self.strikes:
                 self.canv.line((x0 - left) * self.scale, (y0 - bottom) * self.scale,
@@ -378,7 +400,7 @@ class SupportingPage(Flowable):
                     self.canv.setFillColor(colors.HexColor("#008000"))
                     self.canv.setFillAlpha(.5)
                     self.draw_reference((x1-left)*self.scale + 2,
-                                        (y1-bottom)*self.scale - 2, ref["id"], True)
+                                        (y1-bottom)*self.scale - 1, ref["id"], True)
             self.canv.restoreState()
         self.canv.saveState()
         left, bottom = float(self.page.cropbox.left), float(self.page.cropbox.bottom)
@@ -390,15 +412,31 @@ class SupportingPage(Flowable):
             x0, y0, x1, y1 = annotation["line"]
             x0, y0, x1, y1 = ((x0-left)*self.scale, (y0-bottom)*self.scale,
                               (x1-left)*self.scale, (y1-bottom)*self.scale)
+            if annotation.get("is_receipt_total"):
+                height = max(1, annotation["spans"][annotation["owner"]].get("height", 8) * self.scale)
+                self.canv.saveState()
+                self.canv.setStrokeAlpha(1)
+                self.canv.setFillAlpha(1)
+                self.canv.setStrokeColor(OTHER_PROJECT_COLOR)
+                self.canv.setFillColor(OTHER_PROJECT_COLOR)
+                self.canv.setLineWidth(.4)
+                self.canv.rect(x0 - .5, y0 - height * .55 - .5, x1 - x0 + 1, height + 1)
+                label = "total " + annotation["id"]
+                label_width = self.canv.stringWidth(label, "Helvetica", 2.5)
+                label_x = x1 + 1 if x1 + label_width + 1 <= self.width else x0 - label_width - 1
+                self.canv.setFont("Helvetica", 2.5)
+                self.canv.drawString(max(0, label_x), y0 - 1.25, label)
+                self.canv.restoreState()
+                continue
             successful = annotation["status"] in ("ok", "strike")
             self.canv.setFillColor(colors.HexColor("#008000") if successful else OTHER_PROJECT_COLOR)
             self.canv.setFillAlpha(.5)
             # A single baseline: reference immediately precedes its Unicode mark.
-            self.draw_reference(x1 + 2, y1 - 2, annotation["id"], successful)
+            self.draw_reference(x1 + 1, y1 - 1, annotation["id"], successful)
             if annotation["status"] == "strike":
                 self.canv.setStrokeColor(OTHER_PROJECT_COLOR)
                 self.canv.setStrokeAlpha(.5)
-                self.canv.setLineWidth(.8)
+                self.canv.setLineWidth(.4)
                 self.canv.line(x0, y0, x1, y1)
         self.canv.restoreState()
         self.canv.setStrokeColor(colors.black)
@@ -407,12 +445,12 @@ class SupportingPage(Flowable):
 
     def draw_reference(self, x, y, reference, successful):
         symbol = "✓" if successful else "❓"
-        width = self.canv.stringWidth(reference + " ", "Helvetica", 5)
-        total_width = width + self.canv.stringWidth(symbol, "ReceiptSymbols", 5)
+        width = self.canv.stringWidth(reference + " ", "Helvetica", 2.5)
+        total_width = width + self.canv.stringWidth(symbol, "ReceiptSymbols", 2.5)
         x = min(x, self.width - total_width)
-        self.canv.setFont("Helvetica", 5)
+        self.canv.setFont("Helvetica", 2.5)
         self.canv.drawString(x, y, reference + " ")
-        self.canv.setFont("ReceiptSymbols", 5)
+        self.canv.setFont("ReceiptSymbols", 2.5)
         self.canv.drawString(x + width, y, symbol)
 
 
@@ -483,7 +521,12 @@ def _build_pdf(receipts, grouping, progress):
     yield progress.start("matching", section_count)
     for receipt in receipts:
         for project in list(receipt["groups"]) or [None]:
-            decisions[id(receipt), project] = receipt_markup.verify_amounts(receipt, project)
+            annotations = receipt_markup.verify_amounts(receipt, project)
+            totals = {(p["page"], p["id"]) for p in receipt.get("total_occurrences", [])}
+            for marks in annotations:
+                for mark in marks:
+                    mark["is_receipt_total"] = (mark["page"], mark["id"]) in totals
+            decisions[id(receipt), project] = annotations
             yield progress.advance()
 
     # Cache only compressed rasters. ReportLab reuses their image resources
@@ -501,6 +544,16 @@ def _build_pdf(receipts, grouping, progress):
     def item_total(receipt, key, index, item):
         return item[0] + sum(receipt["allocations"][key, index].values(), Decimal(0))
 
+    def group_receipt_total(receipt, key):
+        return receipt_review.amount_sum(receipt["receipt_amounts"].get((key, i))
+                                         for i in range(len(receipt["groups"][key])))
+
+    def receipt_amount_total(receipt):
+        return receipt_review.amount_sum(receipt["receipt_amounts"].values())
+
+    def amount_text(value):
+        return "—" if value is None else f"{value:,.2f}"
+
     def group_total(receipt, key):
         return sum((item_total(receipt, key, index, item)
                     for index, item in enumerate(receipt["groups"][key])), Decimal(0))
@@ -508,6 +561,9 @@ def _build_pdf(receipts, grouping, progress):
     styles = getSampleStyleSheet()
     styles.add(ParagraphStyle("OtherProject", parent=styles["Normal"], textColor=OTHER_PROJECT_COLOR))
     styles.add(ParagraphStyle("OtherProjectHeading", parent=styles["Heading3"], textColor=OTHER_PROJECT_COLOR))
+    styles.add(ParagraphStyle("ReceiptReference", parent=styles["Normal"], fontSize=5, leading=6))
+    styles.add(ParagraphStyle("AmountHeader", parent=styles["Normal"], fontSize=8, leading=9))
+    styles.add(ParagraphStyle("UnbilledReference", parent=styles["ReceiptReference"], textColor=OTHER_PROJECT_COLOR))
     story = []
 
     def paragraph(text, style="Normal", outline_level=None):
@@ -539,25 +595,35 @@ def _build_pdf(receipts, grouping, progress):
         result.outline_level = outline_level
         return result
 
-    def purchases(items, project_names=None, allocations=None, locations=None, notes=None):
+    def purchases(items, project_names=None, allocations=None, locations=None, notes=None, receipt_values=None):
         other = project_names is not None
         style = "OtherProject" if other else "Normal"
-        rows = [["Description"] + (["Project"] if other else []) + ["Location", "Quantity", "Unit cost", "Line total"]]
+        receipt_values = receipt_values if receipt_values is not None else [None] * len(items)
+        headings = ["Description"] + (["Project"] if other else []) + ["Location", "Quantity", "Unit cost", "Database amount", "Receipt amount"]
+        rows = [[Paragraph(label, styles["AmountHeader"]) for label in headings]]
         for index, (amount, description, quantity, cost) in enumerate(items):
+            unbilled = receipt_values[index] == 0
+            row_style = "OtherProject" if unbilled else style
+            location = locations[index] if locations else paragraph("—", "OtherProject")
+            if unbilled and isinstance(location, Paragraph):
+                location = Paragraph(re.sub(r'color="[^"]*"', 'color="#b00020"', location.text),
+                                     styles["UnbilledReference"])
             description_text = escape(description).replace("\n", "<br/>")
             if notes and notes[index]:
-                description_text += '<br/><font color="#808080"><i>' + escape(notes[index]).replace("\n", "<br/>") + '</i></font>'
-            rows.append([Paragraph(description_text, styles[style])]
+                note_color = "#b00020" if unbilled else "#808080"
+                description_text += '<br/><font color="' + note_color + '"><i>' + escape(notes[index]).replace("\n", "<br/>") + '</i></font>'
+            rows.append([Paragraph(description_text, styles[row_style])]
                         + ([paragraph(project_names[index], style)] if other else [])
-                        + [locations[index] if locations else paragraph("Not found", "OtherProject"), str(quantity), f"{cost:,.5f}".rstrip("0").rstrip(".") if cost.as_tuple().exponent < -2 else f"{cost:,.2f}",
-                           f"{amount:,.2f}"])
+                        + [location, str(quantity),
+                           f"{cost:,.5f}".rstrip("0").rstrip(".") if cost.as_tuple().exponent < -2 else f"{cost:,.2f}",
+                           f"{amount:,.2f}", amount_text(receipt_values[index])])
         total = sum((item[0] + sum(allocations[index].values(), Decimal(0))
                      for index, item in enumerate(items)), Decimal(0))
         rows.append(["OTHER PROJECTS TOTAL:" if other else "TOTAL:"]
-                    + [""] * (len(rows[0]) - 2) + [f"{total:,.2f}"])
-        widths = [205, 75, 70, 45, 65, 80] if other else [280, 70, 45, 65, 80]
-        table = Table(rows, colWidths=widths,
-                      hAlign="LEFT", repeatRows=1, splitInRow=1)
+                    + [""] * (len(rows[0]) - 3)
+                    + [f"{total:,.2f}", amount_text(receipt_review.amount_sum(receipt_values))])
+        widths = [150, 70, 50, 45, 55, 85, 85] if other else [220, 50, 45, 55, 85, 85]
+        table = Table(rows, colWidths=widths, hAlign="LEFT", repeatRows=1, splitInRow=1)
         table.setStyle(TableStyle([
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
             ("ALIGN", (3 if other else 2, 0), (-1, -1), "RIGHT"),
@@ -568,11 +634,14 @@ def _build_pdf(receipts, grouping, progress):
             ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#f7f8fa")]),
             ("LINEABOVE", (0, -1), (-1, -1), 0.7, colors.black),
             ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
-            ("SPAN", (0, -1), (-2, -1)),
+            ("SPAN", (0, -1), (-3, -1)),
             ("TEXTCOLOR", (0, 0), (-1, -1), OTHER_PROJECT_COLOR if other else colors.black),
             ("TOPPADDING", (0, 0), (-1, -1), 7),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
         ]))
+        for index, value in enumerate(receipt_values):
+            if value == 0:
+                table.setStyle(TableStyle([("TEXTCOLOR", (0, index + 1), (-1, index + 1), OTHER_PROJECT_COLOR)]))
         story.extend([table, Spacer(1, 12)])
 
     def documents(receipt, excluded=(), relevant=(), costs=None, project=None):
@@ -653,10 +722,8 @@ def _build_pdf(receipts, grouping, progress):
                 color = "#008000" if mark["status"] in ("ok", "strike") else "#b00020"
                 symbol = "✓" if mark["status"] in ("ok", "strike") else "❓"
                 label = escape(mark["id"]) + f' <font name="ReceiptSymbols">{symbol}</font>'
-                if mark["status"] == "?":
-                    label += f" (${mark['value']:,.2f})"
                 labels.append(f'<font color="{color}">{label}</font>')
-            locations.append(Paragraph("<br/>".join(labels) if labels else '<font color="#b00020">Not found</font>', styles["Normal"]))
+            locations.append(Paragraph("<br/>".join(labels) if labels else '<font color="#b00020">Not found</font>', styles["ReceiptReference"]))
         return locations
 
     project_totals = {}
@@ -666,14 +733,12 @@ def _build_pdf(receipts, grouping, progress):
     ordered_projects = sorted(project_totals, key=lambda item: (item[1].casefold(), item[0] or 0))
 
     def summary_table(headings, rows, total_label, total, receipt_amounts=None):
-        data = [headings] + [[label if isinstance(label, Paragraph) else paragraph(label), f"{amount:,.2f}"] for label, amount in rows]
-        data.append([total_label, f"{total:,.2f}"])
-        widths = [CONTENT_WIDTH * .32, CONTENT_WIDTH * .18]
-        if receipt_amounts is not None:
-            for row, amount in zip(data[1:-1], receipt_amounts):
-                row.insert(1, f"{amount:,.2f}" if amount is not None else "—")
-            data[-1].insert(1, "")
-            widths = [CONTENT_WIDTH * .5, CONTENT_WIDTH * .25, CONTENT_WIDTH * .25]
+        receipt_amounts = receipt_amounts if receipt_amounts is not None else [None] * len(rows)
+        data = [[headings[0], "Database amount", "Receipt amount"]]
+        data.extend([[label if isinstance(label, Paragraph) else paragraph(label), f"{amount:,.2f}", amount_text(receipt_amount)]
+                     for (label, amount), receipt_amount in zip(rows, receipt_amounts)])
+        data.append([total_label, f"{total:,.2f}", amount_text(receipt_review.amount_sum(receipt_amounts))])
+        widths = [CONTENT_WIDTH * .5, CONTENT_WIDTH * .25, CONTENT_WIDTH * .25]
         table = Table(data, colWidths=widths,
                       hAlign="CENTER", repeatRows=1, splitInRow=1)
         table.setStyle(TableStyle([
@@ -699,7 +764,9 @@ def _build_pdf(receipts, grouping, progress):
                 f"Invoice shipping: ${receipt['shipping']:,.2f}. Shipping is included below"
                 + (" in proportion to each project's stored purchase value."
                    if len(receipt["groups"]) > 1 else ".")))
-        purchases(receipt["groups"][key], allocations=[receipt["allocations"][key, i]
+        purchases(receipt["groups"][key],
+                  receipt_values=[receipt["receipt_amounts"].get((key, i)) for i in range(len(receipt["groups"][key]))],
+                  allocations=[receipt["allocations"][key, i]
                   for i in range(len(receipt["groups"][key]))],
                   locations=item_locations(receipt, [(key, i) for i in range(len(receipt["groups"][key]))], key),
                   notes=[receipt.get("use_notes", {}).get(receipt.get("source_refs", {}).get((key, i), (key, i)), "")
@@ -715,7 +782,17 @@ def _build_pdf(receipts, grouping, progress):
             story.append(paragraph(f"Purchases for other projects (excluded from total for {key[1]})", "OtherProjectHeading"))
             purchases(other_items, other_projects, other_allocations,
                       item_locations(receipt, other_keys, key),
+                      receipt_values=[receipt["receipt_amounts"].get(ref) for ref in other_keys],
                       notes=[receipt.get("use_notes", {}).get(receipt.get("source_refs", {}).get(ref, ref), "") for ref in other_keys])
+        source_total = receipt_amount_total(receipt)
+        if source_total is not None and receipt["original_total"] is not None:
+            source_project = group_receipt_total(receipt, key)
+            source_other = source_total - source_project
+            difference = receipt["original_total"] - receipt["excluded_tax"] - source_total
+            story.append(paragraph(
+                f"Receipt check: this project ${source_project:,.2f} + other projects ${source_other:,.2f} "
+                f"= ${source_total:,.2f}. OCR total ${receipt['original_total']:,.2f}, "
+                f"less tax ${receipt['excluded_tax']:,.2f}; difference ${difference:,.2f}."))
         documents(receipt, [item[1] for item in other_items],
                   [item[1] for item in receipt["groups"][key]],
                   costs=[(item[0], item[3]) for item in other_items], project=key)
@@ -723,72 +800,21 @@ def _build_pdf(receipts, grouping, progress):
     def receipt_total(receipt):
         return receipt["allocated_total"]
 
-    def recommended_corrections():
-        recommendations = [(receipt, suggestion) for receipt in receipts
-                           for suggestion in receipt.get("recommendations", [])]
-        if not recommendations:
-            return
-        story.append(paragraph("Recommended corrections", "Heading2"))
-        story.append(paragraph(
-            "Review these suggestions against the original receipt before editing. "
-            "Prices below are unit costs including attributable tariffs; database values are unchanged."))
-
-        def money(value):
-            if value is None:
-                return "—"
-            text = format(value, ",f")
-            if "." in text:
-                text = text.rstrip("0").rstrip(".")
-            if "." not in text:
-                text += ".00"
-            elif len(text.rsplit(".", 1)[1]) < 2:
-                text += "0"
-            return "$" + text
-
-        data = [[paragraph(label) for label in ["Receipt / project", "Item", "Unit cost: database → suggested", "Reason / evidence"]]]
-        for receipt, suggestion in recommendations:
-            current = money(suggestion["current_unit"])
-            if suggestion["proposed_unit"] is not None:
-                change = current + ' <font name="Symbol">→</font> ' + money(suggestion["proposed_unit"])
-            elif suggestion["kind"] == "unbilled":
-                change = current + ' <font name="Symbol">→</font> check invoice'
-            elif suggestion["kind"] == "quantity":
-                change = current + ' <font name="Symbol">→</font> check quantity'
-            else:
-                change = "Review tariff " + money(suggestion["tariff"])
-            reason = suggestion["reason"]
-            if suggestion["refs"]:
-                reason += " Reference: " + suggestion["refs"] + "."
-            data.append([
-                paragraph(f"#{receipt['id']} / {suggestion['project']}"),
-                paragraph(suggestion["item"]), Paragraph(change, styles["Normal"]), paragraph(reason)])
-        table = Table(data, colWidths=[75, 135, 110, CONTENT_WIDTH - 320],
-                      hAlign="LEFT", repeatRows=1, splitInRow=1)
-        table.setStyle(TableStyle([
-            ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ("BACKGROUND", (0, 0), (-1, 0), TABLE_HEADER_GRAY),
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("FONTSIZE", (0, 0), (-1, -1), 8),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f7f8fa")]),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
-            ("TOPPADDING", (0, 0), (-1, -1), 7),
-        ]))
-        story.extend([table, Spacer(1, 16)])
-
     yield progress.start("sections", section_count)
     story.append(paragraph("Report summary", "Heading1", outline_level=0))
-    recommended_corrections()
     if grouping == "receipt":
         summary_table(["Receipt", "Amount"], [
             (Paragraph(receipt_label(receipt, short=True), styles["Normal"]), receipt_total(receipt))
-            for receipt in receipts], "OVERALL TOTAL:", sum(project_totals.values(), Decimal(0)))
+            for receipt in receipts], "OVERALL TOTAL:", sum(project_totals.values(), Decimal(0)),
+                      receipt_amounts=[receipt["reimbursable_total"] for receipt in receipts])
         for receipt in receipts:
             story.append(PageBreak())
             story.append(receipt_title(receipt, style="Heading1", outline_level=0))
             keys = [key for key in ordered_projects if key in receipt["groups"]]
             summary_table(["Project", "Amount"], [
                 (key[1], group_total(receipt, key))
-                for key in keys], "RECEIPT TOTAL:", receipt_total(receipt))
+                for key in keys], "RECEIPT TOTAL:", receipt_total(receipt),
+                          receipt_amounts=[group_receipt_total(receipt, key) for key in keys])
             for key in keys:
                 purchase_section(receipt, key)
                 yield progress.advance()
@@ -798,14 +824,17 @@ def _build_pdf(receipts, grouping, progress):
                 yield progress.advance()
     else:
         summary_table(["Project", "Amount"], [(key[1], project_totals[key]) for key in ordered_projects],
-                      "OVERALL TOTAL:", sum(project_totals.values(), Decimal(0)))
+                      "OVERALL TOTAL:", sum(project_totals.values(), Decimal(0)),
+                      receipt_amounts=[receipt_review.amount_sum(group_receipt_total(receipt, key)
+                                       for receipt in receipts if key in receipt["groups"])
+                                       for key in ordered_projects])
         for key in ordered_projects:
             story.append(PageBreak())
             story.append(paragraph(key[1], "Heading1", outline_level=0))
             summary_table(["Receipt", "Receipt amount", "Relevant to project"], [
                 (Paragraph(receipt_label(receipt, short=True), styles["Normal"]), group_total(receipt, key))
                 for receipt in receipts if key in receipt["groups"]], "PROJECT TOTAL:", project_totals[key],
-                receipt_amounts=[receipt["original_total"] for receipt in receipts if key in receipt["groups"]])
+                receipt_amounts=[group_receipt_total(receipt, key) for receipt in receipts if key in receipt["groups"]])
             for receipt in receipts:
                 if key in receipt["groups"]:
                     purchase_section(receipt, key)
@@ -845,4 +874,10 @@ def generate_events(db, invoices, grouping):
     invoices = sorted(invoices, key=lambda invoice: invoice["id"])
     progress = ReportProgress(invoices)
     receipts = yield from _collect_receipts(db, invoices, progress)
-    return (yield from _build_pdf(receipts, grouping, progress))
+    report = yield from _build_pdf(receipts, grouping, progress)
+    recommendations = [dict({key: str(value) if isinstance(value, Decimal) else value
+                             for key, value in suggestion.items()}, receipt_id=receipt["id"])
+                       for receipt in receipts for suggestion in receipt.get("recommendations", [])]
+    yield dict(type="result", recommendations=recommendations,
+               timing=dict(progress.timing_log(), grouping=grouping, invoice_ids=[row["id"] for row in invoices]))
+    return report

@@ -722,3 +722,6 @@ input[data-field="location"]:required:invalid { border-color: var(--alert); }
 .location-dialog button { margin: .5rem .5rem 0 0; }
 
 .receipt-report-progress { width: 12rem; vertical-align: middle; margin: 0 .5rem; }
+
+.receipt-report-popup table { width: 100%; border-collapse: collapse; margin: .75rem 0; }
+.receipt-report-popup th, .receipt-report-popup td { padding: .5rem; text-align: left; vertical-align: top; border-bottom: 1px solid #ddd; }

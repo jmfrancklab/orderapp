@@ -569,14 +569,15 @@ def reconcile(receipt):
     if tariff_summaries and not any(kind == "tariff" for _, kind, _ in charges):
         terminal = tariff_summaries[-1]
         charges.append((terminal["id"], "tariff", terminal["value"]))
-    # An exact whole-receipt match wins over inferred labels and page totals.
-    # OCR can miss an isolated Total label at the end of a multipage receipt.
-    exact_totals = [p for row in evidence for p in row
-                    if p["value"] == base + tax and p["value"] != 0
-                    and p["role"] in ("total", "before_tax")]
-    if exact_totals:
-        terminal = exact_totals[-1]
-        terminal["role"] = "total"
+    # Read the receipt total independently of the database. A matching
+    # merchandise/before-tax subtotal must never replace an explicit total.
+    total_occurrences = []
+    for page_prices in evidence:
+        candidates = [p for p in page_prices if p["role"] == "total"]
+        if not candidates and not totals and tax == 0:
+            candidates = [p for p in page_prices if p["role"] == "before_tax"]
+        if candidates:
+            total_occurrences.append(candidates[-1])
     # Match an otherwise unclaimed amount to entered shipping, to the cent.
     shipping = Decimal(str(receipt.get("shipping") or "0"))
     if shipping and not any(kind == "shipping" for _, kind, _ in charges):
@@ -587,21 +588,19 @@ def reconcile(receipt):
             price = candidates[-1]
             price["role"] = "shipping"
             charges.append((price["id"], "shipping", shipping))
-    # One terminal total per page; multi-order supporting files sum their orders.
-    total = sum((next((p["value"] for p in reversed(row) if p["role"] == "total"), Decimal(0))
-                 for row in evidence), Decimal(0)) if totals else None
-    if exact_totals:
-        total = base + tax
+    total = sum((p["value"] for p in total_occurrences), Decimal(0)) if total_occurrences else None
     allocations = {(key, i): {"shipping": Decimal(0), "other": Decimal(0)} for key, i, _ in items}
     reimbursable = base
     residual = total - tax - reimbursable if total is not None else None
     receipt.pop("item_candidates", None)
     receipt.update(verification=evidence, charges=charges, excluded_tax=tax,
+                   total_occurrences=total_occurrences,
                    original_total=total, reimbursable_total=total - tax if total is not None else None,
                    allocated_total=reimbursable, unresolved=residual, allocations=allocations)
     import receipt_review
     receipt["item_evidence"] = receipt_review.item_evidence(receipt)
     receipt["recommendations"] = receipt_review.recommendations(receipt)
+    receipt["receipt_amounts"] = receipt_review.receipt_amounts(receipt)
     return receipt
 
 
@@ -763,7 +762,7 @@ def verify_amounts(receipt, project=None):
                               f"${source['tariff']:,.2f} = ${source['landed']:,.2f}; "
                               f"database line ${item[0]:,.2f}. "
                               + ("Tariff is included in the stored item cost." if included else
-                                 "Include the attributable tariff in item cost; review the opening recommendations."))
+                                 "Include the attributable tariff in item cost; review the recommendations on the website."))
             if status == "?":
                 reason = f"OCR amount ${value:,.2f} ({role.replace('_', ' ')}; {price['context']}): " + reason
                 if receipt.get("explanation"):

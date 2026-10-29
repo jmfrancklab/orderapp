@@ -850,6 +850,7 @@
   var reportActions = document.getElementById("receipt-report-actions");
   var reportPopup = null, reportOverlay = null, reportReturnFocus = null;
   var reportPopupBusy = false;
+  var reportTimingUrl = null;
 
   function closeReceiptReportPopup() {
     if (reportPopupBusy) return;
@@ -1011,7 +1012,53 @@
     else close.focus();
   }
 
-  async function readReceiptReport(response, onProgress) {
+  function showReceiptRecommendations(recommendations) {
+    if (!recommendations.length) return;
+    closeReceiptReportPopup();
+    reportReturnFocus = document.activeElement;
+    reportOverlay = document.createElement("div");
+    reportOverlay.className = "xl-overlay";
+    reportOverlay.onclick = closeReceiptReportPopup;
+    document.body.appendChild(reportOverlay);
+    reportPopup = document.createElement("div");
+    reportPopup.className = "xl-popup receipt-report-popup";
+    reportPopup.setAttribute("role", "dialog");
+    reportPopup.setAttribute("aria-modal", "true");
+    reportPopup.setAttribute("aria-labelledby", "receipt-recommendations-title");
+    var head = document.createElement("div");
+    head.className = "xl-popup-head";
+    var title = document.createElement("strong");
+    title.id = "receipt-recommendations-title";
+    title.textContent = "Recommended corrections";
+    var close = makePopupBtn("×", "vendor-popup-x", closeReceiptReportPopup);
+    close.setAttribute("aria-label", "Close");
+    head.appendChild(title); head.appendChild(close); reportPopup.appendChild(head);
+    var table = document.createElement("table");
+    var header = document.createElement("tr");
+    ["Receipt / project", "Item", "Unit cost: database → receipt", "Reason / evidence"].forEach(function (text) {
+      var cell = document.createElement("th"); cell.textContent = text; header.appendChild(cell);
+    });
+    table.appendChild(header);
+    recommendations.forEach(function (item) {
+      var row = document.createElement("tr");
+      var current = item.current_unit === null ? "—" : "$" + fmtCurrency(item.current_unit);
+      var change = item.proposed_unit !== null ? current + " → $" + fmtCurrency(item.proposed_unit)
+        : item.kind === "unbilled" ? current + " → check invoice"
+        : item.kind === "quantity" ? current + " → check quantity" : "Review tariff $" + fmtCurrency(item.tariff);
+      ["#" + item.receipt_id + " / " + item.project, item.item, change,
+        item.reason + (item.refs ? " Reference: " + item.refs : "")].forEach(function (text) {
+        var cell = document.createElement("td"); cell.textContent = text; row.appendChild(cell);
+      });
+      table.appendChild(row);
+    });
+    reportPopup.appendChild(table);
+    reportPopup.appendChild(makePopupBtn("Close", "mini", closeReceiptReportPopup));
+    document.body.appendChild(reportPopup);
+    document.addEventListener("keydown", receiptReportPopupKey);
+    close.focus();
+  }
+
+  async function readReceiptReport(response, onProgress, onResult) {
     var reader = response.body.getReader();
     var decoder = new TextDecoder();
     var pending = new Uint8Array(0);
@@ -1038,6 +1085,7 @@
             throw error;
           }
           if (event.type === "progress") onProgress(event);
+          else if (event.type === "result" && onResult) onResult(event);
           else if (event.type === "pdf") {
             pdfSize = event.size;
             chunks.push(pending);
@@ -1066,7 +1114,7 @@
     progress.hidden = false;
     progress.removeAttribute("value");
     status.textContent = "Preparing PDF… loading purchases.";
-    var failure = null;
+    var failure = null, details = {}, timingUpdates = [], started = Date.now();
     try {
       var reportUrl = new URL(reportActions.dataset.reportUrl, window.location.origin);
       reportUrl.search = window.location.search;
@@ -1086,10 +1134,11 @@
       }
       var blob = streaming
         ? await readReceiptReport(response, function (event) {
+          timingUpdates.push(Object.assign({}, event, {received_elapsed_seconds: (Date.now() - started) / 1000}));
           progress.value = event.percent;
           status.textContent = event.label + "… " + event.completed + " of " + event.total
             + "; about " + Math.max(1, Math.ceil(event.remaining_seconds)) + " seconds remaining (estimated).";
-        })
+        }, function (event) { details = event; })
         : await response.blob();
       var blobUrl = URL.createObjectURL(blob);
       var link = document.createElement("a");
@@ -1098,6 +1147,14 @@
       document.body.appendChild(link);
       link.click(); link.remove();
       setTimeout(function () { URL.revokeObjectURL(blobUrl); }, 1000);
+      var timing = {format_version: 1, server: details.timing || null,
+        browser: {elapsed_seconds: (Date.now() - started) / 1000, progress_updates: timingUpdates}};
+      var timingLink = reportActions.querySelector(".receipt-report-timing");
+      if (reportTimingUrl) URL.revokeObjectURL(reportTimingUrl);
+      reportTimingUrl = URL.createObjectURL(new Blob([JSON.stringify(timing, null, 2)], {type: "application/json"}));
+      timingLink.href = reportTimingUrl;
+      timingLink.download = "receipt-report-timing-" + new Date().toISOString().replace(/[:.]/g, "-") + ".json";
+      timingLink.hidden = false;
     } catch (error) {
       failure = error;
     } finally {
@@ -1107,6 +1164,7 @@
       buttons.forEach(function (item) { item.disabled = false; });
     }
     if (failure) showReceiptReportErrors(failure, grouping);
+    else showReceiptRecommendations(details.recommendations || []);
   }
 
   if (reportActions) {
