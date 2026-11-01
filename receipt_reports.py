@@ -755,6 +755,7 @@ def _build_pdf(receipts, grouping, progress):
 
     def purchase_section(receipt, key):
         # Both report orders render exactly the same receipt/project purchase.
+        story.append(PageBreak())
         story.append(receipt_title(receipt, outline_level=1, project=key))
         if receipt.get("explanation"):
             story.extend([paragraph("Invoice explanation", "Heading3"),
@@ -845,6 +846,7 @@ def _build_pdf(receipts, grouping, progress):
                 story.append(PageBreak())
             story.append(paragraph("Receipts without purchases", "Heading1", outline_level=0))
             for receipt in orphans:
+                story.append(PageBreak())
                 documents(receipt)
                 yield progress.advance()
 
