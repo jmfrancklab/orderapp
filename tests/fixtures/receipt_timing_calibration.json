@@ -1,0 +1,144 @@
+[
+  {
+    "source": "receipt-report-timing-2026-10-29T17-01-44-875Z.json",
+    "actual_seconds": 242.675,
+    "counts": {
+      "purchases": 13,
+      "downloads": 13,
+      "ocr": 30,
+      "reconcile": 13,
+      "matching": 18,
+      "sections": 18,
+      "layout": 1,
+      "merge": 30,
+      "write": 1
+    },
+    "stages": [
+      {
+        "stage": "purchases",
+        "total": 13,
+        "predicted_seconds": 0.13,
+        "actual_seconds": 0.06600611601606943
+      },
+      {
+        "stage": "downloads",
+        "total": 13,
+        "predicted_seconds": 13,
+        "actual_seconds": 25.801746837008977
+      },
+      {
+        "stage": "ocr",
+        "total": 30,
+        "predicted_seconds": 90,
+        "actual_seconds": 160.27532563201385
+      },
+      {
+        "stage": "reconcile",
+        "total": 13,
+        "predicted_seconds": 0.65,
+        "actual_seconds": 6.7266806779953185
+      },
+      {
+        "stage": "matching",
+        "total": 18,
+        "predicted_seconds": 1.8,
+        "actual_seconds": 11.01372986799106
+      },
+      {
+        "stage": "merge",
+        "total": 30,
+        "predicted_seconds": 3,
+        "actual_seconds": 0.0009171919955406338
+      },
+      {
+        "stage": "sections",
+        "total": 18,
+        "predicted_seconds": 0.9,
+        "actual_seconds": 4.131856446998427
+      },
+      {
+        "stage": "layout",
+        "total": 1,
+        "predicted_seconds": 3.6899999999999995,
+        "actual_seconds": 34.49769068401656
+      },
+      {
+        "stage": "write",
+        "total": 1,
+        "predicted_seconds": 1.2,
+        "actual_seconds": 0.0437079580151476
+      }
+    ]
+  },
+  {
+    "source": "receipt-report-timing-2026-11-02T16-10-47-975Z.json",
+    "actual_seconds": 259.258,
+    "counts": {
+      "purchases": 12,
+      "downloads": 12,
+      "ocr": 27,
+      "reconcile": 12,
+      "matching": 17,
+      "sections": 17,
+      "layout": 1,
+      "merge": 27,
+      "write": 1
+    },
+    "stages": [
+      {
+        "stage": "purchases",
+        "total": 12,
+        "predicted_seconds": 0.12,
+        "actual_seconds": 0.05994100599491503
+      },
+      {
+        "stage": "downloads",
+        "total": 12,
+        "predicted_seconds": 12,
+        "actual_seconds": 21.922703051008284
+      },
+      {
+        "stage": "ocr",
+        "total": 27,
+        "predicted_seconds": 81,
+        "actual_seconds": 164.6936210529966
+      },
+      {
+        "stage": "reconcile",
+        "total": 12,
+        "predicted_seconds": 0.6000000000000001,
+        "actual_seconds": 6.337355044001015
+      },
+      {
+        "stage": "matching",
+        "total": 17,
+        "predicted_seconds": 1.7000000000000002,
+        "actual_seconds": 15.589674150993233
+      },
+      {
+        "stage": "merge",
+        "total": 27,
+        "predicted_seconds": 2.7,
+        "actual_seconds": 0.0034893289994215593
+      },
+      {
+        "stage": "sections",
+        "total": 17,
+        "predicted_seconds": 0.8500000000000001,
+        "actual_seconds": 3.886034342998755
+      },
+      {
+        "stage": "layout",
+        "total": 1,
+        "predicted_seconds": 3.5300000000000002,
+        "actual_seconds": 46.62173215400253
+      },
+      {
+        "stage": "write",
+        "total": 1,
+        "predicted_seconds": 1.14,
+        "actual_seconds": 0.03061978900223039
+      }
+    ]
+  }
+]

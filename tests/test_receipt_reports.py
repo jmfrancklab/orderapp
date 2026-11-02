@@ -677,7 +677,7 @@ def test_progress_estimate_uses_discovered_pages_and_measured_rate(monkeypatch):
     progress = reports.ReportProgress([{}, {}])
     progress.totals = dict.fromkeys(progress.totals, 0)
     initial = progress.start('ocr', 4)
-    assert initial['remaining_seconds'] == 12
+    assert initial['remaining_seconds'] == 22.8
     now[0] = 6
     updated = progress.advance()
     assert updated['completed'] == 1
@@ -736,6 +736,12 @@ def test_stream_sends_recommendations_and_timing_outside_pdf(export_client, monk
     assert result['timing']['updates']
     assert all('actual_remaining_seconds' in update for update in result['timing']['updates'])
     assert len(result['timing']['stages']) == 9
+    # Two purchases, two project sections and one embedded page per section.
+    layout = next(stage for stage in result['timing']['stages'] if stage['stage'] == 'layout')
+    assert layout['predicted_seconds'] == pytest.approx(reports.ReportProgress.layout_seconds(2, 2, 2))
+    downloads = next(update for update in result['timing']['updates'] if update['stage'] == 'downloads')
+    assert downloads['counts']['ocr'] == 2.28
+    assert downloads['seconds_per_unit']['layout'] == pytest.approx(reports.ReportProgress.layout_seconds(2, 2, 4.56))
     assert 'files.example' not in json.dumps(result['timing'])
     text = '\n'.join(page.extract_text() for page in PdfReader(BytesIO(pdf)).pages)
     assert 'Recommended corrections' not in text

@@ -1035,14 +1035,15 @@
     head.appendChild(title); head.appendChild(close); reportPopup.appendChild(head);
     var table = document.createElement("table");
     var header = document.createElement("tr");
-    ["Receipt / project", "Item", "Unit cost: database → receipt", "Reason / evidence"].forEach(function (text) {
+    ["Receipt / project", "Item", "Unit cost / shipping: database → receipt", "Reason / evidence"].forEach(function (text) {
       var cell = document.createElement("th"); cell.textContent = text; header.appendChild(cell);
     });
     table.appendChild(header);
     recommendations.forEach(function (item) {
       var row = document.createElement("tr");
       var current = item.current_unit === null ? "—" : "$" + fmtCurrency(item.current_unit);
-      var change = item.proposed_unit !== null ? current + " → $" + fmtCurrency(item.proposed_unit)
+      var change = item.kind === "shipping" ? "$" + fmtCurrency(item.current_total) + " → $" + fmtCurrency(item.proposed_total) + " (shipping)"
+        : item.proposed_unit !== null ? current + " → $" + fmtCurrency(item.proposed_unit)
         : item.kind === "unbilled" ? current + " → check invoice"
         : item.kind === "quantity" ? current + " → check quantity" : "Review tariff $" + fmtCurrency(item.tariff);
       ["#" + item.receipt_id + " / " + item.project, item.item, change,

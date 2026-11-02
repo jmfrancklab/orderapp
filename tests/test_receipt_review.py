@@ -232,7 +232,7 @@ def test_balancing_total_never_turns_an_unmatched_item_into_zero():
     assert data['original_total'] == 10
     assert data['receipt_amounts'][key, 0] == 10
     assert data['receipt_amounts'][key, 1] is None
-    assert receipt_review.amount_sum(data['receipt_amounts'].values()) is None
+    assert receipt_review.amount_sum(data['receipt_amounts'].values()) == 10
 
 
 def test_explicit_total_wins_over_a_subtotal_matching_the_database():
@@ -282,11 +282,187 @@ def test_timing_log_compares_each_prediction_to_actual_remaining_time(monkeypatc
         progress.advance()
     timing = progress.timing_log()
     assert timing['actual_seconds'] == 24
-    assert timing['initial_estimated_seconds'] == 12
-    assert timing['stages'][0]['predicted_seconds'] == 12
+    assert timing['initial_estimated_seconds'] == 22.8
+    assert timing['stages'][0]['predicted_seconds'] == 22.8
     assert timing['stages'][0]['actual_seconds'] == 24
-    assert timing['updates'][0]['prediction_error_seconds'] == -12
+    assert timing['updates'][0]['prediction_error_seconds'] == -1.2
     assert timing['updates'][1]['actual_remaining_seconds'] == 18
     assert timing['updates'][1]['prediction_error_seconds'] == 0
     assert timing['updates'][-1]['actual_remaining_seconds'] == 0
     json.dumps(timing)
+
+
+def pasternack_receipt():
+    spans = json.loads((Path(__file__).parent / 'fixtures' / 'pasternack_invoice_review.json').read_text())
+    data = digikey_receipt()
+    data.update(id=5, nickname='Pasternack', shipping=D(0), pages=data['pages'][:2],
+                groups={(1, 'Research'): [(D('400.39'), 'PE83CR006', 1, D('400.39'))]},
+                text_geometry=[dict(ocr=[dict(s, line=tuple(s['line'])) for s in page]) for page in spans])
+    return data
+
+
+@pytest.mark.parametrize('grouping', ['receipt', 'project'])
+def test_pasternack_ocr_price_shipping_and_zero_tariff(grouping):
+    data = markup.reconcile(pasternack_receipt())
+    key = (1, 'Research')
+    assert data['receipt_amounts'][key, 0] == D('401.99')
+    assert data['receipt_amounts'][key, 1] == D('9.99')
+    assert data['groups'][key][1][0] == 0  # receipt-only shipping
+    suggestions = {r['kind']: r for r in data['recommendations']}
+    assert set(suggestions) == {'price', 'shipping'}
+    assert suggestions['price']['current_total'] == D('400.39')
+    assert suggestions['price']['proposed_total'] == D('401.99')
+    assert suggestions['price']['tariff'] == 0
+    assert suggestions['shipping']['current_total'] == 0
+    assert suggestions['shipping']['proposed_total'] == D('9.99')
+    assert suggestions['shipping']['reason'] == (
+        'Shipping from this receipt has not been entered for this invoice. '
+        'Enter $9.99 in the invoice Shipping field.')
+    assert suggestions['shipping']['refs']
+    pdf = reports.build_pdf([data], grouping)
+    first = PdfReader(BytesIO(pdf)).pages[0].extract_text()
+    assert 'Awaiting shipment' in first and 'Discrepancy' in first
+    assert '411.98' in first and '11.59' in first
+    assert data['source_groups'][key][0][0] == D('400.39')
+    assert data['shipping'] == 0
+
+
+def test_ambiguous_ocr_part_substitution_cannot_suggest_item_price():
+    data = pasternack_receipt()
+    data['groups'][2, 'Other'] = [(D('400.39'), 'PE83CRO006', 1, D('400.39'))]
+    markup.reconcile(data)
+    assert not any(r['kind'] == 'price' for r in data['recommendations'])
+    assert all(data['receipt_amounts'][key, 0] is None for key in data['source_groups'])
+
+
+def test_supported_shipping_ignores_unmatched_items_and_preserves_cents():
+    import receipt_review as review
+    data = pasternack_receipt()
+    data['groups'] = {(1, 'Research'): [(D('400.39'), 'PE83CR006', 1, D('400.39')),
+                                      (D('100'), 'Unmatched adapter', 1, D(100))],
+                      (2, 'Other'): [(D(20), 'Precision cable', 1, D(20))]}
+    data['text_geometry'][0]['ocr'].append(dict(text='Precision cable $20.00', line=(40,600,240,600), height=10))
+    markup.reconcile(data)
+    shipping = [value for ref, value in data['receipt_amounts'].items() if data['source_refs'][ref] == 'shipping']
+    assert shipping == [D('9.52'), D('.47')]
+    assert sum(shipping) == D('9.99')
+    assert review.amount_sum(data['receipt_amounts'].values()) == D('431.98')
+    assert review.awaiting_shipment(data, (1, 'Research')) == 0
+
+
+@pytest.mark.parametrize('shipped,billed,pending', [(0, '0', '40'), (2, '20', '20'), (4, '40', '0')])
+def test_documented_shipment_uses_stored_unshipped_value(shipped, billed, pending):
+    import receipt_review as review
+    data = pasternack_receipt()
+    key = (1, 'Research')
+    data['groups'] = {key: [(D(40), 'Precision cable', 4, D(10)),
+                           (D(5), 'Unmatched adapter', 1, D(5))]}
+    data['pages'] = data['pages'][:1]
+    data['text_geometry'] = [dict(ocr=[
+        dict(text=t, line=(x,y,x+70,y), height=10, **extra) for t,x,y,extra in [
+            ('Unit',300,730,{}), ('Amount',450,730,{}), ('Precision cable',40,700,{}),
+            (str(shipped),220,700,{'column':'shipped'}), ('$10.00',300,700,{}),
+            ('$'+billed+'.00',450,700,{})]])]
+    markup.reconcile(data)
+    supported = review.amount_sum(data['receipt_amounts'].values())
+    awaiting = review.awaiting_shipment(data, key)
+    assert supported == D(billed)
+    assert awaiting == D(pending)
+    discrepancy = supported + awaiting - D(45)
+    assert discrepancy == -5
+    assert D(45) == supported + awaiting - discrepancy
+    assert data['receipt_amounts'][key, 1] is None
+
+
+def test_both_observed_timing_runs_and_layout_calibration(monkeypatch):
+    runs = json.loads((Path(__file__).parent / 'fixtures' / 'receipt_timing_calibration.json').read_text())
+    now = [0.]
+    monkeypatch.setattr(reports, 'monotonic', lambda: now[0])
+    for run in runs:
+        progress = reports.ReportProgress([{}] * run['counts']['purchases'])
+        initial = progress.start('purchases')['remaining_seconds']
+        assert abs(initial / run['actual_seconds'] - 1) < .2
+        # Replay actual work and counts without sleeping. Live estimates must
+        # adopt measured stage rates and keep the calibrated layout workload.
+        for stage in run['stages']:
+            name = stage['stage']
+            if name == 'layout':
+                # The logs recorded the old workload model before its scale.
+                progress.rates[name] = stage['predicted_seconds'] * 11.24
+            event = progress.start(name, stage['total'])
+            if name == 'layout':
+                assert progress.stage_timings[-1]['predicted_seconds'] == pytest.approx(stage['predicted_seconds'] * 11.24)
+            for _ in range(stage['total']):
+                now[0] += stage['actual_seconds'] / stage['total']
+                progress.advance()
+            assert progress.rates[name] == pytest.approx(stage['actual_seconds'] / stage['total'])
+        assert progress.timing_log()['actual_seconds'] == pytest.approx(run['actual_seconds'], abs=.2)
+    assert reports.ReportProgress.layout_seconds(40, 18, 45) == pytest.approx(11.24 * (.5 + .8 + .9 + 1.35))
+
+
+@pytest.mark.parametrize('grouping', ['receipt', 'project'])
+def test_project_summary_balance_and_overall_aggregation(monkeypatch, grouping):
+    data = pasternack_receipt()
+    a, b = (1, 'Alpha'), (2, 'Beta')
+    data['groups'] = {a: [(D(10), 'Precision cable', 1, D(10)),
+                          (D(20), 'Pending board', 2, D(10)),
+                          (D(5), 'Unmatched adapter', 1, D(5))],
+                      b: [(D(12), 'Price mismatch', 1, D(12)),
+                          (D(40), 'Partial shipment', 4, D(10))]}
+    spans = [dict(text=t, line=(x,750,x+60,750), height=10) for t,x in [('Unit',300),('Amount',450)]]
+    for y, name, qty, unit, amount in [(700,'Precision cable',1,'10.00','10.00'),
+                                      (650,'Pending board',0,'10.00','0.00'),
+                                      (600,'Price mismatch',1,'12.10','12.10'),
+                                      (550,'Partial shipment',2,'10.00','20.00')]:
+        spans.extend(dict(text=t, line=(x,y,x+70,y), height=10, **extra) for t,x,extra in
+                     [(name,40,{}),(str(qty),220,{'column':'shipped'}),('$'+unit,300,{}),('$'+amount,450,{})])
+    spans.append(dict(text='Total $42.10', line=(40,500,250,500), height=10))
+    data['pages'] = data['pages'][:1]
+    data['text_geometry'] = [dict(ocr=spans)]
+    second = pasternack_receipt()
+    second.update(id=6, groups={a: [(D(7), 'Second cable', 1, D(7))]}, pages=second['pages'][:1],
+                  text_geometry=[dict(ocr=[dict(text='Second cable $8.00', line=(40,700,250,700), height=10)])])
+    tables = []
+    original = reports.Table
+    def capture(rows, *args, **kwargs):
+        if len(rows[0]) == 5:
+            tables.append([[getattr(cell, 'text', cell) for cell in row] for row in rows])
+        return original(rows, *args, **kwargs)
+    monkeypatch.setattr(reports, 'Table', capture)
+    reports.build_pdf([data, second], grouping)
+    assert tables[0][-1] == ['OVERALL TOTAL:', '94.00', '50.10', '40.00', '-3.90']
+    for table in tables:
+        for row in table[1:]:
+            db, supported, awaiting, discrepancy = map(lambda value: D(value.replace(',', '')), row[1:])
+            assert db == supported + awaiting - discrepancy
+    if grouping == 'project':
+        assert tables[0][1] == ['Alpha', '42.00', '18.00', '20.00', '-4.00']
+        assert tables[0][2] == ['Beta', '52.00', '32.10', '20.00', '0.10']
+        assert tables[1][-1] == ['PROJECT TOTAL:', '42.00', '18.00', '20.00', '-4.00']
+        assert tables[2][-1] == ['PROJECT TOTAL:', '52.00', '32.10', '20.00', '0.10']
+    else:
+        assert tables[1][1] == ['Alpha', '35.00', '10.00', '20.00', '-5.00']
+        assert tables[1][2] == ['Beta', '52.00', '32.10', '20.00', '0.10']
+        assert tables[2][1] == ['Alpha', '7.00', '8.00', '0.00', '1.00']
+
+
+def test_shipping_without_supported_purchase_values_stays_unresolved():
+    import receipt_review as review
+    data = pasternack_receipt()
+    key = (1, 'Research')
+    data['groups'][key] = [(D(400), 'Unmatched adapter', 1, D(400))]
+    markup.reconcile(data)
+    assert data['receipt_amounts'][key, 0] is None
+    assert data['receipt_amounts'][key, 1] is None
+    assert review.amount_sum(data['receipt_amounts'].values()) == 0
+    assert review.awaiting_shipment(data, key) == 0
+
+
+def test_zero_database_price_can_support_receipt_only_shipping():
+    data = pasternack_receipt()
+    key = (1, 'Research')
+    data['groups'][key] = [(D(0), 'PE83CR006', 1, D(0))]
+    markup.reconcile(data)
+    assert data['receipt_amounts'][key, 0] == D('401.99')
+    assert data['receipt_amounts'][key, 1] == D('9.99')
+    assert sum(row[0] for row in data['groups'][key]) == 0

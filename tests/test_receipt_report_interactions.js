@@ -86,7 +86,10 @@ async function run(mode) {
             {type: 'progress', label: 'Embedding supporting pages', percent: 94, completed: 5, total: 6, remaining_seconds: 2},
             {type: 'result', timing: {actual_seconds: 2, stages: []}, recommendations: mode === 'success-recommendations' ? [
               {receipt_id: 11, project: 'Alpha', item: 'Precision cable <shielded>', current_unit: '10.00',
-                proposed_unit: '10.12', kind: 'price', reason: 'Receipt line differs.', refs: 'p1.1'}
+                proposed_unit: '10.12', kind: 'price', reason: 'Receipt line differs.', refs: 'p1.1'},
+              {receipt_id: 5, project: 'Invoice', item: 'Invoice shipping', current_unit: null, proposed_unit: null,
+                current_total: '0.00', proposed_total: '9.99', kind: 'shipping',
+                reason: 'Shipping from this receipt has not been entered for this invoice. Enter $9.99 in the invoice Shipping field.', refs: 'p2.3'}
             ] : []},
             {type: 'pdf', size: pdf.length}
           ].map(record => JSON.stringify(record) + '\n').join('');
@@ -133,6 +136,9 @@ async function run(mode) {
       const cells = popup.querySelectorAll('td').map(cell => cell.textContent);
       assert.ok(cells.includes('Precision cable <shielded>'));
       assert.ok(cells.includes('$10.00 → $10.12'));
+      assert.ok(cells.includes('$0.00 → $9.99 (shipping)'));
+      assert.ok(cells.some(cell => cell.includes('Shipping from this receipt has not been entered for this invoice. Enter $9.99 in the invoice Shipping field.')));
+      assert.ok(cells.some(cell => cell.includes('Reference: p2.3')));
       assert.equal(popup.querySelectorAll('input').length, 0);
     } else assert.equal(popup, undefined);
     return;

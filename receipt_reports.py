@@ -210,9 +210,9 @@ class ReportProgress:
     Page totals start as estimates and become exact after downloads. Nothing
     advances on a timer: each snapshot follows real work or a stage transition.
     """
-    DEFAULTS = {"purchases": .01, "downloads": 1., "ocr": 3.,
-                "reconcile": .05, "matching": .1, "sections": .05,
-                "layout": .5, "merge": .1, "write": .3}
+    DEFAULTS = {"purchases": .01, "downloads": 1.91, "ocr": 5.70,
+                "reconcile": .52, "matching": .76, "sections": .23,
+                "layout": 5.62, "merge": .00008, "write": .037}
     LABELS = {"purchases": "Loading invoice purchase data", "downloads": "Downloading documents",
               "ocr": "Reading document pages", "reconcile": "Reconciling invoices",
               "matching": "Matching purchase sections", "sections": "Building purchase sections",
@@ -221,14 +221,21 @@ class ReportProgress:
 
     def __init__(self, invoices):
         count = len(invoices)
-        self.totals = dict(purchases=count, downloads=count, ocr=count * 3,
-                           reconcile=count, matching=count, sections=count,
-                           layout=1, merge=count * 3, write=1)
+        self.totals = dict(purchases=count, downloads=count, ocr=count * 2.28,
+                           reconcile=count, matching=count * 1.4, sections=count * 1.4,
+                           layout=1, merge=count * 2.28, write=1)
         self.done = dict.fromkeys(self.totals, 0)
         self.rates = dict(self.DEFAULTS)
+        self.rates['layout'] = self.layout_seconds(count * 3, count * 1.4, count * 2.28 * 1.4)
         self.started = monotonic()
         self.snapshots = []
         self.stage_timings = []
+
+    @staticmethod
+    def layout_seconds(rows, sections, embedded_pages=0):
+        # Pooled calibration of both supplied reports, including duplicated
+        # supporting pages in each project section.
+        return 11.24 * (.5 + .02 * rows + .05 * sections + .03 * embedded_pages)
 
     def start(self, stage, total=None):
         self.stage = stage
@@ -321,9 +328,9 @@ def _collect_receipts(db, invoices, progress):
 
     sections = sum(max(1, len(receipt["groups"])) for receipt in receipts)
     row_count = sum(len(items) for receipt in receipts for items in receipt["groups"].values())
-    progress.rates["layout"] = .5 + .02 * row_count + .05 * sections
+    progress.rates["layout"] = progress.layout_seconds(row_count, sections, 2.28 * sections)
     progress.totals.update(matching=sections, sections=sections,
-                           downloads=len(documents), ocr=3 * len(documents))
+                           downloads=len(documents), ocr=2.28 * len(documents))
     yield progress.start("downloads")
     for url, document in documents.items():
         try:
@@ -340,8 +347,8 @@ def _collect_receipts(db, invoices, progress):
     embedded_pages = sum(len(documents[r["source_url"]].get("pages", []))
                          * max(1, len(r["groups"])) for r in receipts)
     progress.totals["merge"] = page_count
-    progress.rates["layout"] += .03 * embedded_pages
-    progress.rates["write"] = .3 + .02 * embedded_pages
+    progress.rates["layout"] = progress.layout_seconds(row_count, sections, embedded_pages)
+    progress.rates["write"] = progress.DEFAULTS["write"]
     yield progress.start("ocr", page_count)
     for document in documents.values():
         for page, geometry in zip(document.get("pages", []), document.get("geometry", [])):
@@ -732,13 +739,21 @@ def _build_pdf(receipts, grouping, progress):
             project_totals[project] = project_totals.get(project, Decimal(0)) + group_total(receipt, project)
     ordered_projects = sorted(project_totals, key=lambda item: (item[1].casefold(), item[0] or 0))
 
-    def summary_table(headings, rows, total_label, total, receipt_amounts=None):
+    def summary_table(headings, rows, total_label, total, receipt_amounts=None, awaiting=None):
         receipt_amounts = receipt_amounts if receipt_amounts is not None else [None] * len(rows)
-        data = [[headings[0], "Database amount", "Receipt amount"]]
-        data.extend([[label if isinstance(label, Paragraph) else paragraph(label), f"{amount:,.2f}", amount_text(receipt_amount)]
-                     for (label, amount), receipt_amount in zip(rows, receipt_amounts)])
-        data.append([total_label, f"{total:,.2f}", amount_text(receipt_review.amount_sum(receipt_amounts))])
-        widths = [CONTENT_WIDTH * .5, CONTENT_WIDTH * .25, CONTENT_WIDTH * .25]
+        awaiting = awaiting if awaiting is not None else [Decimal(0)] * len(rows)
+        data = [[Paragraph(label, styles['AmountHeader']) for label in
+                 [headings[0], 'Database amount', 'Receipt amount', 'Awaiting shipment', 'Discrepancy']]]
+        for (label, amount), supported, pending in zip(rows, receipt_amounts, awaiting):
+            supported = supported or Decimal(0)
+            data.append([label if isinstance(label, Paragraph) else paragraph(label),
+                         amount_text(amount), amount_text(supported), amount_text(pending),
+                         amount_text(supported + pending - amount)])
+        supported = receipt_review.amount_sum(receipt_amounts)
+        pending = sum(awaiting, Decimal(0))
+        data.append([total_label, amount_text(total), amount_text(supported),
+                     amount_text(pending), amount_text(supported + pending - total)])
+        widths = [CONTENT_WIDTH * .32] + [CONTENT_WIDTH * .17] * 4
         table = Table(data, colWidths=widths,
                       hAlign="CENTER", repeatRows=1, splitInRow=1)
         table.setStyle(TableStyle([
@@ -803,11 +818,14 @@ def _build_pdf(receipts, grouping, progress):
 
     yield progress.start("sections", section_count)
     story.append(paragraph("Report summary", "Heading1", outline_level=0))
+    story.extend([paragraph("Database amount = Receipt amount + Awaiting shipment − Discrepancy. "
+                            "A negative discrepancy means database value lacks receipt support."), Spacer(1, 10)])
     if grouping == "receipt":
         summary_table(["Receipt", "Amount"], [
             (Paragraph(receipt_label(receipt, short=True), styles["Normal"]), receipt_total(receipt))
             for receipt in receipts], "OVERALL TOTAL:", sum(project_totals.values(), Decimal(0)),
-                      receipt_amounts=[receipt["reimbursable_total"] for receipt in receipts])
+                      receipt_amounts=[receipt_amount_total(receipt) for receipt in receipts],
+                      awaiting=[sum((receipt_review.awaiting_shipment(receipt, key) for key in receipt['groups']), Decimal(0)) for receipt in receipts])
         for receipt in receipts:
             story.append(PageBreak())
             story.append(receipt_title(receipt, style="Heading1", outline_level=0))
@@ -815,7 +833,8 @@ def _build_pdf(receipts, grouping, progress):
             summary_table(["Project", "Amount"], [
                 (key[1], group_total(receipt, key))
                 for key in keys], "RECEIPT TOTAL:", receipt_total(receipt),
-                          receipt_amounts=[group_receipt_total(receipt, key) for key in keys])
+                          receipt_amounts=[group_receipt_total(receipt, key) for key in keys],
+                          awaiting=[receipt_review.awaiting_shipment(receipt, key) for key in keys])
             for key in keys:
                 purchase_section(receipt, key)
                 yield progress.advance()
@@ -828,14 +847,16 @@ def _build_pdf(receipts, grouping, progress):
                       "OVERALL TOTAL:", sum(project_totals.values(), Decimal(0)),
                       receipt_amounts=[receipt_review.amount_sum(group_receipt_total(receipt, key)
                                        for receipt in receipts if key in receipt["groups"])
-                                       for key in ordered_projects])
+                                       for key in ordered_projects],
+                      awaiting=[sum((receipt_review.awaiting_shipment(receipt, key) for receipt in receipts), Decimal(0)) for key in ordered_projects])
         for key in ordered_projects:
             story.append(PageBreak())
             story.append(paragraph(key[1], "Heading1", outline_level=0))
             summary_table(["Receipt", "Receipt amount", "Relevant to project"], [
                 (Paragraph(receipt_label(receipt, short=True), styles["Normal"]), group_total(receipt, key))
                 for receipt in receipts if key in receipt["groups"]], "PROJECT TOTAL:", project_totals[key],
-                receipt_amounts=[group_receipt_total(receipt, key) for receipt in receipts if key in receipt["groups"]])
+                receipt_amounts=[group_receipt_total(receipt, key) for receipt in receipts if key in receipt["groups"]],
+                awaiting=[receipt_review.awaiting_shipment(receipt, key) for receipt in receipts if key in receipt['groups']])
             for receipt in receipts:
                 if key in receipt["groups"]:
                     purchase_section(receipt, key)

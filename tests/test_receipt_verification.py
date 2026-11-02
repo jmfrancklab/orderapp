@@ -210,6 +210,8 @@ def test_total_only_purchase_never_has_ocr_shipping_added_again():
                    [item('Complete workstation', 1, '9576.31')], 10)
     data['explanation'] = 'Workstation entered as one total including shipping.'
     markup.reconcile(data)
+    import receipt_review
+    assert receipt_review.amount_sum(data['receipt_amounts'].values()) == D('9576.31')
     assert data['allocated_total'] == D('9576.31')
     assert data['unresolved'] == 0
     decisions = markup.verify_amounts(data)
@@ -326,3 +328,13 @@ def test_single_decimal_currency_in_separate_ocr_word_boxes(monkeypatch):
     assert data['original_total'] == D('3650.00')
     assert markup.verify_amounts(data)[0][0]['status'] == 'ok'
     assert not markup._PRICE.search('version 3650.0')
+
+
+def test_combined_purchase_and_entered_shipping_do_not_duplicate_receipt_support():
+    import receipt_review
+    data = receipt([['Component $10.00', 'Shipping $2.00', 'Total $12.00']],
+                   [item('Combined purchase', 1, '12.00')])
+    data['shipping'] = D('2.00')
+    markup.reconcile(data)
+    assert data['allocated_total'] == D('14.00')
+    assert receipt_review.amount_sum(data['receipt_amounts'].values()) == D('12.00')

@@ -150,6 +150,19 @@ def recommendations(receipt):
                                 current_unit=None, current_total=None, proposed_unit=None,
                                 proposed_total=unassigned, quantity=None, tariff=unassigned,
                                 reason=f"${unassigned:,.2f} tariff could not be assigned confidently; check whether already included in item costs."))
+    shipping = sum((value for _, kind, value in receipt['charges'] if kind == 'shipping'), Decimal(0))
+    current = Decimal(str(receipt.get('shipping') or '0'))
+    if shipping != current and any(kind == 'shipping' for _, kind, _ in receipt['charges']):
+        reason = (f'Shipping from this receipt has not been entered for this invoice. '
+                  f'Enter ${shipping:,.2f} in the invoice Shipping field.'
+                  if current == 0 and shipping > 0 else
+                  f'Invoice Shipping is ${current:,.2f}; the receipt shows ${shipping:,.2f}. '
+                  f'Enter ${shipping:,.2f} in the invoice Shipping field.')
+        suggestions.append(dict(item='Invoice shipping', project='Invoice', kind='shipping',
+                                refs=', '.join(ref for ref, kind, _ in receipt['charges'] if kind == 'shipping'),
+                                current_unit=None, proposed_unit=None, current_total=current,
+                                proposed_total=shipping, quantity=None, tariff=Decimal(0),
+                                reason=reason))
     return suggestions
 
 
@@ -182,23 +195,19 @@ def receipt_amounts(receipt):
                      if receipt.get('source_refs', {}).get((key, i)) == 'shipping']
     shipping_amounts = dict.fromkeys(shipping_rows)
     shipping_charges = [value for _, kind, value in receipt['charges'] if kind == 'shipping']
-    if shipping_rows and shipping_charges:
+    if shipping_rows and shipping_charges and not receipt.get("shipping_in_combined_purchase"):
         shipping = sum(shipping_charges, Decimal(0))
-        bases = {key: sum((amounts[key, i] for i in range(len(items))), Decimal(0))
-                 if all(amounts[key, i] is not None for i in range(len(items))) else None
+        bases = {key: sum((max(Decimal(0), amounts[key, i] or Decimal(0))
+                           for i in range(len(items))), Decimal(0))
                  for key, items in source.items()}
-        if len(shipping_rows) == 1:
-            shipping_amounts[shipping_rows[0]] = shipping
-        elif all(value is not None for value in bases.values()):
-            positive = {key: max(Decimal(0), value) for key, value in bases.items()}
-            base = sum(positive.values(), Decimal(0))
-            if base:
-                previous, cumulative = Decimal(0), Decimal(0)
-                for key, i in shipping_rows:
-                    cumulative += positive.get(key, Decimal(0))
-                    rounded = (shipping * cumulative / base).quantize(CENT, rounding=ROUND_HALF_UP)
-                    shipping_amounts[key, i] = rounded - previous
-                    previous = rounded
+        base = sum(bases.values(), Decimal(0))
+        if base:
+            previous, cumulative = Decimal(0), Decimal(0)
+            for key, i in shipping_rows:
+                cumulative += bases.get(key, Decimal(0))
+                rounded = (shipping * cumulative / base).quantize(CENT, rounding=ROUND_HALF_UP)
+                shipping_amounts[key, i] = rounded - previous
+                previous = rounded
     displayed = {}
     for key, items in receipt['groups'].items():
         for i, _ in enumerate(items):
@@ -208,5 +217,19 @@ def receipt_amounts(receipt):
 
 
 def amount_sum(amounts):
-    values = list(amounts)
-    return sum(values, Decimal(0)) if all(value is not None for value in values) else None
+    """Sum confirmed support; unresolved detail rows contribute no amount."""
+    return sum((value for value in amounts if value is not None), Decimal(0))
+
+
+def awaiting_shipment(receipt, key):
+    """Stored value of uniquely matched, demonstrably unbilled quantities."""
+    total = Decimal(0)
+    for (project, _), row in receipt.get('item_evidence', {}).items():
+        if project != key or row.get('ambiguous') or row['confidence'] < 60:
+            continue
+        amount, _, quantity, cost = row['item']
+        if row['billed'] == 0:
+            total += amount
+        elif row['explicit_extension'] and row['quantity'] is not None and 0 <= row['quantity'] < quantity:
+            total += (cost * (Decimal(quantity) - row['quantity'])).quantize(CENT, rounding=ROUND_HALF_UP)
+    return total

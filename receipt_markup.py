@@ -506,7 +506,7 @@ def amount_role(price):
     return max(matches)[2] if matches else "item"
 
 
-def _prorate_shipping(receipt):
+def _prorate_shipping(receipt, receipt_shipping=Decimal(0)):
     """Distribute the invoice shipping field by project purchase value."""
     source = receipt.setdefault("source_groups", receipt["groups"])
     bases = {key: sum((row[0] for row in rows), Decimal(0))
@@ -520,22 +520,32 @@ def _prorate_shipping(receipt):
             target.append(row)
     base = sum(bases.values(), Decimal(0))
     shipping = Decimal(str(receipt.get("shipping") or "0"))
-    if shipping and not bases:
-        key = (None, "Unassigned project")
-        target = groups.setdefault(key, [])
-        refs[key, len(target)] = "shipping"
-        target.append((shipping, "Shipping (no positive purchase value to prorate)", 1, shipping))
-    if shipping and bases:
+    shares = {}
+    if shipping and base:
         previous, cumulative = Decimal(0), Decimal(0)
         for key, value in bases.items():
             cumulative += value
             rounded = (shipping * cumulative / base).quantize(Decimal('.01'), rounding=ROUND_HALF_UP)
-            share = rounded - previous
+            shares[key] = rounded - previous
             previous = rounded
-            target = groups.setdefault(key, [])
-            refs[key, len(target)] = "shipping"
-            label = "Shipping" + (" (prorated by project purchase value)" if len(bases) > 1 else "")
-            target.append((share, label, 1, share))
+    elif shipping:
+        shares[None, "Unassigned project"] = shipping
+    # Receipt support is allocated later using supported purchase amounts.
+    # Include zero-database rows even for projects with no stored cost.
+    if receipt_shipping:
+        for key in source or {(None, "Unassigned project"): []}:
+            shares.setdefault(key, Decimal(0))
+    for key, share in shares.items():
+        target = groups.setdefault(key, [])
+        refs[key, len(target)] = "shipping"
+        label = "Shipping"
+        if not shipping:
+            label += " (receipt only)"
+        elif not base:
+            label += " (no positive purchase value to prorate)"
+        elif len(bases) > 1:
+            label += " (prorated by project purchase value)"
+        target.append((share, label, 1, share))
     receipt.update(groups=groups, source_refs=refs)
 
 
@@ -599,6 +609,22 @@ def reconcile(receipt):
                    allocated_total=reimbursable, unresolved=residual, allocations=allocations)
     import receipt_review
     receipt["item_evidence"] = receipt_review.item_evidence(receipt)
+    receipt_shipping = sum((value for _, kind, value in charges if kind == 'shipping'), Decimal(0))
+    # A combined purchase supported by the full receipt total already includes
+    # its shipping. Do not support that charge a second time.
+    combined_candidates = [(key, i, item) for key, rows in receipt['source_groups'].items()
+                           for i, item in enumerate(rows)
+                           if total is not None and item[0] == total - tax]
+    combined = (len(combined_candidates) == 1
+                and combined_candidates[0][:2] not in receipt['item_evidence']
+                and any(price['role'] in ('total', 'before_tax') and price['confidence'] >= 60
+                        and price['value'] == combined_candidates[0][2][0]
+                        for page in evidence for price in page))
+    receipt["shipping_in_combined_purchase"] = combined
+    if not combined:
+        _prorate_shipping(receipt, receipt_shipping)
+    receipt['allocations'] = {(key, i): {'shipping': Decimal(0), 'other': Decimal(0)}
+                              for key, rows in receipt['groups'].items() for i in range(len(rows))}
     receipt["recommendations"] = receipt_review.recommendations(receipt)
     receipt["receipt_amounts"] = receipt_review.receipt_amounts(receipt)
     return receipt
@@ -814,6 +840,20 @@ def _description_matches(spans, description):
         if selected:
             return selected
     selected = _matches(spans, _anchors(description, []))
+    if selected:
+        return selected
+    # OCR may insert O before a run of zeros or substitute O/I within a
+    # numeric suffix of a mixed part number. Never use approximate prices.
+    def part(token):
+        token = token.casefold()
+        if not (re.search(r'[a-z]', token) and re.search(r'\d', token)):
+            return token
+        token = re.sub(r'(?<=[a-z])o(?=00)', '', token)
+        return re.sub(r'(?<=\d)[oi](?=\d)', lambda m: {'o': '0', 'i': '1'}[m[0]], token)
+    wanted_parts = {part(t) for t in re.findall(r'\b[a-zA-Z0-9-]{6,}\b', description)
+                    if re.search(r'[a-zA-Z]', t) and re.search(r'\d', t)}
+    selected = {i for i, span in enumerate(spans)
+                if wanted_parts & {part(t) for t in re.findall(r'\b[a-zA-Z0-9-]{6,}\b', span['text'])}}
     if selected:
         return selected
     # Changed/reordered vendor titles can still supply a likely match. Require
