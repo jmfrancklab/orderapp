@@ -29,8 +29,15 @@ def item_evidence(receipt):
             for p in markup._row_prices(spans, selected, product_lines, prices):
                 if roles[p] == 'item':
                     candidates.setdefault(p, []).append((key, index))
-        unit = next((s for s in spans if s['text'].casefold() == 'unit'), None)
+        unit = next((s for s in spans if s['text'].casefold() in ('unit', 'price')), None)
         amount = next((s for s in spans if s['text'].casefold() == 'amount'), None)
+        if amount is None and unit is not None:
+            # McMaster labels its extension column Total, alongside Price.
+            # Require the same header row so the invoice grand total cannot
+            # accidentally turn a unit price into a billed extension.
+            amount = next((s for s in spans if s['text'].casefold() == 'total'
+                           and abs(s['line'][1] - unit['line'][1]) < 3
+                           and s['line'][0] > unit['line'][0]), None)
         table = unit is not None and amount is not None and unit['line'][0] < amount['line'][0]
         for item_position, (key, index, item) in enumerate(items):
             ref = (key, index)
@@ -57,7 +64,8 @@ def item_evidence(receipt):
             tariff = sum((p['value'] for p in tariff_prices), Decimal(0))
             # An amount at the right of an explicit Amount column is a line
             # extension. Otherwise use an explicit QTY near the product card.
-            explicit_extension = table and extension['line'][0] >= amount['line'][0] - 4
+            extension_column = (unit['line'][0] + amount['line'][0]) / 2 if table else None
+            explicit_extension = table and extension['line'][0] >= extension_column
             if shipped is None:
                 near = [s for s in spans if lower < s['line'][1] <= y + 15
                         and y - s['line'][1] < s.get('height', 10) * 14]
@@ -152,7 +160,8 @@ def recommendations(receipt):
                                 reason=f"${unassigned:,.2f} tariff could not be assigned confidently; check whether already included in item costs."))
     shipping = sum((value for _, kind, value in receipt['charges'] if kind == 'shipping'), Decimal(0))
     current = Decimal(str(receipt.get('shipping') or '0'))
-    if shipping != current and any(kind == 'shipping' for _, kind, _ in receipt['charges']):
+    if (shipping != current and not receipt.get('shipping_in_combined_purchase')
+            and any(kind == 'shipping' for _, kind, _ in receipt['charges'])):
         reason = (f'Shipping from this receipt has not been entered for this invoice. '
                   f'Enter ${shipping:,.2f} in the invoice Shipping field.'
                   if current == 0 and shipping > 0 else
@@ -167,33 +176,39 @@ def recommendations(receipt):
 
 
 def receipt_amounts(receipt):
-    """Receipt-derived line amounts. None means unresolved, never zero by default."""
+    """Receipt-derived line amounts; unsupported purchases contribute $0.00."""
     amounts = {}
     source = receipt.get('source_groups', receipt['groups'])
     for key, items in source.items():
         for index, item in enumerate(items):
             ref = (key, index)
             row = receipt.get('item_evidence', {}).get(ref)
-            amounts[ref] = None
+            amounts[ref] = Decimal(0)
             if row and not row.get('ambiguous') and row['confidence'] >= 60:
                 if row['explicit_extension'] or row['quantity'] is not None:
                     amounts[ref] = row['landed'].quantize(CENT, rounding=ROUND_HALF_UP)
-    # A combined purchase may be evidenced by an exact printed total rather
-    # than its component descriptions. Preserve that existing correspondence.
+    # Share the exact correspondence used by the green OCR checks. A printed
+    # extension can support a purchase even without recognizable headings.
+    # Explicit extensions, source quantities and ambiguous rows take priority.
     for page in receipt['verification']:
         for price in page:
-            if price['role'] not in ('total', 'before_tax'):
+            if price['role'] not in ('item', 'total', 'before_tax'):
                 continue
             match = markup._item_correspondence(receipt, price)
             if match and price['confidence'] >= 60:
                 key, index, item, _ = match
-                if amounts[key, index] is None:
+                row = receipt.get('item_evidence', {}).get((key, index))
+                incomplete = row is None or (not row.get('ambiguous')
+                                             and not row['explicit_extension']
+                                             and row['quantity'] is None)
+                if (not amounts[key, index] and incomplete
+                        and price['value'] == item[0]):
                     amounts[key, index] = price['value']
 
     shipping_rows = [(key, i) for key, items in receipt['groups'].items()
                      for i, _ in enumerate(items)
                      if receipt.get('source_refs', {}).get((key, i)) == 'shipping']
-    shipping_amounts = dict.fromkeys(shipping_rows)
+    shipping_amounts = dict.fromkeys(shipping_rows, Decimal(0))
     shipping_charges = [value for _, kind, value in receipt['charges'] if kind == 'shipping']
     if shipping_rows and shipping_charges and not receipt.get("shipping_in_combined_purchase"):
         shipping = sum(shipping_charges, Decimal(0))
@@ -212,7 +227,8 @@ def receipt_amounts(receipt):
     for key, items in receipt['groups'].items():
         for i, _ in enumerate(items):
             ref = receipt.get('source_refs', {}).get((key, i), (key, i))
-            displayed[key, i] = shipping_amounts.get((key, i)) if ref == 'shipping' else amounts.get(ref)
+            displayed[key, i] = (shipping_amounts.get((key, i), Decimal(0)) if ref == 'shipping'
+                                else amounts.get(ref, Decimal(0)))
     return displayed
 
 

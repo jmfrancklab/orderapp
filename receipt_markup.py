@@ -575,6 +575,18 @@ def reconcile(receipt):
                 tax += value
             else:
                 charges.append((price["id"], role, value))
+        # Freight can appear as a line item and again in a Shipping summary.
+        # Count the summary once when it repeats the detailed charge total.
+        shipping_rows = [row for (role, _), row in adjustment_rows.items() if role == 'shipping']
+        summaries = [max(row, key=lambda p: p['line'][0]) for row in shipping_rows
+                     if any(re.search(r'\bshipping\b', p['context'], re.I) for p in row)]
+        if len(summaries) == 1:
+            summary = summaries[0]
+            details = [max(row, key=lambda p: p['line'][0]) for row in shipping_rows
+                       if not any(p['id'] == summary['id'] for p in row)]
+            if details and sum((p['value'] for p in details), Decimal(0)) == summary['value']:
+                duplicate_refs = {p['id'] for p in details}
+                charges = [charge for charge in charges if charge[0] not in duplicate_refs]
     tariff_summaries = [p for row in evidence for p in row if p["role"] == "tariff_total"]
     if tariff_summaries and not any(kind == "tariff" for _, kind, _ in charges):
         terminal = tariff_summaries[-1]
@@ -620,6 +632,10 @@ def reconcile(receipt):
                 and any(price['role'] in ('total', 'before_tax') and price['confidence'] >= 60
                         and price['value'] == combined_candidates[0][2][0]
                         for page in evidence for price in page))
+    # Stored item costs may already include freight from a quote. A balanced
+    # invoice with no separate shipping entry needs no additional shipping row.
+    combined = combined or (receipt_shipping > 0 and shipping == 0
+                            and total is not None and total - tax == base)
     receipt["shipping_in_combined_purchase"] = combined
     if not combined:
         _prorate_shipping(receipt, receipt_shipping)
@@ -671,6 +687,8 @@ def verify_amounts(receipt, project=None):
                               "Enter separate shipping in the invoice, or explain if already included in item costs.")
                     if expected == detected and any(ref == price["id"] for ref, _ in row_refs):
                         status, reason = "ok", f"Shipping matches invoice Shipping field ${expected:,.2f}; prorated by project purchase value."
+                    elif receipt.get('shipping_in_combined_purchase'):
+                        status, reason = "ok", f"Shipping ${detected:,.2f} is already included in database purchases matching the receipt total; counted once."
                     item_ref = "shipping"
                 else:
                     match = _item_correspondence(receipt, price)

@@ -495,8 +495,9 @@ def test_other_project_names_and_totals_are_red_and_excluded(export_client, grou
     assert 'Beta' in seen_red and 'Alpha' in seen_red
     assert 'OTHER PROJECTS TOTAL:' in seen_red
     assert '0.30' in seen_red and '37.05' in seen_red
-    # The single-project receipt is never listed as an excluded item.
-    assert 'Bench supply' not in seen_red
+    # Unsupported rows now have numeric zero support and use the existing
+    # zero-support styling, even when they belong to the selected project.
+    assert 'Bench supply' in seen_red
     assert 'date not found' not in pdf_text(response)
 
 
@@ -730,6 +731,7 @@ def test_stream_sends_recommendations_and_timing_outside_pdf(export_client, monk
     result = next(record for record in records if record['type'] == 'result')
     assert records[-2] is result and records[-1]['type'] == 'pdf'
     assert result['recommendations'][0]['receipt_id'] == 11
+    assert result['recommendations'][0]['invoice_name'] == 'Mixed purchase'
     assert result['recommendations'][0]['proposed_unit'] == '12.34000'
     assert result['timing']['actual_seconds'] > 0
     assert result['timing']['invoice_ids'] == [11]

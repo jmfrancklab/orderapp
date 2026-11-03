@@ -559,7 +559,7 @@ def _build_pdf(receipts, grouping, progress):
         return receipt_review.amount_sum(receipt["receipt_amounts"].values())
 
     def amount_text(value):
-        return "—" if value is None else f"{value:,.2f}"
+        return f"{value if value is not None else Decimal(0):,.2f}"
 
     def group_total(receipt, key):
         return sum((item_total(receipt, key, index, item)
@@ -819,7 +819,8 @@ def _build_pdf(receipts, grouping, progress):
     yield progress.start("sections", section_count)
     story.append(paragraph("Report summary", "Heading1", outline_level=0))
     story.extend([paragraph("Database amount = Receipt amount + Awaiting shipment − Discrepancy. "
-                            "A negative discrepancy means database value lacks receipt support."), Spacer(1, 10)])
+                            "A negative discrepancy means database value lacks receipt support. "
+                            "Receipt amount 0.00 means no supported amount was found or the receipt bills zero."), Spacer(1, 10)])
     if grouping == "receipt":
         summary_table(["Receipt", "Amount"], [
             (Paragraph(receipt_label(receipt, short=True), styles["Normal"]), receipt_total(receipt))
@@ -899,7 +900,8 @@ def generate_events(db, invoices, grouping):
     receipts = yield from _collect_receipts(db, invoices, progress)
     report = yield from _build_pdf(receipts, grouping, progress)
     recommendations = [dict({key: str(value) if isinstance(value, Decimal) else value
-                             for key, value in suggestion.items()}, receipt_id=receipt["id"])
+                             for key, value in suggestion.items()}, receipt_id=receipt["id"],
+                            invoice_name=receipt.get("nickname") or f'Invoice #{receipt["id"]}')
                        for receipt in receipts for suggestion in receipt.get("recommendations", [])]
     yield dict(type="result", recommendations=recommendations,
                timing=dict(progress.timing_log(), grouping=grouping, invoice_ids=[row["id"] for row in invoices]))

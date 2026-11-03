@@ -218,7 +218,7 @@ def test_receipt_amounts_keep_zero_billed_separate_from_price_mismatches():
     assert all(p['status'] == '?' for p in marks if p.get('item_ref') == (key, 4))
 
 
-def test_balancing_total_never_turns_an_unmatched_item_into_zero():
+def test_unmatched_item_has_zero_receipt_support():
     import receipt_review
     data = digikey_receipt()
     key = (1, 'Research')
@@ -231,7 +231,7 @@ def test_balancing_total_never_turns_an_unmatched_item_into_zero():
     markup.reconcile(data)
     assert data['original_total'] == 10
     assert data['receipt_amounts'][key, 0] == 10
-    assert data['receipt_amounts'][key, 1] is None
+    assert data['receipt_amounts'][key, 1] == 0
     assert receipt_review.amount_sum(data['receipt_amounts'].values()) == 10
 
 
@@ -332,7 +332,7 @@ def test_ambiguous_ocr_part_substitution_cannot_suggest_item_price():
     data['groups'][2, 'Other'] = [(D('400.39'), 'PE83CRO006', 1, D('400.39'))]
     markup.reconcile(data)
     assert not any(r['kind'] == 'price' for r in data['recommendations'])
-    assert all(data['receipt_amounts'][key, 0] is None for key in data['source_groups'])
+    assert all(data['receipt_amounts'][key, 0] == 0 for key in data['source_groups'])
 
 
 def test_supported_shipping_ignores_unmatched_items_and_preserves_cents():
@@ -371,7 +371,7 @@ def test_documented_shipment_uses_stored_unshipped_value(shipped, billed, pendin
     discrepancy = supported + awaiting - D(45)
     assert discrepancy == -5
     assert D(45) == supported + awaiting - discrepancy
-    assert data['receipt_amounts'][key, 1] is None
+    assert data['receipt_amounts'][key, 1] == 0
 
 
 def test_both_observed_timing_runs_and_layout_calibration(monkeypatch):
@@ -446,14 +446,14 @@ def test_project_summary_balance_and_overall_aggregation(monkeypatch, grouping):
         assert tables[2][1] == ['Alpha', '7.00', '8.00', '0.00', '1.00']
 
 
-def test_shipping_without_supported_purchase_values_stays_unresolved():
+def test_shipping_without_supported_purchase_values_has_zero_support():
     import receipt_review as review
     data = pasternack_receipt()
     key = (1, 'Research')
     data['groups'][key] = [(D(400), 'Unmatched adapter', 1, D(400))]
     markup.reconcile(data)
-    assert data['receipt_amounts'][key, 0] is None
-    assert data['receipt_amounts'][key, 1] is None
+    assert data['receipt_amounts'][key, 0] == 0
+    assert data['receipt_amounts'][key, 1] == 0
     assert review.amount_sum(data['receipt_amounts'].values()) == 0
     assert review.awaiting_shipment(data, key) == 0
 
@@ -466,3 +466,79 @@ def test_zero_database_price_can_support_receipt_only_shipping():
     assert data['receipt_amounts'][key, 0] == D('401.99')
     assert data['receipt_amounts'][key, 1] == D('9.99')
     assert sum(row[0] for row in data['groups'][key]) == 0
+
+
+def mcmaster_receipt_11():
+    """Product-table OCR from the supplied report, with customer details removed."""
+    data = digikey_receipt()
+    key = (1, 'ODNP')
+    data.update(id=11, nickname='11SEP26 McMaster $101.02 PO ODNP-001-WF', shipping=D(0))
+    data['groups'] = {key: [
+        (D('17.01'), 'Push-to-Connect Tube Fitting for Air, Straight Connector, for 8 mm Tube OD | McMaster-Carr', 3, D('5.67')),
+        (D('12.00'), 'Easy-Install Double Snap-Grip Clamps, for Firm Hose and Tube, 23/64" to 13/32" Clamp ID | McMaster-Carr', 2, D('6.00')),
+        (D('25.76'), 'Flame-Retardant Garolite G-10/FR4 Rod, Green, 1/16" Diameter', 2, D('12.88'))]}
+    spans = json.loads((Path(__file__).parent / 'fixtures' / 'mcmaster_receipt_11.json').read_text())
+    for span in spans:
+        span['line'] = tuple(span['line'])
+    data['pages'] = data['pages'][:1]
+    data['text_geometry'] = [dict(ocr=spans)]
+    return data
+
+
+@pytest.mark.parametrize('grouping', ['receipt', 'project'])
+def test_receipt_11_preserves_printed_extensions_and_shipping(grouping, monkeypatch):
+    data = markup.reconcile(mcmaster_receipt_11())
+    key = (1, 'ODNP')
+    assert [data['receipt_amounts'][key, i] for i in range(4)] == [
+        D('18.36'), D('12.00'), D('25.76'), D('44.90')]
+    assert sum(data['receipt_amounts'].values()) == D('101.02')
+    assert data['source_groups'][key][0][0] == D('17.01')
+    tables = []
+    original = reports.Table
+    def capture(rows, *args, **kwargs):
+        if rows[0][0] == 'Description' or getattr(rows[0][0], 'text', '') == 'Description':
+            tables.append(rows)
+        return original(rows, *args, **kwargs)
+    monkeypatch.setattr(reports, 'Table', capture)
+    reports.build_pdf([data], grouping)
+    assert [row[-1] for row in tables[0][1:]] == ['18.36', '12.00', '25.76', '44.90', '101.02']
+
+
+def test_exact_green_extension_without_column_headers_supports_receipt_amount():
+    data = mcmaster_receipt_11()
+    data['text_geometry'][0]['ocr'] = [s for s in data['text_geometry'][0]['ocr']
+                                      if s['text'] not in ('Price', 'Total')]
+    markup.reconcile(data)
+    key = (1, 'ODNP')
+    assert data['receipt_amounts'][key, 1] == D('12.00')
+    assert data['receipt_amounts'][key, 2] == D('25.76')
+
+
+def nrsmart_receipt_7(cost='1550'):
+    data = digikey_receipt()
+    key = (1, 'ODNP')
+    data.update(id=7, nickname='nrsmart compressor', shipping=D(0))
+    data['groups'] = {key: [(D(cost), 'compressor', 1, D(cost))]}
+    spans = json.loads((Path(__file__).parent / 'fixtures' / 'nrsmart_receipt_7.json').read_text())
+    for span in spans:
+        span['line'] = tuple(span['line'])
+    data['pages'] = data['pages'][:1]
+    data['text_geometry'] = [dict(ocr=spans)]
+    return data
+
+
+def test_receipt_7_shipping_summary_is_not_an_additional_freight_charge():
+    data = markup.reconcile(nrsmart_receipt_7())
+    assert sum(value for _, kind, value in data['charges'] if kind == 'shipping') == D(600)
+    assert data['shipping_in_combined_purchase']
+    assert not any(r['kind'] == 'shipping' for r in data['recommendations'])
+    assert len(data['groups'][1, 'ODNP']) == 1
+    assert data['receipt_amounts'][(1, 'ODNP'), 0] == D(1550)
+
+
+def test_receipt_7_when_shipping_is_missing_recommends_600_once():
+    data = markup.reconcile(nrsmart_receipt_7('950'))
+    shipping = [r for r in data['recommendations'] if r['kind'] == 'shipping']
+    assert len(shipping) == 1
+    assert shipping[0]['proposed_total'] == D(600)
+    assert not data['shipping_in_combined_purchase']
