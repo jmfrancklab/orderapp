@@ -10,23 +10,18 @@ CENT = Decimal('.01')
 def item_evidence(receipt):
     """Associate product rows, billed extensions and item-specific tariffs.
 
-    A description match must identify exactly one database item. A table's
+    Description, layout or exact-price evidence must identify one item. A table's
     Shipped/Unit Price/Amount columns supply stronger evidence than a unit price
     alone, especially for backordered goods. Keep zero extensions as context,
     without adding zero annotations to the report's monetary occurrence list.
     """
-    items = [(key, i, item) for key, rows in receipt.get('source_groups', receipt['groups']).items()
-             for i, item in enumerate(rows)]
     result = {}
     for page_index, geometry in enumerate(receipt['text_geometry']):
         spans = geometry.get('ocr', [])
-        prices = markup._prices(spans)
-        selections = [markup._description_matches(spans, item[1]) for _, _, item in items]
-        product_lines = set().union(*selections) if selections else set()
-        roles = [markup.amount_role(dict(price, spans=spans, context='')) for price in prices]
+        items, selections, product_lines, prices, roles, rows = markup._page_item_rows(receipt, spans)
         candidates = {}
-        for (key, index, item), selected in zip(items, selections):
-            for p in markup._row_prices(spans, selected, product_lines, prices):
+        for (key, index, item), positions in zip(items, rows):
+            for p in positions:
                 if roles[p] == 'item':
                     candidates.setdefault(p, []).append((key, index))
         unit = next((s for s in spans if s['text'].casefold() in ('unit', 'price')), None)

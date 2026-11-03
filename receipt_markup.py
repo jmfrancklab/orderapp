@@ -551,6 +551,8 @@ def _prorate_shipping(receipt, receipt_shipping=Decimal(0)):
 
 def reconcile(receipt):
     """Keep purchase tuples intact; store source evidence and allocations alongside."""
+    receipt.pop("item_rows", None)
+    receipt.pop("item_candidates", None)
     geometry = receipt.setdefault("text_geometry", [{} for _ in receipt["pages"]])
     evidence = monetary_pages(receipt["pages"], geometry)
     _prorate_shipping(receipt)
@@ -825,6 +827,78 @@ def verify_amounts(receipt, project=None):
     return result
 
 
+def _page_item_rows(receipt, spans):
+    """Share description, learned layout and exact-price evidence with review."""
+    cache = receipt.setdefault("item_rows", {})
+    if id(spans) in cache:
+        return cache[id(spans)]
+    items = [(key, i, item) for key, rows in receipt.get("source_groups", receipt["groups"]).items()
+             for i, item in enumerate(rows)]
+    selections = [_description_matches(spans, item[1]) for _, _, item in items]
+    product_lines = set().union(*selections) if selections else set()
+    prices = _prices(spans)
+    roles = [amount_role(dict(p, spans=spans, context="")) for p in prices]
+    rows = [_row_prices(spans, selected, product_lines, prices) for selected in selections]
+    claims = {p: [i for i, row in enumerate(rows) if p in row] for p in range(len(prices))}
+
+    def title_start(selected, y):
+        # Include words preceding the matched phrase on the same title line.
+        height = max(spans[i].get("height", 10) for i in selected)
+        return min(s["line"][0] for s in spans if abs(s["line"][1] - y) < height * .65)
+
+    offsets = []
+    for i, (_, _, item) in enumerate(items):
+        exact = [p for p in rows[i] if roles[p] == "item"
+                 and prices[p]["value"] == item[0] and prices[p]["confidence"] >= 60
+                 and claims[p] == [i]]
+        if len(exact) != 1 or not selections[i]:
+            continue
+        price = prices[exact[0]]
+        y = min((spans[j]["line"][1] for j in selections[i]),
+                key=lambda y: abs(y - price["line"][1]))
+        offsets.append((title_start(selections[i], y) - price["line"][0],
+                        y - price["line"][1]))
+
+    occurrences = [p for geometry in receipt.get("text_geometry", [])
+                   for p in _prices(geometry.get("ocr", []))
+                   if amount_role(dict(p, spans=geometry.get("ocr", []), context="")) == "item"]
+    for i, (_, _, item) in enumerate(items):
+        if rows[i]:
+            continue
+        exact = [p for p, price in enumerate(prices) if roles[p] == "item"
+                 and price["value"] == item[0] and price["confidence"] >= 60 and not claims[p]]
+        unique = (sum(other[0] == item[0] for _, _, other in items) == 1
+                  and sum(p["value"] == item[0] for p in occurrences) == 1)
+        for p in exact:
+            price = prices[p]
+            # Confirm the description at an offset already demonstrated by
+            # two other products. This can also disambiguate repeated prices.
+            layout = False
+            for owner in selections[i]:
+                span = spans[owner]
+                dx = title_start(selections[i], span["line"][1]) - price["line"][0]
+                dy = span["line"][1] - price["line"][1]
+                tolerance = max(3, span.get("height", 10))
+                if sum(abs(dx - x) <= tolerance and abs(dy - y) <= tolerance
+                       for x, y in offsets) >= 2:
+                    layout = True
+                    break
+            if unique or layout:
+                rows[i].add(p)
+        # Never choose arbitrarily among multiple possible occurrences.
+        if len(rows[i]) > 1:
+            rows[i].clear()
+    # A recovered price must still identify exactly one database item.
+    for p in range(len(prices)):
+        recovered = [i for i, row in enumerate(rows) if p in row and not claims[p]]
+        if len(recovered) > 1:
+            for i in recovered:
+                rows[i].discard(p)
+    result = items, selections, product_lines, prices, roles, rows
+    cache[id(spans)] = result
+    return result
+
+
 def _item_candidates(receipt, price):
     if price["line"] is None:
         return []
@@ -834,16 +908,12 @@ def _item_candidates(receipt, price):
         return cache[identity]
     spans = price["spans"]
     matches = []
-    all_items = [(key, i, item) for key, items in receipt.get("source_groups", receipt["groups"]).items()
-                 for i, item in enumerate(items)]
-    selections = [_description_matches(spans, item[1]) for _, _, item in all_items]
-    product_lines = set().union(*selections) if selections else set()
-    prices = _prices(spans)
+    all_items, _, _, prices, roles, rows = _page_item_rows(receipt, spans)
     position = next((i for i, p in enumerate(prices) if p["line"] == price["line"]), None)
-    for (key, index, item), selected in zip(all_items, selections):
-        if not selected or position not in _row_prices(spans, selected, product_lines, prices): continue
-        row = [prices[j] for j in _row_prices(spans, selected, product_lines, prices)
-               if amount_role(dict(prices[j], spans=spans, context="")) in ("item", "insurance", "discount", "tariff")]
+    for (key, index, item), positions in zip(all_items, rows):
+        if position not in positions: continue
+        row = [prices[j] for j in positions
+               if roles[j] in ("item", "insurance", "discount", "tariff")]
         if not any(p["line"] == price["line"] for p in row):
             continue
         matches.append((key, index, item, row))

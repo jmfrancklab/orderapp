@@ -127,11 +127,83 @@ def test_source_quantity_disagreement_prevents_green_unit_price():
     assert all(p['status'] == '?' for p in markup.verify_amounts(data)[0])
 
 
+def price_anchored_receipt(extra=()):
+    """Word positions from receipt #20's stacked Amazon product cards."""
+    data = receipt([[]], [item('Precision steel shaft', 1, '7.31'),
+                          item('Infrared thermometer gun', 1, '18.76'),
+                          item('JAMECO VALUEPRO CTC05-50 Ceramic Trimmer Capacitor', 1, '10.36')], 20)
+    spans = []
+
+    def word(text, x, y):
+        spans.append(dict(text=text, confidence=96, height=6,
+                          line=(x, y, x + len(text) * 3, y)))
+    for text, y, price in [('Precision steel shaft', 700, '$7.31'),
+                           ('Infrared thermometer gun', 600, '$18.76')]:
+        word(text, 112, y)
+        word(price, 112, y - 33)
+    for text, x in [('JAMECO', 112), ('VALUEPRO', 143), ('CTCO5-50', 185),
+                    ('Ceramic', 222), ('Trimmer', 252), ('Capacitor', 285)]:
+        word(text, x, 500)
+    word('$10.36', 112, 467)
+    for text, x, y in extra:
+        word(text, x, y)
+    data['text_geometry'] = [dict(ocr=spans)]
+    return data
+
+
+@pytest.mark.parametrize('repeated', [False, True])
+def test_receipt20_price_anchor_and_confirmed_layout_recover_jameco(repeated):
+    extra = [('Unrelated product', 112, 400), ('$10.36', 112, 367)] if repeated else []
+    data = markup.reconcile(price_anchored_receipt(extra))
+    prices = [p for p in markup.verify_amounts(data)[0] if p['value'] == D('10.36')]
+    assert [p['status'] for p in prices] == (['ok', '?'] if repeated else ['ok'])
+    assert data['receipt_amounts'][((1, 'Research'), 2)] == D('10.36')
+    assert data['recommendations'] == []
+    assert data['item_evidence'][((1, 'Research'), 2)]['billed'] == D('10.36')
+
+
+def test_unique_exact_extension_can_match_without_recognizable_description():
+    data = markup.reconcile(receipt([['Unrecognizable OCR title', '$10.36']],
+                                    [item('Jameco trimmer capacitor', 1, '10.36')]))
+    assert markup.verify_amounts(data)[0][0]['status'] == 'ok'
+    assert data['receipt_amounts'][((1, 'Research'), 0)] == D('10.36')
+
+
+def test_duplicate_database_amounts_are_not_resolved_by_price_alone():
+    data = markup.reconcile(receipt([['Unrecognizable OCR title', '$10.36']],
+                                    [item('Jameco trimmer capacitor', 1, '10.36'),
+                                     item('Different database purchase', 1, '10.36')]))
+    assert markup.verify_amounts(data)[0][0]['status'] == '?'
+
+
+def test_repeated_receipt_prices_without_layout_evidence_remain_unresolved():
+    data = markup.reconcile(receipt([['Unrecognizable OCR title', '$10.36', '$10.36']],
+                                    [item('Jameco trimmer capacitor', 1, '10.36')]))
+    assert [p['status'] for p in markup.verify_amounts(data)[0]] == ['?', '?']
+
+
+def test_price_anchor_preserves_quantity_conflict():
+    data = price_anchored_receipt([('QTY 2', 112, 480)])
+    data = markup.reconcile(data)
+    price = next(p for p in markup.verify_amounts(data)[0] if p['value'] == D('10.36'))
+    assert price['status'] == '?'
+
+
+def test_repeated_price_at_a_different_offset_is_not_a_layout_match():
+    data = price_anchored_receipt([('$10.36', 112, 367)])
+    for span in data['text_geometry'][0]['ocr']:
+        if span['text'] == '$10.36' and span['line'][1] == 467:
+            span['line'] = (112, 440, 132, 440)
+    data = markup.reconcile(data)
+    prices = [p for p in markup.verify_amounts(data)[0] if p['value'] == D('10.36')]
+    assert [p['status'] for p in prices] == ['?', '?']
+
+
 def test_native_prices_are_not_added_to_ocr_evidence(monkeypatch):
     data = receipt([['Precision cable $10.00', 'Total $10.00']], [item('Precision cable', 1, '10.00')])
     monkeypatch.setattr(markup, 'text_spans', lambda page: [])
     monkeypatch.setattr(markup, 'ocr_spans', lambda page: [
-        {'text': '$10.00', 'line': (40, 600, 80, 600)}])
+        {'text': '$12.00', 'line': (40, 600, 80, 600)}])
     data = markup.reconcile(data)
     decisions = markup.verify_amounts(data)[0]
     assert len(decisions) == 1
