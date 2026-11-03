@@ -1116,6 +1116,16 @@
     progress.removeAttribute("value");
     status.textContent = "Preparing PDF… loading purchases.";
     var failure = null, details = {}, timingUpdates = [], started = Date.now();
+    var latestProgress = null, progressReceivedAt = 0;
+    function updateCountdown() {
+      if (!latestProgress) return;
+      var seconds = Math.max(1, Math.ceil(latestProgress.remaining_seconds
+        - (Date.now() - progressReceivedAt) / 1000));
+      var remaining = Math.floor(seconds / 60) + ":" + String(seconds % 60).padStart(2, "0");
+      status.textContent = latestProgress.label + "… " + latestProgress.completed + " of " + latestProgress.total
+        + "; about " + remaining + " remaining (estimated).";
+    }
+    var countdownTimer = setInterval(updateCountdown, 1000);
     try {
       var reportUrl = new URL(reportActions.dataset.reportUrl, window.location.origin);
       reportUrl.search = window.location.search;
@@ -1137,8 +1147,9 @@
         ? await readReceiptReport(response, function (event) {
           timingUpdates.push(Object.assign({}, event, {received_elapsed_seconds: (Date.now() - started) / 1000}));
           progress.value = event.percent;
-          status.textContent = event.label + "… " + event.completed + " of " + event.total
-            + "; about " + Math.max(1, Math.ceil(event.remaining_seconds)) + " seconds remaining (estimated).";
+          latestProgress = event;
+          progressReceivedAt = Date.now();
+          updateCountdown();
         }, function (event) { details = event; })
         : await response.blob();
       var blobUrl = URL.createObjectURL(blob);
@@ -1159,6 +1170,7 @@
     } catch (error) {
       failure = error;
     } finally {
+      clearInterval(countdownTimer);
       progress.value = failure ? 0 : 100;
       progress.hidden = true;
       status.textContent = "";

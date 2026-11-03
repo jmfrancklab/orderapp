@@ -27,6 +27,8 @@ class Element {
 
 async function run(mode) {
   let click, requested, downloaded, revoked, timingBlob, getCount = 0, posts = [];
+  let now = Date.now(), countdownTick, countdownAdvanced = false;
+  class TestDate extends Date { static now() { return now; } }
   const document = {removeEventListener() {}, addEventListener() {}, querySelectorAll: () => []};
   document.createElement = tag => {
     const el = new Element(tag, document);
@@ -59,12 +61,18 @@ async function run(mode) {
     source_url: 'https://files.example/bad-' + id + '.pdf'
   }));
   const context = {
-    URL: BrowserURL, document, TextDecoder, Uint8Array, Blob,
+    URL: BrowserURL, document, TextDecoder, Uint8Array, Blob, Date: TestDate,
     window: {
       location: {origin: 'https://orders.example', search: '?filter_reimbursement_status=reimbursed&filter_reimbursement_status=requires+reimbursement'},
       alert: () => {throw new Error('Native alerts must not be used');}
     },
     setTimeout: callback => callback(),
+    setInterval: (callback, delay) => {
+      assert.ok(delay <= 2000);
+      countdownTick = callback;
+      return 1;
+    },
+    clearInterval: id => { assert.equal(id, 1); countdownTick = null; },
     fetch: async (url, options) => {
       if (options.method === 'POST') {
         posts.push({url, body: JSON.parse(options.body)});
@@ -82,7 +90,7 @@ async function run(mode) {
         body: { getReader() {
           const pdf = Buffer.from('%PDF-test');
           const records = [
-            {type: 'progress', label: 'Reading document pages', percent: 35, completed: 2, total: 7, remaining_seconds: 20},
+            {type: 'progress', label: 'Reading document pages', percent: 35, completed: 2, total: 7, remaining_seconds: 125},
             {type: 'progress', label: 'Embedding supporting pages', percent: 94, completed: 5, total: 6, remaining_seconds: 2},
             {type: 'result', timing: {actual_seconds: 2, stages: []}, recommendations: mode === 'success-recommendations' ? [
               {receipt_id: 11, project: 'Alpha', item: 'Precision cable <shielded>', current_unit: '10.00',
@@ -98,6 +106,13 @@ async function run(mode) {
           return {
             async read() {
               snapshots.push(status.textContent);
+              if (!countdownAdvanced && status.textContent.includes('2:05 remaining')) {
+                // No new server event arrives while the countdown ticks.
+                now += 2000;
+                countdownTick();
+                snapshots.push(status.textContent);
+                countdownAdvanced = true;
+              }
               if (offset === data.length) return {done: true};
               // Split JSON records and the PDF at arbitrary network boundaries.
               const value = new Uint8Array(data.subarray(offset, offset + 17));
@@ -118,9 +133,11 @@ async function run(mode) {
   assert.ok(buttons.every(button => !button.disabled));
   assert.equal(status.textContent, '');
   assert.equal(progress.hidden, true);
+  assert.equal(countdownTick, null);
   if (mode.startsWith('success')) {
-    assert.ok(snapshots.some(text => /Reading document pages… 2 of 7.*20 seconds/.test(text)));
-    assert.ok(snapshots.some(text => /Embedding supporting pages… 5 of 6/.test(text)));
+    assert.ok(snapshots.some(text => /Reading document pages… 2 of 7.*2:05 remaining/.test(text)));
+    assert.ok(snapshots.some(text => /Reading document pages… 2 of 7.*2:03 remaining/.test(text)));
+    assert.ok(snapshots.some(text => /Embedding supporting pages… 5 of 6.*0:02 remaining/.test(text)));
     assert.equal(downloaded, 'receipts-by-project.pdf');
     assert.equal(revoked, 'blob:report');
     assert.equal(timingLink.hidden, false);
@@ -175,6 +192,7 @@ async function run(mode) {
   }
   assert.deepEqual(posts[1], {url: '/api/invoices/12', body: {invoice_url: inputs[1].value}});
   assert.equal(getCount, 2);
+  assert.equal(countdownTick, null);
   assert.equal(downloaded, 'receipts-by-project.pdf');
   assert.ok(!document.body.children.includes(popup));
 }
